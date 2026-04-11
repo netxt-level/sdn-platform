@@ -1,0 +1,13 @@
+# Python 관련
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node (Dashboard) 관련
+node_modules/
+build/
+.env.local
+
+# Docker 및 기타
+.DS_Store
+*.log
