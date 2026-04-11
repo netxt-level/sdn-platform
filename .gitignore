@@ -6,7 +6,7 @@ __pycache__/
 # Node (Dashboard) 관련
 node_modules/
 build/
-.env.local
+.env
 
 # Docker 및 기타
 .DS_Store
