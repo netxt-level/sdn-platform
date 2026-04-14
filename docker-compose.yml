@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # 1. SDN Controller (Ryu)
+  ryu-controller:
+    build: ./ryu-controller
+    container_name: ${HOST_RYU}
+    volumes:
+      - ./ryu-controller:/app
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - "6633:6633" # OpenFlow protocol
+      - "8080:8080" # Ryu REST API
+    command: ryu-manager --verbose /app/myController.py
+    restart: always
+  
+  # 2. 보안 분석 엔진 (FastAPI)
+  analysis-engine:
+    build: ./analysis-engine
+    container_name: ${HOST_ANALYSIS}
+    volumes:
+      - ./analysis-engine:/app
+    ports:
+      - "${PORT_ANALYSIS_API}:8000"
+    environment:
+      - DB_HOST=&{HOST_MYSQL}
+      - DB_NAME=${MYSQL_DATABASE}
+      - DB_USER=${MYSQL_APP_USER}
+      - DB_PASSWORD=${MYSQL_APP_PASSWORD}
+      - INFLUX_URL=http://influx-db:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_ADMIN_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ADMIN_ORG}
+      - INFLUXDB_BUCKET=${INFLUXDB_ADMIN_BUCKET}
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+      influx-db:
+        condition: service_healthy
+    restart: always
+
+  # 3. 정책 및 이력 관리 DB (MySQL)
+  mysql-db:
+    image: mysql:8.4
+    container_name: mysql-db
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_APP_USER}
+      - MYSQL_PASSWORD=${MYSQL_APP_PASSWORD}
+    ports:
+      - "${PORT_MYSQL_EXTERNAL}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "--password=${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+  
+  # 4. 트래픽 통계 DB (InfluxDB)
+  influx-db:
+    image: influxdb:2.7
+    container_name: influx-db
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_ADMIN_USER}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ADMIN_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_ADMIN_BUCKET}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
+    ports:
+      - "${PORT_INFLUX_EXTERNAL}:8086"
+    volumes:
+      - influx_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  # 5. 관리자 대시보드 (React)
+  admin-dashboard:
+    build: ./admin-dashboard
+    container_name: admin-dashboard
+    stdin_open: true # React 개발 서버가 TTY 부족으로 즉시 종료되는 것을 방지
+    tty: true
+    # command: npm start # Dockerfile에 실행 명령이 없다면 주석을 해제하여 사용하세요. (또는 npm run dev)
+    restart: always
+    ports:
+      - "${PORT_DASHBOARD}:3000"
+    environment:
+      - HOST=0.0.0.0
+      - CI=true
+      - CHOKIDAR_USEPOLLING=true
+      - WDS_SOCKET_PORT=0
+      - REACT_APP_API_URL=http://${REACT_APP_API_HOST}:${ANALYSIS_API_PORT}
+    volumes:
+      - ./admin-dashboard:/app
+      - /app/node_modules
+    depends_on:
+      - analysis-engine
+    
+# 데이터 영속성을 위한 볼륨 설정
+volumes:
+  mysql_data:
+  influx_data:
+
+  
+  
