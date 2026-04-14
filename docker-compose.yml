@@ -22,7 +22,7 @@ services:
     volumes:
       - ./analysis-engine:/app
     ports:
-      - "${PORT_RYU_REST}:8000"
+      - "${PORT_ANALYSIS_API}:8000"
     environment:
       - DB_HOST=&{HOST_MYSQL}
       - DB_NAME=${MYSQL_DATABASE}
