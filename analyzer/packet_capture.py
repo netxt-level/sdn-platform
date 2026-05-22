@@ -11,13 +11,13 @@ class PacketCaptureError(RuntimeError):
 
 
 # 지정한 네트워크 인터페이스에서 패킷 캡처를 시작하는 함수
-def start_capture(interface: str, packet_Handler: PacketHandler):
+def start_capture(interface: str, packet_handler: PacketHandler):
     try:
         # scapy에서 제공하는 패킷 캡쳐 함수
         sniff(
             iface = interface,      # 캡처할 네트워크 인터페이스 이름
-            prn = handle_packet,    # 패킷이 캡처될 때마다 실행할 콜백 함수
-            tore = False,           # 캡처한 패킷을 메모리에 저장하지 않음
+            prn = packet_handler,   # 패킷이 캡처될 때마다 실행할 콜백 함수
+            store = False,          # 캡처한 패킷을 메모리에 저장하지 않음
         )
     except PermissionError as exc:
         # 권한 부족으로 패킷 캡처에 실패한 경우
