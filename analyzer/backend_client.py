@@ -19,6 +19,13 @@ class BackendClient:
             payload=traffic_stats,
             label="traffic stats",
         )
+    
+    def send_analyzer_status(self, analyzer_status: dict) -> bool:
+        return self._post(
+            path="/api/backend/analyzer/status",
+            payload=analyzer_status,
+            label="analyzer status",
+        )
 
     def _post(self, path: str, payload: dict, label: str) -> bool:
         url = f"{self.base_url}{path}"
