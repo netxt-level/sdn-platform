@@ -54,7 +54,7 @@ Analyzer가 일정 시간 동안 수집한 패킷 메타데이터를 요약하�
   "analyzer_id": "analyzer-1",
   "window_sec": 1,
   "total_packets": 90,
-  "total_bits": 34245,
+  "total_bits": 273960,
   "protocol_stats": {
     "TCP": 87,
     "UDP": 2,
@@ -68,7 +68,7 @@ Analyzer가 일정 시간 동안 수집한 패킷 메타데이터를 요약하�
       "dst_ip": "172.30.1.3",
       "protocol": "TCP",
       "packet_count": 16,
-      "bit_count": 10149,
+      "bit_count": 81192
     }
   ]
 }
@@ -121,7 +121,7 @@ POST /api/backend/analyzer/traffic-stats
 
 `packet-summary`를 기반으로 계산한 네트워크 상태 요약 정보를 Backend로 전달한다.
 
-대시보드 카드, 프로토콜 비율 차트, Top Talkers 표시 등에 사용한다.
+대시보드 카드, 프로토콜 비율 차트, 의심 호스트 표시 등에 사용한다.
 
 ### Request Body
 
@@ -129,16 +129,21 @@ POST /api/backend/analyzer/traffic-stats
 {
   "timestamp": "2026-05-24T10:00:00+09:00",
   "analyzer_id": "analyzer-1",
-  "network_status": "normal",
+  "network_status": "warning",
+  "total_bps": 273960.0,
+  "total_pps": 90.0,
   "active_flow_count": 15,
-  "suspicious_host_count": 0,
-  "top_talkers": [
+  "suspicious_host_count": 1,
+  "suspicious_hosts": [
     {
       "host": "52.182.143.209",
       "ip": "52.182.143.209",
-      "bps": 16.0,
-      "pps": 81192.0,
-      "status": "normal"
+      "protocol": "TCP",
+      "bps": 81192.0,
+      "pps": 16.0,
+      "reasons": [
+        "bps threshold exceeded"
+      ]
     }
   ]
 }
@@ -151,20 +156,22 @@ POST /api/backend/analyzer/traffic-stats
 | `timestamp` | 트래픽 통계 생성 시각 |
 | `analyzer_id` | Analyzer 식별자 |
 | `network_status` | 네트워크 상태, `normal`, `warning`, `critical` |
+| `total_bps` | 전체 초당 비트 수 |
+| `total_pps` | 전체 초당 패킷 수 |
 | `active_flow_count` | 현재 윈도우에서 관측된 flow 개수 |
 | `suspicious_host_count` | suspicious 상태 host 수 |
-| `protocol_distribution` | 전체 패킷 기준 프로토콜별 비율 |
-| `top_talkers` | 트래픽 상위 host 목록 |
+| `suspicious_hosts` | 임계치 기준을 초과한 의심 host 목록 |
 
-### `top_talkers` 필드
+### `suspicious_hosts` 필드
 
 | 필드 | 설명 |
 |---|---|
 | `host` | 출발지 호스트 이름 또는 IP |
 | `ip` | 출발지 IP |
+| `protocol` | 의심 트래픽의 프로토콜 |
 | `bps` | 해당 host의 초당 총 비트 수 |
 | `pps` | 해당 host의 초당 총 패킷 수 |
-| `status` | host 상태, `normal` 또는 `suspicious` |
+| `reasons` | 의심 호스트로 판단한 사유 목록 |
 
 ### Response Body
 
@@ -253,5 +260,5 @@ Backend는 수신한 JSON을 저장소 목적에 맞게 분해하여 저장한�
 | API | 저장 방향 |
 |---|---|
 | `packet-summary` | InfluxDB의 `packet_summary_total`, `protocol_traffic`, `host_traffic` 등으로 분해 저장 |
-| `traffic-stats` | InfluxDB의 `traffic_status`, `top_talkers` 등으로 분해 저장 |
+| `traffic-stats` | InfluxDB의 `traffic_status`, `suspicious_hosts` 등으로 분해 저장 |
 | `status` | PostgreSQL 또는 InfluxDB에 최신 상태 중심으로 저장 |
