@@ -59,12 +59,11 @@ def analysis_loop():
             packets.clear()
 
         packet_summary = summary_builder.build_packet_summary(
-            packets_snapshot
+            packets_snapshot,
         )
 
         traffic_stats = traffic_builder.build_traffic_stats(
             packet_summary=packet_summary,
-            packets=packets_snapshot,
         )
 
         packet_summary_sent = backend_client.send_packet_summary(
