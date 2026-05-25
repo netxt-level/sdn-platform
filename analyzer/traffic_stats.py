@@ -68,7 +68,6 @@ class TrafficStatsBuilder:
             "total_pps": round(total_pps, 3),                           # 전체 초당 패킷 수
             "active_flow_count": active_flow_count,                     # 활성 플로우 개수
             "suspicious_host_count": suspicious_host_count,             # 의심 호스트 개수
-            "protocol_distribution": protocol_distribution,             # 프로토콜별 패킷 비율
             "suspicious_hosts": suspicious_hosts,                       # 의심 호스트 목록
         }
 
