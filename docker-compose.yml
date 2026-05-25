@@ -1,4 +1,19 @@
 services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sdn-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - influxdb
+      - elasticsearch
+
   postgres:
     image: postgres:16
     container_name: sdn-postgres
