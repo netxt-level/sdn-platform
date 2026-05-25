@@ -35,7 +35,7 @@ class PacketSummaryBuilder:
             "analyzer_id": self.analyzer_id,                        # 스위치 ID
             "window_sec": self.window_sec,                          # 집계 시간
             "total_packets": total_packets,                         # 전체 패킷 수
-            "total_bytes": total_bytes,                             # 전체 바이트 수
+            "total_bits": total_bytes * 8,                          # 전체 비트 수
             "protocol_stats": dict(protocol_stats),                 # 프로토콜 별 패킷 개수
             "host_stats": host_stats,                               # 호스트 간 통신 통계
         }
@@ -95,7 +95,7 @@ class PacketSummaryBuilder:
                 "dst_ip": values["dst_ip"],                 # 목적지 IP
                 "protocol": values["protocol"],             # 프로토콜
                 "packet_count": packet_count,               # 해당 통신의 패킷 수
-                "byte_count": byte_count,                   # 해당 통신의 전체 바이트 수
+                "bit_count": byte_count * 8,                # 해당 통신의 전체 비트 수
             })
         
         # 수집된 통신 흐름을 bps 순으로 정렬
@@ -111,7 +111,7 @@ class PacketSummaryBuilder:
         if self.window_sec <= 0:
             return 0
     
-        return round(packet_count / self.window_sec, 3)
+        return round(packet_count / self.window_sec, 1)
     
     # 초당 비트 수 계산
     def _calculate_bps(self, byte_count: int) -> float:
@@ -119,4 +119,4 @@ class PacketSummaryBuilder:
             return 0
 
         # byte를 bit로 변환하여 bps 계산
-        return round((byte_count * 8) / self.window_sec, 3)
+        return round((byte_count * 8) / self.window_sec, 1)
