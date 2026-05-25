@@ -36,8 +36,6 @@ class PacketSummaryBuilder:
             "window_sec": self.window_sec,                          # 집계 시간
             "total_packets": total_packets,                         # 전체 패킷 수
             "total_bytes": total_bytes,                             # 전체 바이트 수
-            "pps": self._calculate_pps(total_packets),              # 초당 패킷 수
-            "bps": self._calculate_bps(total_bytes),                # 초당 비트 수
             "protocol_stats": dict(protocol_stats),                 # 프로토콜 별 패킷 개수
             "host_stats": host_stats,                               # 호스트 간 통신 통계
         }
@@ -98,8 +96,6 @@ class PacketSummaryBuilder:
                 "protocol": values["protocol"],             # 프로토콜
                 "packet_count": packet_count,               # 해당 통신의 패킷 수
                 "byte_count": byte_count,                   # 해당 통신의 전체 바이트 수
-                "pps": self._calculate_pps(packet_count),   # 해당 통신의 초당 패킷 수
-                "bps": self._calculate_bps(byte_count),     # 해당 통신의 초당 비트 수
             })
         
         # 수집된 통신 흐름을 bps 순으로 정렬

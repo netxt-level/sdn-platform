@@ -62,11 +62,8 @@ class TrafficStatsBuilder:
             "timestamp": datetime.now(timezone.utc).isoformat(),    # 통계 생성 시각
             "analyzer_id": self.analyzer_id,                        # 패킷 전송 스위치 ID
             "network_status": network_status,                       # 네트워크 상태 (normal, warning, critical)
-            "total_bps": total_bps,                                 # 전체 초당 비트 수
-            "total_pps": total_pps,                                 # 전체 초당 패킷 수
             "active_flow_count": active_flow_count,                 # 활성 플로우 개수
             "suspicious_host_count": suspicious_host_count,         # 의심 호스트 개수
-            "protocol_distribution": protocol_distribution,         # 프로토콜별 사용 비율
             "top_talkers": top_talkers,                             # 트래픽이 많은 호스트 목록
         }
 
