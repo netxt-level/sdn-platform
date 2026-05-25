@@ -12,8 +12,8 @@ def upgrade():
     op.create_table(
         "analyzer",
         sa.Column("id", sa.String(30), primary_key=True),
-        sa.Column("name", sa.String(50), nullable=False),
         sa.Column("status", sa.String(30), nullable=False),
+        sa.Column("interface", sa.String(30), nullable=False),
         sa.Column("capture_active", sa.Boolean, nullable=False),
         sa.Column("backend_connected", sa.Boolean, nullable=False),
         sa.Column("last_packet_at", sa.DateTime(timezone=True), nullable=True),
