@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 
@@ -9,11 +10,11 @@ from packet_summary import PacketSummaryBuilder
 from traffic_stats import TrafficStatsBuilder
 
 
-INTERFACE = "en0"
-ANALYZER_ID = "analyzer-1"
-WINDOW_SEC = 1
-STATUS_INTERVAL_SEC = 5
-BACKEND_BASE_URL = "http://127.0.0.1:8000"
+INTERFACE = os.getenv("INTERFACE", "en0")
+ANALYZER_ID = os.getenv("ANALYZER_ID", "analyzer-1")
+WINDOW_SEC = int(os.getenv("WINDOW_SEC", "1"))
+STATUS_INTERVAL_SEC = int(os.getenv("STATUS_INTERVAL_SEC", "5"))
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
 
 packets = []
 packets_lock = threading.Lock()
