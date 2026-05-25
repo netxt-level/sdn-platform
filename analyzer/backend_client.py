@@ -8,21 +8,21 @@ class BackendClient:
 
     def send_packet_summary(self, packet_summary: dict) -> bool:
         return self._post(
-            path="/api/backend/analyzer/packet-summary",
+            path="/api/analyzer/packet-summary",
             payload=packet_summary,
             label="packet summary",
         )
 
     def send_traffic_stats(self, traffic_stats: dict) -> bool:
         return self._post(
-            path="/api/backend/analyzer/traffic-stats",
+            path="/api/analyzer/detection-summary",
             payload=traffic_stats,
             label="traffic stats",
         )
     
     def send_analyzer_status(self, analyzer_status: dict) -> bool:
         return self._post(
-            path="/api/backend/analyzer/status",
+            path="/api/analyzer/status",
             payload=analyzer_status,
             label="analyzer status",
         )
