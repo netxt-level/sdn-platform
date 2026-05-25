@@ -30,16 +30,10 @@ class TrafficStatsBuilder:
         total_bits = packet_summary.get("total_bits", 0)        # 전체 비트 수
 
         # 전체 초당 패킷 수 계산
-        total_pps = total_packets / window_sec if window_sec > 0 else 0
+        total_pps = total_packets
 
         # 전체 초당 비트 수 계산
-        total_bps = total_bits / window_sec if window_sec > 0 else 0
-
-        # 프로토콜별 패킷 비율 계산
-        protocol_distribution = self._build_protocol_distribution(
-            protocol_stats=packet_summary.get("protocol_stats", {}),
-            total_packets=total_packets,
-        )
+        total_bps = total_bits
 
         # 의심 호스트 목록 생성
         suspicious_hosts = self._build_suspicious_hosts(
@@ -64,25 +58,11 @@ class TrafficStatsBuilder:
             "timestamp": datetime.now(timezone.utc).isoformat(),        # 통계 생성 시각
             "analyzer_id": self.analyzer_id,                            # 분석 서버 ID
             "network_status": network_status,                           # 네트워크 상태
-            "total_bps": round(total_bps, 3),                           # 전체 초당 비트 수
-            "total_pps": round(total_pps, 3),                           # 전체 초당 패킷 수
+            "total_bps": total_bps,                                     # 전체 초당 비트 수
+            "total_pps": total_pps,                                     # 전체 초당 패킷 수
             "active_flow_count": active_flow_count,                     # 활성 플로우 개수
             "suspicious_host_count": suspicious_host_count,             # 의심 호스트 개수
             "suspicious_hosts": suspicious_hosts,                       # 의심 호스트 목록
-        }
-
-    # 프로토콜별 패킷 비율을 계산하는 내부 함수
-    def _build_protocol_distribution(
-        self,
-        protocol_stats: dict[str, int],
-        total_packets: int,
-    ) -> dict[str, float]:
-        if total_packets <= 0:
-            return {}
-
-        return {
-            protocol: round((count / total_packets) * 100, 1)
-            for protocol, count in protocol_stats.items()
         }
 
     # 의심 호스트 목록을 생성하는 내부 함수
@@ -103,7 +83,8 @@ class TrafficStatsBuilder:
             # 호스트별 초당 비트 수 계산
             bps = bit_count / window_sec if window_sec > 0 else 0
 
-            reasons = []                                # 의심 호스트 판단 사유 목록
+            # 의심 호스트 판단 사유 목록
+            reasons = []
 
             # 초당 패킷 수가 임계값 이상이면 의심 사유 추가
             if pps >= self.suspicious_pps_threshold:
@@ -121,8 +102,8 @@ class TrafficStatsBuilder:
                 "host": host.get("src_host") or host.get("src_ip"),     # 출발지 호스트 이름 또는 IP
                 "ip": host.get("src_ip"),                               # 출발지 IP
                 "protocol": host.get("protocol"),                       # 프로토콜
-                "bps": round(bps, 3),                                   # 호스트별 초당 비트 수
-                "pps": round(pps, 3),                                   # 호스트별 초당 패킷 수
+                "bps": bps,                                             # 호스트별 초당 비트 수
+                "pps": pps,                                             # 호스트별 초당 패킷 수
                 "reasons": reasons,                                     # 의심 판단 사유
             })
 

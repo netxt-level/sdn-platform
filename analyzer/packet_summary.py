@@ -19,13 +19,15 @@ class PacketSummaryBuilder:
         packets: list[dict[str, Any]],
     ) -> dict[str, Any]:
 
-        total_packets = len(packets)        # 전체 패킷 수
+        # 프로토콜별 패킷 수 계산
+        total_packets = len(packets)
+        
+        # 프로토콜별 비트 수 계산
         total_bits = sum(
             packet.get("packet_size", 0) * 8
             for packet in packets
-        )                                   # 전체 비트 수
+        )
 
-        # 프로토콜별 패킷 수 계산
         protocol_stats = Counter(
             packet.get("protocol", "UNKNOWN")
             for packet in packets
