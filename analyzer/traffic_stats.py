@@ -1,21 +1,20 @@
 from datetime import datetime, timezone
 from typing import Any
 
+
 # 패킷 요약 정보를 기반으로 네트워크 트래픽 상태를 계산하는 클래스
 class TrafficStatsBuilder:
     def __init__(
         self,
         analyzer_id: str = "analyzer-1",
-        top_talker_limit: int = 5,
         suspicious_pps_threshold: float = 1000,
         suspicious_bps_threshold: float = 5_000_000,
         critical_pps_threshold: float = 3000,
         critical_bps_threshold: float = 10_000_000,
     ):
-        self.analyzer_id = analyzer_id                              # 패킷 전송 스위치 ID
-        self.top_talker_limit = top_talker_limit                    # top_talker 호스트 출력 개수
-        self.suspicious_pps_threshold = suspicious_pps_threshold    # 의심 호스트 판단 패킷 수
-        self.suspicious_bps_threshold = suspicious_bps_threshold    # 의심 호스트 판단 비트 수
+        self.analyzer_id = analyzer_id                              # 분석 서버 ID
+        self.suspicious_pps_threshold = suspicious_pps_threshold    # 의심 호스트 판단 초당 패킷 수
+        self.suspicious_bps_threshold = suspicious_bps_threshold    # 의심 호스트 판단 초당 비트 수
         self.critical_pps_threshold = critical_pps_threshold        # critical 판단 초당 패킷 수
         self.critical_bps_threshold = critical_bps_threshold        # critical 판단 초당 비트 수
 
@@ -25,28 +24,31 @@ class TrafficStatsBuilder:
         packet_summary: dict[str, Any],
         packets: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        
-        total_packets = packet_summary.get("total_packets", 0)  # 전체 패킷 수
-        total_bps = packet_summary.get("bps", 0)                # 전체 초당 비트 수
-        total_pps = packet_summary.get("pps", 0)                # 전체 초당 패킷 수
 
-        # 프로토콜 별 비율 계산
+        window_sec = packet_summary.get("window_sec", 1)        # 패킷 집계 시간 범위
+        total_packets = packet_summary.get("total_packets", 0)  # 전체 패킷 수
+        total_bits = packet_summary.get("total_bits", 0)        # 전체 비트 수
+
+        # 전체 초당 패킷 수 계산
+        total_pps = total_packets / window_sec if window_sec > 0 else 0
+
+        # 전체 초당 비트 수 계산
+        total_bps = total_bits / window_sec if window_sec > 0 else 0
+
+        # 프로토콜별 패킷 비율 계산
         protocol_distribution = self._build_protocol_distribution(
             protocol_stats=packet_summary.get("protocol_stats", {}),
             total_packets=total_packets,
         )
 
-        # 트래픽 양이 많은 호스트 목록 생성
-        top_talkers = self._build_top_talkers(
-            host_stats=packet_summary.get("host_stats", [])
+        # 의심 호스트 목록 생성
+        suspicious_hosts = self._build_suspicious_hosts(
+            host_stats=packet_summary.get("host_stats", []),
+            window_sec=window_sec,
         )
 
-        # top_talker 중 suspicous(의심) 상태의 호스트 개수 계산
-        suspicious_host_count = sum(
-            1
-            for talker in top_talkers
-            if talker["status"] == "suspicious"
-        )
+        # 의심 호스트 개수 계산
+        suspicious_host_count = len(suspicious_hosts)
 
         # 현재 활성화된 플로우 개수 계산
         active_flow_count = self._count_active_flows(packets)
@@ -59,15 +61,18 @@ class TrafficStatsBuilder:
         )
 
         return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),    # 통계 생성 시각
-            "analyzer_id": self.analyzer_id,                        # 패킷 전송 스위치 ID
-            "network_status": network_status,                       # 네트워크 상태 (normal, warning, critical)
-            "active_flow_count": active_flow_count,                 # 활성 플로우 개수
-            "suspicious_host_count": suspicious_host_count,         # 의심 호스트 개수
-            "top_talkers": top_talkers,                             # 트래픽이 많은 호스트 목록
+            "timestamp": datetime.now(timezone.utc).isoformat(),        # 통계 생성 시각
+            "analyzer_id": self.analyzer_id,                            # 분석 서버 ID
+            "network_status": network_status,                           # 네트워크 상태
+            "total_bps": round(total_bps, 3),                           # 전체 초당 비트 수
+            "total_pps": round(total_pps, 3),                           # 전체 초당 패킷 수
+            "active_flow_count": active_flow_count,                     # 활성 플로우 개수
+            "suspicious_host_count": suspicious_host_count,             # 의심 호스트 개수
+            "protocol_distribution": protocol_distribution,             # 프로토콜별 패킷 비율
+            "suspicious_hosts": suspicious_hosts,                       # 의심 호스트 목록
         }
 
-    # 프로토콜별 패킷 비율을 계산하는 내부 함수     -> ARP, SYN 등 추후 더 세부적으로 나눠야함
+    # 프로토콜별 패킷 비율을 계산하는 내부 함수
     def _build_protocol_distribution(
         self,
         protocol_stats: dict[str, int],
@@ -81,44 +86,54 @@ class TrafficStatsBuilder:
             for protocol, count in protocol_stats.items()
         }
 
-    # 트래픽 사용량이 많은 호스트 목록을 생성하는 내부 함수
-    def _build_top_talkers(
+    # 의심 호스트 목록을 생성하는 내부 함수
+    def _build_suspicious_hosts(
         self,
         host_stats: list[dict[str, Any]],
+        window_sec: int,
     ) -> list[dict[str, Any]]:
-        talkers = []
+        suspicious_hosts = []
 
-        # 호스트 통계 확인
         for host in host_stats:
-            bps = host.get("bps", 0)
-            pps = host.get("pps", 0)
+            packet_count = host.get("packet_count", 0)  # 호스트별 패킷 수
+            bit_count = host.get("bit_count", 0)        # 호스트별 비트 수
 
-            status = "normal"
+            # 호스트별 초당 패킷 수 계산
+            pps = packet_count / window_sec if window_sec > 0 else 0
 
-            # pps 또는 bps가 임계값 이상일 경우 의심 패킷으로 판단
-            if (
-                pps >= self.suspicious_pps_threshold
-                or bps >= self.suspicious_bps_threshold
-            ):
-                status = "suspicious"
+            # 호스트별 초당 비트 수 계산
+            bps = bit_count / window_sec if window_sec > 0 else 0
 
-            # 호스트 트래픽 정보 저장
-            talkers.append({
-                "host": host.get("src_host") or host.get("src_ip"),
-                "ip": host.get("src_ip"),
-                "bps": bps,
-                "pps": pps,
-                "status": status,
+            reasons = []                                # 의심 호스트 판단 사유 목록
+
+            # 초당 패킷 수가 임계값 이상이면 의심 사유 추가
+            if pps >= self.suspicious_pps_threshold:
+                reasons.append("pps threshold exceeded")
+
+            # 초당 비트 수가 임계값 이상이면 의심 사유 추가
+            if bps >= self.suspicious_bps_threshold:
+                reasons.append("bps threshold exceeded")
+
+            # 의심 사유가 없으면 의심 호스트 목록에 포함하지 않음
+            if not reasons:
+                continue
+
+            suspicious_hosts.append({
+                "host": host.get("src_host") or host.get("src_ip"),     # 출발지 호스트 이름 또는 IP
+                "ip": host.get("src_ip"),                               # 출발지 IP
+                "protocol": host.get("protocol"),                       # 프로토콜
+                "bps": round(bps, 3),                                   # 호스트별 초당 비트 수
+                "pps": round(pps, 3),                                   # 호스트별 초당 패킷 수
+                "reasons": reasons,                                     # 의심 판단 사유
             })
 
-        # bps 순서 정렬
-        talkers.sort(
+        # 초당 비트 수가 높은 순서로 정렬
+        suspicious_hosts.sort(
             key=lambda item: item["bps"],
             reverse=True,
         )
 
-        # 설정된 개수만큼 상위 호스트 반환
-        return talkers[:self.top_talker_limit]
+        return suspicious_hosts
 
     # 현재 활성화된 플로우 개수를 계산하는 내부 함수
     def _count_active_flows(
@@ -139,6 +154,7 @@ class TrafficStatsBuilder:
                 packet.get("dst_port"),
             )
 
+            # 출발지 IP, 목적지 IP, 프로토콜이 있는 패킷만 플로우로 계산
             if flow_key[0] and flow_key[1] and flow_key[2]:
                 flow_keys.add(flow_key)
 
@@ -151,7 +167,7 @@ class TrafficStatsBuilder:
         total_pps: float,
         suspicious_host_count: int,
     ) -> str:
-        
+
         # 전체 bps 또는 pps가 critical 기준 이상일 경우 심각 상태
         if (
             total_bps >= self.critical_bps_threshold
