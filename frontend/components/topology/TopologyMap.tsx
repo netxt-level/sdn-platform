@@ -20,6 +20,13 @@ const statusClass = {
   offline: "border-line2 bg-panel2 text-faint"
 };
 
+const hostClass: Record<string, string> = {
+  h1: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]",
+  h2: "border-[#f0a13a] bg-[#fff0d6] text-[#b86b00]",
+  h3: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]",
+  h4: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]"
+};
+
 const linkPaths: Record<string, string> = {
   "h1-s1": "M 15 20 L 25 38",
   "h2-s1": "M 15 42 L 25 42",
@@ -82,7 +89,7 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
             style={{ left: `${position.x}%`, top: `${position.y}%` }}
           >
             <div
-              className={`font-mono-ui flex h-[54px] w-[104px] items-center gap-2 rounded-md border px-2.5 py-2 ${statusClass[node.status]}`}
+              className={`font-mono-ui flex h-[54px] w-[104px] items-center gap-2 rounded-md border px-2.5 py-2 ${hostClass[node.id] ?? statusClass[node.status]}`}
             >
               {node.status === "warning" ? (
                 <ShieldAlert className="h-3.5 w-3.5 shrink-0" />

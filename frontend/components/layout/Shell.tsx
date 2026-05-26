@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Activity,
   Bell,
   GitBranch,
   LayoutDashboard,
@@ -16,7 +15,6 @@ import {
 const navItems = [
   { section: "Overview", href: "/", label: "대시보드", icon: LayoutDashboard },
   { section: "Overview", href: "/topology", label: "토폴로지", icon: Network },
-  { section: "Monitoring", href: "/traffic", label: "트래픽 분석", icon: Activity },
   { section: "Monitoring", href: "/security/events", label: "보안 이벤트", icon: Bell, badge: "7" },
   { section: "Monitoring", href: "/security/rules", label: "규칙 관리", icon: Shield },
   { section: "Network", href: "/path", label: "경로 제어", icon: Route },
@@ -26,7 +24,6 @@ const navItems = [
 const titles: Record<string, string> = {
   "/": "대시보드",
   "/topology": "토폴로지 시각화",
-  "/traffic": "트래픽 분석",
   "/security/events": "보안 이벤트 관리",
   "/security/rules": "규칙 관리",
   "/path": "경로 제어",

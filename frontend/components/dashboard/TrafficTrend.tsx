@@ -14,28 +14,53 @@ import {
 import { formatBitsPerSecond, formatNumber } from "@/lib/format";
 
 const baseSeries = [
-  { time: "12:00", ppsRatio: 0.54, bpsRatio: 0.42 },
-  { time: "12:01", ppsRatio: 0.62, bpsRatio: 0.48 },
-  { time: "12:02", ppsRatio: 0.58, bpsRatio: 0.44 },
-  { time: "12:03", ppsRatio: 0.73, bpsRatio: 0.61 },
-  { time: "12:04", ppsRatio: 0.66, bpsRatio: 0.56 },
-  { time: "12:05", ppsRatio: 0.81, bpsRatio: 0.68 },
-  { time: "12:06", ppsRatio: 0.77, bpsRatio: 0.72 },
-  { time: "12:07", ppsRatio: 0.92, bpsRatio: 0.84 }
+  { minutesAgo: 10, packetRatio: 0.62, bpsRatio: 0.52 },
+  { minutesAgo: 8, packetRatio: 0.73, bpsRatio: 0.61 },
+  { minutesAgo: 6, packetRatio: 0.81, bpsRatio: 0.74 },
+  { minutesAgo: 4, packetRatio: 0.92, bpsRatio: 0.83 },
+  { minutesAgo: 2, packetRatio: 0.86, bpsRatio: 0.78 },
+  { minutesAgo: 0, packetRatio: 1, bpsRatio: 1 }
 ];
 
 type TrafficTrendProps = {
-  pps: number;
+  packets: number;
   bps: number;
+  metric?: "packets" | "bps";
 };
 
-export function TrafficTrend({ pps, bps }: TrafficTrendProps) {
+function formatAxisValue(value: number): string {
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  }
+
+  if (Math.abs(value) >= 1_000) {
+    return `${Math.round(value / 1_000)}K`;
+  }
+
+  return String(value);
+}
+
+function formatTimeLabel(minutesAgo: number): string {
+  const date = new Date(Date.now() - minutesAgo * 60 * 1000);
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
+export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendProps) {
   const [mounted, setMounted] = useState(false);
-  const data = baseSeries.map((point, index) => ({
-    time: index === baseSeries.length - 1 ? "now" : point.time,
-    pps: Math.round(pps * point.ppsRatio),
+  const data = baseSeries.map((point) => ({
+    time: formatTimeLabel(point.minutesAgo),
+    packets: Math.round(packets * point.packetRatio),
     bps: Math.round(bps * point.bpsRatio)
   }));
+  const isBps = metric === "bps";
+  const dataKey = isBps ? "bps" : "packets";
+  const stroke = isBps ? "var(--green)" : "var(--accent)";
+  const fillId = isBps ? "bpsFill" : "packetsFill";
 
   useEffect(() => {
     setMounted(true);
@@ -50,7 +75,7 @@ export function TrafficTrend({ pps, bps }: TrafficTrendProps) {
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
           <defs>
-            <linearGradient id="ppsFill" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id="packetsFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#3767a8" stopOpacity={0.34} />
               <stop offset="95%" stopColor="#3767a8" stopOpacity={0.02} />
             </linearGradient>
@@ -67,22 +92,21 @@ export function TrafficTrend({ pps, bps }: TrafficTrendProps) {
             tick={{ fill: "var(--text2)", fontSize: 11, fontFamily: "var(--mono)" }}
           />
           <YAxis
-            yAxisId="pps"
             axisLine={false}
             tickLine={false}
             tick={{ fill: "var(--text2)", fontSize: 11, fontFamily: "var(--mono)" }}
+            tickFormatter={(value) => formatAxisValue(Number(value))}
             width={44}
           />
-          <YAxis yAxisId="bps" orientation="right" hide />
           <Tooltip
-            formatter={(value, name) => {
+            formatter={(value) => {
               const numericValue = Number(value ?? 0);
 
-              if (name === "bps") {
+              if (isBps) {
                 return [formatBitsPerSecond(numericValue), "BPS"];
               }
 
-              return [`${formatNumber(numericValue)} pps`, "PPS"];
+              return [`${formatNumber(numericValue)} packets`, "패킷 수"];
             }}
             contentStyle={{
               background: "var(--panel)",
@@ -93,23 +117,12 @@ export function TrafficTrend({ pps, bps }: TrafficTrendProps) {
             }}
           />
           <Area
-            yAxisId="bps"
             type="monotone"
-            dataKey="bps"
-            stroke="#11736b"
+            dataKey={dataKey}
+            name={dataKey}
+            stroke={stroke}
             strokeWidth={2}
-            fill="url(#bpsFill)"
-            dot={false}
-            activeDot={{ r: 4 }}
-            isAnimationActive={false}
-          />
-          <Area
-            yAxisId="pps"
-            type="monotone"
-            dataKey="pps"
-            stroke="#3767a8"
-            strokeWidth={2}
-            fill="url(#ppsFill)"
+            fill={`url(#${fillId})`}
             dot={false}
             activeDot={{ r: 4 }}
             isAnimationActive={false}

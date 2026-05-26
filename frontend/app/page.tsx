@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -21,6 +22,7 @@ export default function DashboardPage() {
   const state = useRealtime();
   const { analyzerStatus, packetSummary, detectionSummary } = state;
   const recentDetectionCount = state.securityEvents.length;
+  const [trafficMetric, setTrafficMetric] = useState<"packets" | "bps">("packets");
 
   return (
     <>
@@ -82,8 +84,37 @@ export default function DashboardPage() {
           <AnalyzerStatusPanel status={analyzerStatus} />
         </Panel>
 
-        <Panel title="실시간 트래픽" className="col-span-6 max-xl:col-span-8 max-lg:col-span-12">
-          <TrafficTrend pps={detectionSummary.total_pps} bps={detectionSummary.total_bps} />
+        <Panel
+          title="트래픽 추이"
+          className="col-span-6 max-xl:col-span-8 max-lg:col-span-12"
+          action={
+            <div className="font-mono-ui flex items-center gap-2 text-[10px]">
+              {[
+                { key: "packets", label: "PPS" },
+                { key: "bps", label: "BPS" }
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setTrafficMetric(item.key as "packets" | "bps")}
+                  className={`rounded border px-2 py-1 ${
+                    trafficMetric === item.key
+                      ? "border-accent bg-[var(--accent-dim)] text-accent"
+                      : "border-line2 text-muted"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <StatusBadge value="최근 10분" tone="muted" />
+            </div>
+          }
+        >
+          <TrafficTrend
+            packets={packetSummary.total_packets}
+            bps={detectionSummary.total_bps}
+            metric={trafficMetric}
+          />
         </Panel>
 
         <Panel title="프로토콜 비율" className="col-span-3 max-xl:col-span-4 max-lg:col-span-12">
