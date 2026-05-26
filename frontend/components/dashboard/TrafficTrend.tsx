@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -17,13 +17,18 @@ type TrafficTrendProps = {
   packets: number;
   bps: number;
   metric?: "packets" | "bps";
+  data?: TrafficPoint[];
 };
 
 type TrafficPoint = {
+  timestampMs: number;
   time: string;
-  packets: number;
+  pps: number;
   bps: number;
 };
+
+const ONE_MINUTE_MS = 60 * 1000;
+const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
 
 function formatAxisValue(value: number): string {
   if (Math.abs(value) >= 1_000_000) {
@@ -46,45 +51,71 @@ function formatTimeLabel(date: Date): string {
   }).format(date);
 }
 
-function createInitialSeries(packets: number, bps: number): TrafficPoint[] {
-  const now = Date.now();
+function getNiceStep(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 1;
+  }
 
-  return Array.from({ length: 12 }, (_, index) => {
-    const age = 11 - index;
-    const ratio = 0.72 + index * 0.025;
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const normalized = value / magnitude;
 
-    return {
-      time: formatTimeLabel(new Date(now - age * 1000)),
-      packets: Math.round(packets * ratio),
-      bps: Math.round(bps * ratio)
-    };
-  });
+  if (normalized <= 1) return magnitude;
+  if (normalized <= 2) return 2 * magnitude;
+  if (normalized <= 2.5) return 2.5 * magnitude;
+  if (normalized <= 5) return 5 * magnitude;
+
+  return 10 * magnitude;
 }
 
-export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendProps) {
+function getYAxisTicks(maxValue: number): number[] {
+  const paddedMax = Math.max(maxValue * 1.1, 1);
+  const step = getNiceStep(paddedMax / 4);
+
+  return [0, step, step * 2, step * 3, step * 4];
+}
+
+export function TrafficTrend({
+  metric = "packets",
+  data: trafficData
+}: TrafficTrendProps) {
   const [mounted, setMounted] = useState(false);
-  const [data, setData] = useState<TrafficPoint[]>(() =>
-    createInitialSeries(packets, bps)
-  );
   const isBps = metric === "bps";
-  const dataKey = isBps ? "bps" : "packets";
+  const dataKey = isBps ? "bps" : "pps";
   const stroke = isBps ? "var(--green)" : "var(--accent)";
   const fillId = isBps ? "bpsFill" : "packetsFill";
+  const chartData = trafficData ?? [];
+  const yAxisTicks = useMemo(() => {
+    const maxValue = Math.max(
+      ...chartData.map((point) => Number(point[dataKey]) || 0)
+    );
+
+    return getYAxisTicks(maxValue);
+  }, [chartData, dataKey]);
+  const yAxisMax = yAxisTicks.at(-1) ?? 1;
+  const latestTimestampMs = chartData.at(-1)?.timestampMs ?? Date.now();
+  const xAxisDomain = useMemo<[number, number]>(
+    () => [latestTimestampMs - FIVE_MINUTES_MS, latestTimestampMs],
+    [latestTimestampMs]
+  );
+  const xAxisTicks = useMemo(() => {
+    const ticks: number[] = [];
+    const firstTick =
+      Math.ceil(xAxisDomain[0] / ONE_MINUTE_MS) * ONE_MINUTE_MS;
+
+    for (
+      let tick = firstTick;
+      tick <= xAxisDomain[1];
+      tick += ONE_MINUTE_MS
+    ) {
+      ticks.push(tick);
+    }
+
+    return ticks;
+  }, [xAxisDomain]);
 
   useEffect(() => {
     setMounted(true);
   }, []);
-
-  useEffect(() => {
-    setData((prev) => [
-      ...prev.slice(-11),
-      {
-        time: formatTimeLabel(new Date()),
-        packets,
-        bps
-      }
-    ]);
-  }, [bps, packets]);
 
   if (!mounted) {
     return <div className="h-56 rounded bg-panel2" />;
@@ -93,7 +124,7 @@ export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendP
   return (
     <div className="h-56">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+        <AreaChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="packetsFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#3767a8" stopOpacity={0.34} />
@@ -106,7 +137,11 @@ export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendP
           </defs>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
           <XAxis
-            dataKey="time"
+            dataKey="timestampMs"
+            type="number"
+            domain={xAxisDomain}
+            ticks={xAxisTicks}
+            tickFormatter={(value) => formatTimeLabel(new Date(Number(value))).slice(0, 5)}
             axisLine={false}
             tickLine={false}
             tick={{ fill: "var(--text2)", fontSize: 11, fontFamily: "var(--mono)" }}
@@ -116,9 +151,12 @@ export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendP
             tickLine={false}
             tick={{ fill: "var(--text2)", fontSize: 11, fontFamily: "var(--mono)" }}
             tickFormatter={(value) => formatAxisValue(Number(value))}
+            ticks={yAxisTicks}
             width={44}
+            domain={[0, yAxisMax]}
           />
           <Tooltip
+            labelFormatter={(value) => formatTimeLabel(new Date(Number(value)))}
             formatter={(value) => {
               const numericValue = Number(value ?? 0);
 
@@ -126,7 +164,7 @@ export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendP
                 return [formatBitsPerSecond(numericValue), "BPS"];
               }
 
-              return [`${formatNumber(numericValue)} packets`, "패킷 수"];
+              return [`${formatNumber(numericValue)} pps`, "PPS"];
             }}
             contentStyle={{
               background: "var(--panel)",

@@ -13,30 +13,80 @@ import type {
 import type { RealtimeMessage } from "@/types/realtime";
 import type { SecurityEvent } from "@/types/security";
 import type { TopologyState } from "@/types/topology";
-import {
-  mockAnalyzerStatus,
-  mockDetectionSummary,
-  mockPacketSummary,
-  mockSecurityEvents,
-  mockTopology
-} from "@/lib/mockData";
-
 export type RealtimeState = {
   connected: boolean;
-  source: "mock" | "websocket";
+  source: "waiting" | "websocket";
   analyzerStatus: AnalyzerStatus;
   packetSummary: PacketSummary;
   detectionSummary: DetectionSummary;
+  trafficSeries: TrafficSeriesPoint[];
   securityEvents: SecurityEvent[];
   topology: TopologyState;
 };
 
+export type TrafficSeriesPoint = {
+  timestampMs: number;
+  time: string;
+  pps: number;
+  bps: number;
+};
+
+type TrafficSample = {
+  timestampMs: number;
+  analyzerId: string;
+  windowSec: number;
+  totalPackets: number;
+  totalBits: number;
+  protocolStats: Record<string, number>;
+};
+
+const FIVE_SECONDS_MS = 5 * 1000;
+const ONE_MINUTE_MS = 60 * 1000;
+const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
+
 const websocketUrl =
   process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/analyzer";
 
-function randomBetween(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+const initialTimestamp = new Date(0).toISOString();
+
+const initialAnalyzerStatus: AnalyzerStatus = {
+  timestamp: initialTimestamp,
+  analyzer_id: "-",
+  status: "waiting",
+  interface: "-",
+  capture_active: false,
+  backend_connected: false,
+  last_packet_at: null,
+  last_summary_sent_at: null,
+  error_message: null
+};
+
+const initialPacketSummary: PacketSummary = {
+  timestamp: initialTimestamp,
+  analyzer_id: "-",
+  window_sec: 1,
+  total_packets: 0,
+  total_bits: 0,
+  protocol_stats: {},
+  host_stats: []
+};
+
+const initialDetectionSummary: DetectionSummary = {
+  timestamp: initialTimestamp,
+  analyzer_id: "-",
+  network_status: "normal",
+  total_bps: 0,
+  total_pps: 0,
+  active_flow_count: 0,
+  suspicious_host_count: 0,
+  suspicious_hosts: []
+};
+
+const initialTopology: TopologyState = {
+  active_path: "primary",
+  nodes: [],
+  links: []
+};
 
 function normalizeNetworkStatus(status?: string): NetworkStatus {
   if (status === "warning" || status === "critical") {
@@ -65,6 +115,141 @@ function normalizePacketSummary(summary: IncomingPacketSummary): PacketSummary {
       packet_count: hostStat.packet_count,
       bit_count: hostStat.bit_count ?? (hostStat.byte_count ?? 0) * 8
     }))
+  };
+}
+
+function toTimestampMs(value: string): number {
+  const timestampMs = new Date(value).getTime();
+
+  return Number.isFinite(timestampMs) ? timestampMs : Date.now();
+}
+
+function toTrafficSample(summary: PacketSummary): TrafficSample {
+  return {
+    timestampMs: toTimestampMs(summary.timestamp),
+    analyzerId: summary.analyzer_id,
+    windowSec: summary.window_sec,
+    totalPackets: summary.total_packets,
+    totalBits: summary.total_bits,
+    protocolStats: summary.protocol_stats
+  };
+}
+
+function formatSecondLabel(timestampMs: number): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(new Date(timestampMs));
+}
+
+function buildTrafficSeries(samples: TrafficSample[]): TrafficSeriesPoint[] {
+  const referenceMs = samples.at(-1)?.timestampMs ?? Date.now();
+  const latestCompleteBucketEnd =
+    Math.floor(referenceMs / FIVE_SECONDS_MS) * FIVE_SECONDS_MS;
+  const visibleSamples = samples.filter(
+    (sample) => sample.timestampMs > referenceMs - FIVE_MINUTES_MS
+  );
+  const buckets = new Map<
+    number,
+    {
+      totalPackets: number;
+      totalBits: number;
+      totalWindowSec: number;
+    }
+  >();
+
+  visibleSamples.forEach((sample) => {
+    const bucketStart =
+      Math.floor(sample.timestampMs / FIVE_SECONDS_MS) * FIVE_SECONDS_MS;
+    const bucketEnd = bucketStart + FIVE_SECONDS_MS;
+
+    if (bucketEnd > latestCompleteBucketEnd) {
+      return;
+    }
+
+    const bucket = buckets.get(bucketStart) ?? {
+      totalPackets: 0,
+      totalBits: 0,
+      totalWindowSec: 0
+    };
+
+    bucket.totalPackets += sample.totalPackets;
+    bucket.totalBits += sample.totalBits;
+    bucket.totalWindowSec += sample.windowSec;
+    buckets.set(bucketStart, bucket);
+  });
+
+  return Array.from(buckets.entries())
+    .sort(([leftStart], [rightStart]) => leftStart - rightStart)
+    .map(([bucketStart, bucket]) => {
+      const bucketEnd = bucketStart + FIVE_SECONDS_MS;
+      const divisor = Math.max(bucket.totalWindowSec, 1);
+
+      return {
+        timestampMs: bucketEnd,
+        time: formatSecondLabel(bucketEnd),
+        pps: Math.round(bucket.totalPackets / divisor),
+        bps: Math.round(bucket.totalBits / divisor)
+      };
+    });
+}
+
+function aggregatePacketSummary(
+  latest: PacketSummary,
+  samples: TrafficSample[]
+): PacketSummary {
+  const referenceMs = samples.at(-1)?.timestampMs ?? Date.now();
+  const oneMinuteSamples = samples.filter(
+    (sample) => sample.timestampMs > referenceMs - ONE_MINUTE_MS
+  );
+  const protocolStats = oneMinuteSamples.reduce<Record<string, number>>(
+    (stats, sample) => {
+      Object.entries(sample.protocolStats).forEach(([protocol, value]) => {
+        stats[protocol] = (stats[protocol] ?? 0) + value;
+      });
+
+      return stats;
+    },
+    {}
+  );
+
+  return {
+    ...latest,
+    total_packets: oneMinuteSamples.reduce(
+      (sum, sample) => sum + sample.totalPackets,
+      0
+    ),
+    total_bits: oneMinuteSamples.reduce(
+      (sum, sample) => sum + sample.totalBits,
+      0
+    ),
+    protocol_stats: protocolStats
+  };
+}
+
+function aggregateDetectionSummary(
+  latest: DetectionSummary,
+  samples: TrafficSample[]
+): DetectionSummary {
+  const referenceMs = samples.at(-1)?.timestampMs ?? Date.now();
+  const fiveSecondSamples = samples.filter(
+    (sample) => sample.timestampMs > referenceMs - FIVE_SECONDS_MS
+  );
+  const totalBits = fiveSecondSamples.reduce(
+    (sum, sample) => sum + sample.totalBits,
+    0
+  );
+  const totalPackets = fiveSecondSamples.reduce(
+    (sum, sample) => sum + sample.totalPackets,
+    0
+  );
+
+  return {
+    ...latest,
+    total_bps: Math.round(totalBits / 5),
+    total_pps: Math.round(totalPackets / 5)
   };
 }
 
@@ -164,13 +349,13 @@ function normalizeDetectionSummary(
 
 export function useRealtime(): RealtimeState {
   const [connected, setConnected] = useState(false);
-  const [source, setSource] = useState<"mock" | "websocket">("mock");
-  const [lastLiveMessageAt, setLastLiveMessageAt] = useState<number | null>(null);
-  const [analyzerStatus, setAnalyzerStatus] = useState(mockAnalyzerStatus);
-  const [packetSummary, setPacketSummary] = useState(mockPacketSummary);
-  const [detectionSummary, setDetectionSummary] = useState(mockDetectionSummary);
-  const [securityEvents, setSecurityEvents] = useState(mockSecurityEvents);
-  const [topology, setTopology] = useState(mockTopology);
+  const [source, setSource] = useState<"waiting" | "websocket">("waiting");
+  const [analyzerStatus, setAnalyzerStatus] = useState(initialAnalyzerStatus);
+  const [packetSummary, setPacketSummary] = useState(initialPacketSummary);
+  const [detectionSummary, setDetectionSummary] = useState(initialDetectionSummary);
+  const [trafficSamples, setTrafficSamples] = useState<TrafficSample[]>([]);
+  const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([]);
+  const [topology, setTopology] = useState(initialTopology);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -204,7 +389,6 @@ export function useRealtime(): RealtimeState {
             return;
           }
 
-          setLastLiveMessageAt(Date.now());
           setSource("websocket");
 
           if (message.type === "analyzer_status") {
@@ -219,6 +403,13 @@ export function useRealtime(): RealtimeState {
                 : 0;
 
             setPacketSummary(nextPacketSummary);
+            setTrafficSamples((prev) => {
+              const nextSample = toTrafficSample(nextPacketSummary);
+
+              return [...prev, nextSample].filter(
+                (sample) => sample.timestampMs > nextSample.timestampMs - FIVE_MINUTES_MS
+              );
+            });
             setDetectionSummary((prev) => ({
               ...prev,
               timestamp: nextPacketSummary.timestamp,
@@ -282,95 +473,39 @@ export function useRealtime(): RealtimeState {
     };
   }, []);
 
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      const nowMs = Date.now();
-      const shouldUseMock =
-        !lastLiveMessageAt || nowMs - lastLiveMessageAt > 5000;
-
-      if (!shouldUseMock) {
-        return;
-      }
-
-      const now = new Date(nowMs).toISOString();
-      const tcpPackets = randomBetween(760, 1200);
-      const udpPackets = randomBetween(120, 360);
-      const icmpPackets = randomBetween(20, 140);
-      const unknownPackets = randomBetween(0, 30);
-      const totalPackets =
-        tcpPackets + udpPackets + icmpPackets + unknownPackets;
-      const totalBits = totalPackets * randomBetween(5200, 8200);
-      const totalBps = Math.round(totalBits * randomBetween(7, 12) / 10);
-      const totalPps = totalPackets;
-      const isWarning = icmpPackets > 100 || udpPackets > 320;
-
-      setSource("mock");
-      setAnalyzerStatus((prev) => ({
-        ...prev,
-        timestamp: now,
-        status: "running",
-        capture_active: true,
-        backend_connected: connected,
-        last_packet_at: now,
-        last_summary_sent_at: now,
-        error_message: connected ? null : "waiting for live analyzer data"
-      }));
-      setPacketSummary((prev) => ({
-        ...prev,
-        timestamp: now,
-        total_packets: totalPackets,
-        total_bits: totalBits,
-        protocol_stats: {
-          TCP: tcpPackets,
-          UDP: udpPackets,
-          ICMP: icmpPackets,
-          UNKNOWN: unknownPackets
-        }
-      }));
-      setDetectionSummary((prev) => ({
-        ...prev,
-        timestamp: now,
-        network_status: isWarning ? "warning" : "normal",
-        total_bps: totalBps,
-        total_pps: totalPps,
-        active_flow_count: randomBetween(12, 28),
-        suspicious_host_count: isWarning ? 1 : 0,
-        suspicious_hosts: isWarning
-          ? [
-              {
-                host: "h2",
-                ip: "10.0.0.2",
-                protocol: icmpPackets > 100 ? "ICMP" : "UDP",
-                bps: Math.round(totalBps * 0.22),
-                pps: Math.round(totalPps * 0.18),
-                reasons: ["Mock traffic threshold exceeded"]
-              }
-            ]
-          : []
-      }));
-    }, 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, [lastLiveMessageAt]);
+  const aggregatedPacketSummary = useMemo(
+    () => aggregatePacketSummary(packetSummary, trafficSamples),
+    [packetSummary, trafficSamples]
+  );
+  const aggregatedDetectionSummary = useMemo(
+    () => aggregateDetectionSummary(detectionSummary, trafficSamples),
+    [detectionSummary, trafficSamples]
+  );
+  const trafficSeries = useMemo(
+    () => buildTrafficSeries(trafficSamples),
+    [trafficSamples]
+  );
 
   return useMemo(
     () => ({
       connected,
       source,
       analyzerStatus,
-      packetSummary,
-      detectionSummary,
+      packetSummary: aggregatedPacketSummary,
+      detectionSummary: aggregatedDetectionSummary,
+      trafficSeries,
       securityEvents,
       topology
     }),
     [
+      aggregatedDetectionSummary,
+      aggregatedPacketSummary,
       analyzerStatus,
       connected,
-      detectionSummary,
-      packetSummary,
       securityEvents,
       source,
-      topology
+      topology,
+      trafficSeries
     ]
   );
 }

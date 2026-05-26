@@ -38,7 +38,7 @@ export default function DashboardPage() {
           <MetricCard
             label="전체 패킷"
             value={formatNumber(packetSummary.total_packets)}
-            foot="최근 10초 집계 기준"
+            foot="최근 1분 합산 기준"
             icon={Activity}
             tone="blue"
           />
@@ -47,7 +47,7 @@ export default function DashboardPage() {
           <MetricCard
             label="총 BPS"
             value={formatBitsPerSecond(detectionSummary.total_bps)}
-            foot="최근 10초 집계 기준"
+            foot="최근 5초 비트 수 기준"
             icon={RadioTower}
             tone="teal"
           />
@@ -106,7 +106,7 @@ export default function DashboardPage() {
                   {item.label}
                 </button>
               ))}
-              <StatusBadge value="최근 10분" tone="muted" />
+              <StatusBadge value="최근 5분" tone="muted" />
             </div>
           }
         >
@@ -114,6 +114,7 @@ export default function DashboardPage() {
             packets={packetSummary.total_packets}
             bps={detectionSummary.total_bps}
             metric={trafficMetric}
+            data={state.trafficSeries}
           />
         </Panel>
 
