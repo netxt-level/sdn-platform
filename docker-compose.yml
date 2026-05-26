@@ -14,6 +14,36 @@ services:
       - influxdb
       - elasticsearch
 
+  analyzer:
+    build:
+      context: ./analyzer
+      dockerfile: Dockerfile
+    container_name: sdn-analyzer
+    restart: unless-stopped
+    environment:
+      ANALYZER_ID: ${ANALYZER_ID:-analyzer-1}
+      INTERFACE: ${ANALYZER_INTERFACE:-eth0}
+      BACKEND_BASE_URL: ${ANALYZER_BACKEND_BASE_URL:-http://backend:8000}
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    depends_on:
+      - backend
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sdn-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      BACKEND_INTERNAL_URL: ${FRONTEND_BACKEND_INTERNAL_URL:-http://backend:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/ws/analyzer}
+    depends_on:
+      - backend
+
   postgres:
     image: postgres:16
     container_name: sdn-postgres
