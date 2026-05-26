@@ -1,7 +1,9 @@
 import os
+import time
 
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
+from elasticsearch import ConnectionError as ElasticsearchConnectionError
 
 load_dotenv()
 
@@ -188,3 +190,30 @@ def index_detection_event(payload: dict) -> None:
         index="sdn-detection-events",
         document=document,
     )
+
+
+def search_detection_events(limit: int = 50) -> list[dict]:
+    es = get_elasticsearch_client()
+    try:
+        response = es.search(
+            index="sdn-detection-events",
+            size=limit,
+            sort=[
+                {"@timestamp": {"order": "desc"}},
+            ],
+            query={
+                "match_all": {},
+            },
+        )
+
+        items = []
+        for hit in response["hits"]["hits"]:
+            source = hit["_source"]
+            items.append({
+                "id": hit["_id"],
+                **source,
+            })
+
+        return items
+    finally:
+        es.close()

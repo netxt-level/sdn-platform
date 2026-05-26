@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -7,6 +8,14 @@ from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 load_dotenv()
+
+_DURATION_SECONDS = {
+    "s": 1,
+    "m": 60,
+    "h": 60 * 60,
+    "d": 60 * 60 * 24,
+    "w": 60 * 60 * 24 * 7,
+}
 
 # env 파일 환경변수 확인
 def get_env(name: str, default: str | None = None) -> str:
@@ -32,6 +41,93 @@ def get_influx_client() -> InfluxDBClient:
         token=get_env("INFLUXDB_TOKEN"),
         org=get_env("INFLUXDB_ORG"),
     )
+
+
+def validate_duration(value: str) -> str:
+    if not re.fullmatch(r"[1-9][0-9]*[smhdw]", value):
+        raise ValueError("Duration must look like 5s, 1m, 2h, 1d, or 1w")
+
+    return value
+
+
+def duration_to_seconds(value: str) -> int:
+    validate_duration(value)
+    return int(value[:-1]) * _DURATION_SECONDS[value[-1]]
+
+
+def query_traffic_series(range_value: str, bucket_value: str) -> list[dict[str, Any]]:
+    range_value = validate_duration(range_value)
+    bucket_value = validate_duration(bucket_value)
+    bucket_seconds = duration_to_seconds(bucket_value)
+
+    query = f'''
+from(bucket: "{get_env("INFLUXDB_BUCKET")}")
+  |> range(start: -{range_value})
+  |> filter(fn: (r) => r["_measurement"] == "traffic_summary")
+  |> filter(fn: (r) => r["_field"] == "total_packets" or r["_field"] == "total_bits")
+  |> aggregateWindow(every: {bucket_value}, fn: sum, createEmpty: false)
+  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> sort(columns: ["_time"])
+'''
+
+    client = get_influx_client()
+    try:
+        tables = client.query_api().query(query, org=get_env("INFLUXDB_ORG"))
+
+        items = []
+        for table in tables:
+            for record in table.records:
+                values = record.values
+                total_packets = int(values.get("total_packets") or 0)
+                total_bits = int(values.get("total_bits") or 0)
+                items.append({
+                    "timestamp": values["_time"],
+                    "total_packets": total_packets,
+                    "total_bits": total_bits,
+                    "pps": total_packets / bucket_seconds,
+                    "bps": total_bits / bucket_seconds,
+                })
+
+        return items
+    finally:
+        client.close()
+
+
+def query_protocol_stats(range_value: str) -> list[dict[str, Any]]:
+    range_value = validate_duration(range_value)
+
+    query = f'''
+from(bucket: "{get_env("INFLUXDB_BUCKET")}")
+  |> range(start: -{range_value})
+  |> filter(fn: (r) => r["_measurement"] == "protocol_stats")
+  |> filter(fn: (r) => r["_field"] == "packet_count")
+  |> group(columns: ["protocol"])
+  |> sum(column: "_value")
+  |> keep(columns: ["protocol", "_value"])
+'''
+
+    client = get_influx_client()
+    try:
+        tables = client.query_api().query(query, org=get_env("INFLUXDB_ORG"))
+
+        protocol_counts = []
+        total_packets = 0
+        for table in tables:
+            for record in table.records:
+                packet_count = int(record.get_value() or 0)
+                total_packets += packet_count
+                protocol_counts.append({
+                    "protocol": record.values.get("protocol", "UNKNOWN"),
+                    "packet_count": packet_count,
+                })
+
+        protocol_counts.sort(key=lambda item: item["packet_count"], reverse=True)
+        for item in protocol_counts:
+            item["percentage"] = round((item["packet_count"] / total_packets) * 100, 1) if total_packets else 0.0
+
+        return protocol_counts
+    finally:
+        client.close()
 
 # packet_summary 수신 패킷 데이터 저장
 def write_packet_summary(summary: dict[str, Any]) -> None:

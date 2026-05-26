@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.api.analyzer import router as analyzer_router
 from app.api.dashboard import router as dashboard_router
 from app.api.flows import router as flows_router
+from app.api.security import router as security_router
 from app.api.ws import router as ws_router
 
 app = FastAPI(
@@ -15,15 +16,16 @@ app.include_router(
     prefix="/api/dashboard",
     tags=["dashboard"],
 )
-
-app.include_router(analyzer_router)
 app.include_router(
     flows_router,
     prefix="/api/flows",
     tags=["flows"],
 )
-
-app.include_router(analyzer_router)
+app.include_router(
+    security_router,
+    prefix="/api/security",
+    tags=["security"],
+)
 app.include_router(
     ws_router,
     prefix="/ws",

@@ -5,6 +5,7 @@ from app.db.elasticsearch import index_detection_event
 from app.db.elasticsearch import index_traffic_summary
 from app.db.influxdb import write_detection_summary
 from app.db.influxdb import write_packet_summary
+from app.db.postgres import get_analyzer_statuses
 from app.db.postgres import upsert_analyzer_status
 from app.schemas.analyzer import (
     AnalyzerStatusRequest,
@@ -13,6 +14,13 @@ from app.schemas.analyzer import (
 )
 
 router = APIRouter(prefix="/api/analyzer", tags=["analyzer"])
+
+
+@router.get("/status")
+def get_analyzer_status(analyzer_id: str | None = None):
+    return {
+        "items": get_analyzer_statuses(analyzer_id),
+    }
 
 
 @router.post("/status")

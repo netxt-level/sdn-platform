@@ -1,4 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
+
+from app.db.influxdb import query_protocol_stats
+from app.db.influxdb import query_traffic_series
 
 router = APIRouter()
 
@@ -12,19 +15,29 @@ def get_dashboard_summary():
         "network_status": "normal",
     }
 
+@router.get("/traffic")
+def get_traffic(
+    range: str = Query("5m", pattern=r"^[1-9][0-9]*[smhdw]$"),
+    bucket: str = Query("5s", pattern=r"^[1-9][0-9]*[smhdw]$"),
+):
+    try:
+        return {
+            "range": range,
+            "bucket": bucket,
+            "items": query_traffic_series(range, bucket),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/protocols")
-def get_protocols():
-    return {
-        "items": [
-            {
-                "protocol": "TCP",
-                "packet_count": 8700,
-                "percentage": 96.7,
-            },
-            {
-                "protocol": "UDP",
-                "packet_count": 200,
-                "percentage": 2.2,
-            },
-        ],
-    }
+def get_protocols(
+    range: str = Query("1m", pattern=r"^[1-9][0-9]*[smhdw]$"),
+):
+    try:
+        return {
+            "range": range,
+            "items": query_protocol_stats(range),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -89,3 +89,33 @@ def upsert_analyzer_status(payload: dict) -> None:
     # with 블록이 정상 종료되면 commit, 예외가 발생하면 rollback
     with engine.begin() as conn:
         conn.execute(query, params)
+
+
+def get_analyzer_statuses(analyzer_id: str | None = None) -> list[dict]:
+    query = """
+        SELECT
+            id AS analyzer_id,
+            status,
+            interface,
+            capture_active,
+            backend_connected,
+            last_packet_at,
+            last_summary_sent_at,
+            error_message,
+            reported_at,
+            created_at,
+            updated_at
+        FROM sdn_controller.analyzer
+    """
+
+    params = {}
+    if analyzer_id:
+        query += " WHERE id = :analyzer_id"
+        params["analyzer_id"] = analyzer_id
+
+    query += " ORDER BY reported_at DESC"
+
+    with engine.begin() as conn:
+        rows = conn.execute(text(query), params).mappings().all()
+
+    return [dict(row) for row in rows]
