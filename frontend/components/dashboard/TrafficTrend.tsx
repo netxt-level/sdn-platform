@@ -84,6 +84,7 @@ export function TrafficTrend({
   const stroke = isBps ? "var(--green)" : "var(--accent)";
   const fillId = isBps ? "bpsFill" : "packetsFill";
   const chartData = trafficData ?? [];
+  const chartKey = `${dataKey}-${chartData.length}-${chartData.at(-1)?.timestampMs ?? 0}`;
   const yAxisTicks = useMemo(() => {
     const maxValue = Math.max(
       ...chartData.map((point) => Number(point[dataKey]) || 0)
@@ -124,7 +125,11 @@ export function TrafficTrend({
   return (
     <div className="h-56">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+        <AreaChart
+          key={chartKey}
+          data={chartData}
+          margin={{ top: 12, right: 12, left: 0, bottom: 0 }}
+        >
           <defs>
             <linearGradient id="packetsFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#3767a8" stopOpacity={0.34} />

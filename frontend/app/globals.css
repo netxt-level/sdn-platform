@@ -21,36 +21,16 @@
   --yellow-dim: rgba(185, 119, 0, 0.1);
   --purple: #7c3fc7;
   --purple-dim: rgba(124, 63, 199, 0.08);
-  --text: #132033;
-  --text2: #52677f;
-  --text3: #8ba0b8;
+  --text: #050505;
+  --text2: #111111;
+  --text3: #222222;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --sans: "Noto Sans KR", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: dark;
-    --bg: #080c14;
-    --bg2: #0d1220;
-    --panel: #131c2e;
-    --panel2: #182035;
-    --border: #1e2d47;
-    --border2: #243455;
-    --accent: #00d4ff;
-    --accent2: #0099cc;
-    --accent-dim: rgba(0, 212, 255, 0.08);
-    --green: #00ff88;
-    --green-dim: rgba(0, 255, 136, 0.08);
-    --red: #ff3d5a;
-    --red-dim: rgba(255, 61, 90, 0.08);
-    --yellow: #ffb800;
-    --yellow-dim: rgba(255, 184, 0, 0.08);
-    --purple: #a855f7;
-    --purple-dim: rgba(168, 85, 247, 0.08);
-    --text: #e2eaf8;
-    --text2: #7a95c0;
-    --text3: #3d5275;
+    color-scheme: light;
   }
 }
 
@@ -67,6 +47,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.55;
 }
 
 button,
@@ -108,4 +90,24 @@ svg {
   border-radius: 2px;
   background: var(--accent);
   content: "";
+}
+
+.text-\[9px\] {
+  font-size: 12px;
+}
+
+.text-\[10px\] {
+  font-size: 13px;
+}
+
+.text-\[11px\] {
+  font-size: 14px;
+}
+
+.text-\[12px\] {
+  font-size: 13px;
+}
+
+.text-\[13px\] {
+  font-size: 14px;
 }

@@ -15,7 +15,7 @@ import type { SecurityEvent } from "@/types/security";
 import type { TopologyState } from "@/types/topology";
 export type RealtimeState = {
   connected: boolean;
-  source: "waiting" | "websocket";
+  source: "waiting" | "history" | "websocket";
   analyzerStatus: AnalyzerStatus;
   packetSummary: PacketSummary;
   detectionSummary: DetectionSummary;
@@ -38,6 +38,28 @@ type TrafficSample = {
   totalPackets: number;
   totalBits: number;
   protocolStats: Record<string, number>;
+  bucketed?: boolean;
+};
+
+type DashboardTrafficItem = {
+  timestamp: string;
+  total_packets?: number;
+  total_bits?: number;
+  pps?: number;
+  bps?: number;
+};
+
+type DashboardTrafficResponse = {
+  items?: DashboardTrafficItem[];
+};
+
+type DashboardProtocolItem = {
+  protocol: string;
+  packet_count: number;
+};
+
+type DashboardProtocolsResponse = {
+  items?: DashboardProtocolItem[];
 };
 
 const FIVE_SECONDS_MS = 5 * 1000;
@@ -131,8 +153,48 @@ function toTrafficSample(summary: PacketSummary): TrafficSample {
     windowSec: summary.window_sec,
     totalPackets: summary.total_packets,
     totalBits: summary.total_bits,
-    protocolStats: summary.protocol_stats
+    protocolStats: summary.protocol_stats,
+    bucketed: false
   };
+}
+
+function toHistoryTrafficSample(item: DashboardTrafficItem): TrafficSample {
+  const totalBits = item.total_bits ?? Math.round((item.bps ?? 0) * 5);
+  const totalPackets =
+    item.total_packets ?? Math.round((item.pps ?? 0) * 5);
+
+  return {
+    timestampMs: toTimestampMs(item.timestamp),
+    analyzerId: "-",
+    windowSec: 5,
+    totalPackets,
+    totalBits,
+    protocolStats: {},
+    bucketed: true
+  };
+}
+
+function toProtocolStats(items: DashboardProtocolItem[]): Record<string, number> {
+  return items.reduce<Record<string, number>>((stats, item) => {
+    stats[item.protocol || "UNKNOWN"] =
+      (stats[item.protocol || "UNKNOWN"] ?? 0) + (item.packet_count ?? 0);
+
+    return stats;
+  }, {});
+}
+
+function removeTrailingPartialBucket(samples: TrafficSample[]): TrafficSample[] {
+  if (samples.length === 0) {
+    return samples;
+  }
+
+  const lastSample = samples[samples.length - 1];
+
+  if (lastSample.timestampMs % FIVE_SECONDS_MS === 0) {
+    return samples;
+  }
+
+  return samples.slice(0, -1);
 }
 
 function formatSecondLabel(timestampMs: number): string {
@@ -151,6 +213,7 @@ function buildTrafficSeries(samples: TrafficSample[]): TrafficSeriesPoint[] {
   const visibleSamples = samples.filter(
     (sample) => sample.timestampMs > referenceMs - FIVE_MINUTES_MS
   );
+  const points = new Map<number, TrafficSeriesPoint>();
   const buckets = new Map<
     number,
     {
@@ -161,6 +224,18 @@ function buildTrafficSeries(samples: TrafficSample[]): TrafficSeriesPoint[] {
   >();
 
   visibleSamples.forEach((sample) => {
+    if (sample.bucketed) {
+      const divisor = Math.max(sample.windowSec, 1);
+
+      points.set(sample.timestampMs, {
+        timestampMs: sample.timestampMs,
+        time: formatSecondLabel(sample.timestampMs),
+        pps: Math.round(sample.totalPackets / divisor),
+        bps: Math.round(sample.totalBits / divisor)
+      });
+      return;
+    }
+
     const bucketStart =
       Math.floor(sample.timestampMs / FIVE_SECONDS_MS) * FIVE_SECONDS_MS;
     const bucketEnd = bucketStart + FIVE_SECONDS_MS;
@@ -181,19 +256,20 @@ function buildTrafficSeries(samples: TrafficSample[]): TrafficSeriesPoint[] {
     buckets.set(bucketStart, bucket);
   });
 
-  return Array.from(buckets.entries())
-    .sort(([leftStart], [rightStart]) => leftStart - rightStart)
-    .map(([bucketStart, bucket]) => {
-      const bucketEnd = bucketStart + FIVE_SECONDS_MS;
-      const divisor = Math.max(bucket.totalWindowSec, 1);
+  buckets.forEach((bucket, bucketStart) => {
+    const bucketEnd = bucketStart + FIVE_SECONDS_MS;
+    const divisor = Math.max(bucket.totalWindowSec, 1);
 
-      return {
-        timestampMs: bucketEnd,
-        time: formatSecondLabel(bucketEnd),
-        pps: Math.round(bucket.totalPackets / divisor),
-        bps: Math.round(bucket.totalBits / divisor)
-      };
+    points.set(bucketEnd, {
+      timestampMs: bucketEnd,
+      time: formatSecondLabel(bucketEnd),
+      pps: Math.round(bucket.totalPackets / divisor),
+      bps: Math.round(bucket.totalBits / divisor)
     });
+  });
+
+  return Array.from(points.values())
+    .sort((left, right) => left.timestampMs - right.timestampMs);
 }
 
 function aggregatePacketSummary(
@@ -214,6 +290,7 @@ function aggregatePacketSummary(
     },
     {}
   );
+  const hasProtocolStats = Object.keys(protocolStats).length > 0;
 
   return {
     ...latest,
@@ -225,7 +302,7 @@ function aggregatePacketSummary(
       (sum, sample) => sum + sample.totalBits,
       0
     ),
-    protocol_stats: protocolStats
+    protocol_stats: hasProtocolStats ? protocolStats : latest.protocol_stats
   };
 }
 
@@ -349,13 +426,89 @@ function normalizeDetectionSummary(
 
 export function useRealtime(): RealtimeState {
   const [connected, setConnected] = useState(false);
-  const [source, setSource] = useState<"waiting" | "websocket">("waiting");
+  const [source, setSource] = useState<"waiting" | "history" | "websocket">("waiting");
   const [analyzerStatus, setAnalyzerStatus] = useState(initialAnalyzerStatus);
   const [packetSummary, setPacketSummary] = useState(initialPacketSummary);
   const [detectionSummary, setDetectionSummary] = useState(initialDetectionSummary);
   const [trafficSamples, setTrafficSamples] = useState<TrafficSample[]>([]);
   const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([]);
   const [topology, setTopology] = useState(initialTopology);
+
+  useEffect(() => {
+    let ignored = false;
+
+    const loadDashboardHistory = async () => {
+      try {
+        const [trafficResponse, protocolsResponse] = await Promise.all([
+          fetch("/api/dashboard/traffic?range=5m&bucket=5s"),
+          fetch("/api/dashboard/protocols?range=1m")
+        ]);
+
+        if (!trafficResponse.ok || !protocolsResponse.ok) {
+          return;
+        }
+
+        const traffic =
+          (await trafficResponse.json()) as DashboardTrafficResponse;
+        const protocols =
+          (await protocolsResponse.json()) as DashboardProtocolsResponse;
+
+        if (ignored) {
+          return;
+        }
+
+        const protocolStats = toProtocolStats(protocols.items ?? []);
+        const historySamples = (traffic.items ?? [])
+          .map(toHistoryTrafficSample)
+          .sort((left, right) => left.timestampMs - right.timestampMs);
+        const completedHistorySamples =
+          removeTrailingPartialBucket(historySamples);
+
+        if (completedHistorySamples.length > 0) {
+          const lastSample =
+            completedHistorySamples[completedHistorySamples.length - 1];
+          completedHistorySamples[completedHistorySamples.length - 1] = {
+            ...lastSample,
+            protocolStats
+          };
+
+          setTrafficSamples(completedHistorySamples);
+          setPacketSummary({
+            timestamp: new Date(lastSample.timestampMs).toISOString(),
+            analyzer_id: lastSample.analyzerId,
+            window_sec: lastSample.windowSec,
+            total_packets: lastSample.totalPackets,
+            total_bits: lastSample.totalBits,
+            protocol_stats: protocolStats,
+            host_stats: []
+          });
+          setDetectionSummary((prev) => ({
+            ...prev,
+            timestamp: new Date(lastSample.timestampMs).toISOString(),
+            total_bps: Math.round(lastSample.totalBits / Math.max(lastSample.windowSec, 1)),
+            total_pps: Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1))
+          }));
+        } else if (Object.keys(protocolStats).length > 0) {
+          setPacketSummary((prev) => ({
+            ...prev,
+            protocol_stats: protocolStats
+          }));
+        }
+
+        if (completedHistorySamples.length > 0 || Object.keys(protocolStats).length > 0) {
+          setSource("history");
+        }
+      } catch {
+        // If history is unavailable, the dashboard still waits for live WebSocket data.
+      }
+    };
+
+    void loadDashboardHistory();
+
+    return () => {
+      ignored = true;
+    };
+  }, []);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -405,8 +558,11 @@ export function useRealtime(): RealtimeState {
             setPacketSummary(nextPacketSummary);
             setTrafficSamples((prev) => {
               const nextSample = toTrafficSample(nextPacketSummary);
+              const samplesWithoutSameTimestamp = prev.filter(
+                (sample) => sample.timestampMs !== nextSample.timestampMs
+              );
 
-              return [...prev, nextSample].filter(
+              return [...samplesWithoutSameTimestamp, nextSample].filter(
                 (sample) => sample.timestampMs > nextSample.timestampMs - FIVE_MINUTES_MS
               );
             });

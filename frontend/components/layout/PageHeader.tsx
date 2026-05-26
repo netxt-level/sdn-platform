@@ -6,7 +6,7 @@ type PageHeaderProps = {
   title: string;
   description: string;
   connected?: boolean;
-  source?: "waiting" | "websocket";
+  source?: "waiting" | "history" | "websocket";
 };
 
 export function PageHeader({
@@ -19,7 +19,11 @@ export function PageHeader({
     <header className="mb-5 flex items-center justify-between gap-4 max-sm:items-start max-sm:flex-col">
       <div>
         <p className="font-mono-ui mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-faint">
-          {source === "websocket" ? "WebSocket Live" : "Waiting for Data"}
+          {source === "websocket"
+            ? "WebSocket Live"
+            : source === "history"
+              ? "DB History"
+              : "Waiting for Data"}
         </p>
         <h1 className="text-2xl font-bold tracking-normal text-ink max-sm:text-xl">
           {title}
