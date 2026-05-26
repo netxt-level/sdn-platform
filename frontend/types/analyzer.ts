@@ -22,6 +22,11 @@ export type HostStat = {
   bit_count: number;
 };
 
+export type IncomingHostStat = Omit<HostStat, "bit_count"> & {
+  bit_count?: number;
+  byte_count?: number;
+};
+
 export type PacketSummary = {
   timestamp: string;
   analyzer_id: string;
@@ -30,6 +35,17 @@ export type PacketSummary = {
   total_bits: number;
   protocol_stats: Record<string, number>;
   host_stats: HostStat[];
+};
+
+export type IncomingPacketSummary = {
+  timestamp: string;
+  analyzer_id: string;
+  window_sec: number;
+  total_packets?: number;
+  total_bits?: number;
+  total_bytes?: number;
+  protocol_stats?: Record<string, number>;
+  host_stats?: IncomingHostStat[];
 };
 
 export type SuspiciousHost = {
@@ -41,6 +57,16 @@ export type SuspiciousHost = {
   reasons: string[];
 };
 
+export type TopTalker = {
+  host?: string | null;
+  ip: string;
+  bps: number;
+  pps: number;
+  status?: string;
+  protocol?: string;
+  reasons?: string[];
+};
+
 export type DetectionSummary = {
   timestamp: string;
   analyzer_id: string;
@@ -50,4 +76,17 @@ export type DetectionSummary = {
   active_flow_count: number;
   suspicious_host_count: number;
   suspicious_hosts: SuspiciousHost[];
+};
+
+export type IncomingDetectionSummary = {
+  timestamp: string;
+  analyzer_id: string;
+  window_sec?: number;
+  network_status?: string;
+  total_bps?: number;
+  total_pps?: number;
+  active_flow_count?: number;
+  suspicious_host_count?: number;
+  suspicious_hosts?: SuspiciousHost[];
+  top_talkers?: TopTalker[];
 };
