@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 
 from app.api.analyzer import router as analyzer_router
-from app.api.analyzers import router as analyzers_router
 from app.api.dashboard import router as dashboard_router
 from app.api.flows import router as flows_router
 from app.api.ws import router as ws_router
@@ -10,12 +9,6 @@ app = FastAPI(
     title="SDN Platform API",
 )
 
-app.include_router(analyzer_router)
-app.include_router(
-    analyzers_router,
-    prefix="/api/analyzers",
-    tags=["analyzers"],
-)
 app.include_router(
     dashboard_router,
     prefix="/api/dashboard",
