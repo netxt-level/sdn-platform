@@ -13,19 +13,16 @@ import {
 
 import { formatBitsPerSecond, formatNumber } from "@/lib/format";
 
-const baseSeries = [
-  { minutesAgo: 10, packetRatio: 0.62, bpsRatio: 0.52 },
-  { minutesAgo: 8, packetRatio: 0.73, bpsRatio: 0.61 },
-  { minutesAgo: 6, packetRatio: 0.81, bpsRatio: 0.74 },
-  { minutesAgo: 4, packetRatio: 0.92, bpsRatio: 0.83 },
-  { minutesAgo: 2, packetRatio: 0.86, bpsRatio: 0.78 },
-  { minutesAgo: 0, packetRatio: 1, bpsRatio: 1 }
-];
-
 type TrafficTrendProps = {
   packets: number;
   bps: number;
   metric?: "packets" | "bps";
+};
+
+type TrafficPoint = {
+  time: string;
+  packets: number;
+  bps: number;
 };
 
 function formatAxisValue(value: number): string {
@@ -40,23 +37,35 @@ function formatAxisValue(value: number): string {
   return String(value);
 }
 
-function formatTimeLabel(minutesAgo: number): string {
-  const date = new Date(Date.now() - minutesAgo * 60 * 1000);
-
+function formatTimeLabel(date: Date): string {
   return new Intl.DateTimeFormat("ko-KR", {
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12: false
   }).format(date);
 }
 
+function createInitialSeries(packets: number, bps: number): TrafficPoint[] {
+  const now = Date.now();
+
+  return Array.from({ length: 12 }, (_, index) => {
+    const age = 11 - index;
+    const ratio = 0.72 + index * 0.025;
+
+    return {
+      time: formatTimeLabel(new Date(now - age * 1000)),
+      packets: Math.round(packets * ratio),
+      bps: Math.round(bps * ratio)
+    };
+  });
+}
+
 export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendProps) {
   const [mounted, setMounted] = useState(false);
-  const data = baseSeries.map((point) => ({
-    time: formatTimeLabel(point.minutesAgo),
-    packets: Math.round(packets * point.packetRatio),
-    bps: Math.round(bps * point.bpsRatio)
-  }));
+  const [data, setData] = useState<TrafficPoint[]>(() =>
+    createInitialSeries(packets, bps)
+  );
   const isBps = metric === "bps";
   const dataKey = isBps ? "bps" : "packets";
   const stroke = isBps ? "var(--green)" : "var(--accent)";
@@ -65,6 +74,17 @@ export function TrafficTrend({ packets, bps, metric = "packets" }: TrafficTrendP
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    setData((prev) => [
+      ...prev.slice(-11),
+      {
+        time: formatTimeLabel(new Date()),
+        packets,
+        bps
+      }
+    ]);
+  }, [bps, packets]);
 
   if (!mounted) {
     return <div className="h-56 rounded bg-panel2" />;
