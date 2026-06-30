@@ -38,6 +38,7 @@ class SuspiciousHost(BaseModel):                        # 의심 호스트 모�
     bps: float                                          # 초당 비트 수
     pps: float                                          # 초당 패킷 수
     reasons: list[str]                                  # 의심 판단 이유
+    attack_type: Optional[str] = None                   # 공격/이상 트래픽 유형
 
 class DetectionSummaryRequest(BaseModel):               # 탐지 요약 요청 모델
     timestamp: datetime                                 # 탐지 요약 생성 시각

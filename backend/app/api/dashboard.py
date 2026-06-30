@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db.influxdb import query_protocol_stats
+from app.db.influxdb import query_suspicious_hosts
 from app.db.influxdb import query_traffic_series
 
 router = APIRouter()
@@ -38,6 +39,22 @@ def get_protocols(
         return {
             "range": range,
             "items": query_protocol_stats(range),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/suspicious-hosts")
+def get_suspicious_hosts(
+    range: str = Query("1w", pattern=r"^[1-9][0-9]*[smhdw]$"),
+):
+    try:
+        items = query_suspicious_hosts(range)
+
+        return {
+            "range": range,
+            "count": len(items),
+            "items": items,
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
