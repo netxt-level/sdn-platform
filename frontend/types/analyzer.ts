@@ -55,6 +55,7 @@ export type SuspiciousHost = {
   bps: number;
   pps: number;
   reasons: string[];
+  attack_type?: string | null;
 };
 
 export type TopTalker = {

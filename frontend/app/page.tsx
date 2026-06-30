@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -17,12 +17,70 @@ import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatBitsPerSecond, formatNumber } from "@/lib/format";
 import { useRealtime } from "@/hooks/useRealtime";
+import type { SuspiciousHost } from "@/types/analyzer";
+
+const ALL_ATTACK_TYPES = "ALL";
+
+const attackTypeLabels: Record<string, string> = {
+  DOS: "DoS 의심",
+  PORT_SCAN: "포트 스캔 의심"
+};
+
+function getSuspiciousHostType(host: SuspiciousHost): string {
+  return host.attack_type?.trim().toUpperCase() || "DOS";
+}
+
+function formatAttackTypeLabel(attackType: string): string {
+  return (
+    attackTypeLabels[attackType] ??
+    `${attackType.replaceAll("_", " ")} 의심`
+  );
+}
+
+function getSuspiciousHostTag(host: SuspiciousHost): string {
+  return formatAttackTypeLabel(getSuspiciousHostType(host));
+}
+
+function getSuspiciousHostTagClass(host: SuspiciousHost): string {
+  const attackType = getSuspiciousHostType(host);
+
+  if (attackType === "PORT_SCAN") {
+    return "border-[var(--yellow)] bg-[var(--yellow-dim)] text-yellow";
+  }
+
+  if (attackType === "DOS") {
+    return "border-[var(--red)] bg-[var(--red-dim)] text-red";
+  }
+
+  return "border-accent bg-[var(--accent-dim)] text-accent";
+}
 
 export default function DashboardPage() {
   const state = useRealtime();
   const { analyzerStatus, packetSummary, detectionSummary } = state;
-  const recentDetectionCount = state.securityEvents.length;
   const [trafficMetric, setTrafficMetric] = useState<"packets" | "bps">("packets");
+  const [suspiciousHostTypeFilter, setSuspiciousHostTypeFilter] =
+    useState(ALL_ATTACK_TYPES);
+  const suspiciousHostTypes = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          detectionSummary.suspicious_hosts.map((host) =>
+            getSuspiciousHostType(host)
+          )
+        )
+      ).sort(),
+    [detectionSummary.suspicious_hosts]
+  );
+  const filteredSuspiciousHosts = useMemo(
+    () =>
+      suspiciousHostTypeFilter === ALL_ATTACK_TYPES
+        ? detectionSummary.suspicious_hosts
+        : detectionSummary.suspicious_hosts.filter(
+            (host) => getSuspiciousHostType(host) === suspiciousHostTypeFilter
+          ),
+    [detectionSummary.suspicious_hosts, suspiciousHostTypeFilter]
+  );
 
   return (
     <>
@@ -63,9 +121,9 @@ export default function DashboardPage() {
         </div>
         <div className="col-span-3 max-xl:col-span-6 max-sm:col-span-12">
           <MetricCard
-            label="탐지 이벤트"
-            value={formatNumber(recentDetectionCount)}
-            foot="최근 10분 보안 이벤트 탐지 횟수"
+            label="의심 호스트"
+            value={formatNumber(detectionSummary.suspicious_host_count)}
+            foot="최근 1주 DB 저장 기준"
             icon={Ban}
             tone="red"
           />
@@ -144,15 +202,62 @@ export default function DashboardPage() {
           </div>
         </Panel>
 
-        <Panel title="최근 보안 이벤트" className="col-span-6 max-xl:col-span-12">
-          <div className="grid gap-3">
-            {state.securityEvents.slice(0, 3).map((event) => (
-              <div key={event.id} className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3 text-[11px]">
-                <div>
-                  <strong className="block text-ink">{event.attack_type}</strong>
-                  <span className="text-muted">{event.src_ip} → {event.dst_ip}</span>
+        <Panel
+          title="의심 호스트 목록"
+          className="col-span-6 max-xl:col-span-12"
+          action={
+            <select
+              value={suspiciousHostTypeFilter}
+              onChange={(event) => setSuspiciousHostTypeFilter(event.target.value)}
+              className="font-mono-ui h-8 rounded border border-line2 bg-panel2 px-2 text-[11px] font-bold text-ink outline-none"
+            >
+              <option value={ALL_ATTACK_TYPES}>
+                전체 ({formatNumber(detectionSummary.suspicious_hosts.length)})
+              </option>
+              {suspiciousHostTypes.map((attackType) => (
+                <option key={attackType} value={attackType}>
+                  {formatAttackTypeLabel(attackType)} (
+                  {formatNumber(
+                    detectionSummary.suspicious_hosts.filter(
+                      (host) => getSuspiciousHostType(host) === attackType
+                    ).length
+                  )}
+                  )
+                </option>
+              ))}
+            </select>
+          }
+          bodyClassName="max-h-80 overflow-y-auto"
+        >
+          <div className="grid gap-3 pr-1">
+            {detectionSummary.suspicious_hosts.length === 0 ? (
+              <div className="font-mono-ui rounded border border-line bg-sidebar px-3 py-3 text-[11px] text-muted">
+                최근 1주 동안 DB에 저장된 의심 호스트가 없습니다.
+              </div>
+            ) : null}
+
+            {detectionSummary.suspicious_hosts.length > 0 &&
+            filteredSuspiciousHosts.length === 0 ? (
+              <div className="font-mono-ui rounded border border-line bg-sidebar px-3 py-3 text-[11px] text-muted">
+                선택한 유형의 의심 호스트가 없습니다.
+              </div>
+            ) : null}
+
+            {filteredSuspiciousHosts.map((host) => (
+              <div key={`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`} className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3 text-[11px]">
+                <div className="min-w-0">
+                  <span className={`mb-2 inline-flex min-h-5 items-center rounded border px-2 text-[9px] font-bold uppercase ${getSuspiciousHostTagClass(host)}`}>
+                    {getSuspiciousHostTag(host)}
+                  </span>
+                  <strong className="block text-ink">{host.host || host.ip}</strong>
+                  <span className="block truncate text-muted">
+                    {host.protocol} · {host.reasons.join(", ")}
+                  </span>
                 </div>
-                <StatusBadge value={event.status} tone={event.status === "blocked" ? "critical" : "warning"} />
+                <div className="shrink-0 text-right">
+                  <span className="block text-ink">{formatBitsPerSecond(host.bps)}</span>
+                  <span className="text-muted">{formatNumber(host.pps)} pps</span>
+                </div>
               </div>
             ))}
           </div>

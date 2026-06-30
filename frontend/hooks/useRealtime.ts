@@ -8,7 +8,8 @@ import type {
   IncomingDetectionSummary,
   IncomingPacketSummary,
   NetworkStatus,
-  PacketSummary
+  PacketSummary,
+  SuspiciousHost
 } from "@/types/analyzer";
 import type { RealtimeMessage } from "@/types/realtime";
 import type { SecurityEvent } from "@/types/security";
@@ -62,12 +63,52 @@ type DashboardProtocolsResponse = {
   items?: DashboardProtocolItem[];
 };
 
+type DashboardSuspiciousHostsResponse = {
+  count?: number;
+  items?: SuspiciousHost[];
+};
+
 const FIVE_SECONDS_MS = 5 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
+const SUSPICIOUS_HOST_REFRESH_MS = 5 * 1000;
 
-const websocketUrl =
-  process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/analyzer";
+const configuredWebsocketUrl = process.env.NEXT_PUBLIC_WS_URL;
+
+function isLoopbackHost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function getWebsocketUrl() {
+  const fallbackProtocol =
+    typeof window !== "undefined" && window.location.protocol === "https:"
+      ? "wss:"
+      : "ws:";
+  const fallbackHost =
+    typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const fallbackUrl = `${fallbackProtocol}//${fallbackHost}:8000/ws/analyzer`;
+
+  if (!configuredWebsocketUrl) {
+    return fallbackUrl;
+  }
+
+  if (typeof window === "undefined") {
+    return configuredWebsocketUrl;
+  }
+
+  try {
+    const url = new URL(configuredWebsocketUrl);
+    const pageHost = window.location.hostname;
+
+    if (isLoopbackHost(url.hostname) && !isLoopbackHost(pageHost)) {
+      url.hostname = pageHost;
+    }
+
+    return url.toString();
+  } catch {
+    return configuredWebsocketUrl;
+  }
+}
 
 const initialTimestamp = new Date(0).toISOString();
 
@@ -181,6 +222,62 @@ function toProtocolStats(items: DashboardProtocolItem[]): Record<string, number>
 
     return stats;
   }, {});
+}
+
+function normalizeAttackType(attackType?: string | null): string {
+  const normalizedAttackType = attackType?.trim().toUpperCase();
+
+  return normalizedAttackType || "DOS";
+}
+
+function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
+  return items.map((host) => ({
+    host: host.host ?? null,
+    ip: host.ip,
+    protocol: host.protocol ?? "UNKNOWN",
+    bps: host.bps ?? 0,
+    pps: host.pps ?? 0,
+    attack_type: normalizeAttackType(host.attack_type),
+    reasons:
+      Array.isArray(host.reasons) && host.reasons.length > 0
+        ? host.reasons
+        : ["stored suspicious host"]
+  }));
+}
+
+function mergeSuspiciousHosts(
+  historyHosts: SuspiciousHost[],
+  liveHosts: SuspiciousHost[]
+): SuspiciousHost[] {
+  const hosts = new Map<string, SuspiciousHost>();
+
+  historyHosts.forEach((host) => {
+    hosts.set(`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`, host);
+  });
+
+  liveHosts.forEach((host) => {
+    hosts.set(`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`, host);
+  });
+
+  return Array.from(hosts.values()).sort(
+    (left, right) =>
+      right.bps - left.bps ||
+      right.pps - left.pps ||
+      left.ip.localeCompare(right.ip)
+  );
+}
+
+async function fetchDashboardSuspiciousHosts(): Promise<SuspiciousHost[]> {
+  const response = await fetch("/api/dashboard/suspicious-hosts?range=1w");
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const suspiciousHosts =
+    (await response.json()) as DashboardSuspiciousHostsResponse;
+
+  return normalizeSuspiciousHosts(suspiciousHosts.items ?? []);
 }
 
 function removeTrailingPartialBucket(samples: TrafficSample[]): TrafficSample[] {
@@ -396,18 +493,20 @@ function normalizeDetectionSummary(
   summary: IncomingDetectionSummary
 ): DetectionSummary {
   const topTalkers = summary.top_talkers ?? [];
-  const suspiciousHosts =
+  const suspiciousHosts = normalizeSuspiciousHosts(
     summary.suspicious_hosts ??
-    topTalkers
-      .filter((talker) => talker.status && talker.status !== "normal")
-      .map((talker) => ({
-        host: talker.host ?? null,
-        ip: talker.ip,
-        protocol: talker.protocol ?? "UNKNOWN",
-        bps: talker.bps,
-        pps: talker.pps,
-        reasons: talker.reasons ?? [`host status: ${talker.status}`]
-      }));
+      topTalkers
+        .filter((talker) => talker.status && talker.status !== "normal")
+        .map((talker) => ({
+          host: talker.host ?? null,
+          ip: talker.ip,
+          protocol: talker.protocol ?? "UNKNOWN",
+          bps: talker.bps,
+          pps: talker.pps,
+          attack_type: "DOS",
+          reasons: talker.reasons ?? [`host status: ${talker.status}`]
+        }))
+  );
 
   return {
     timestamp: summary.timestamp,
@@ -430,18 +529,25 @@ export function useRealtime(): RealtimeState {
   const [analyzerStatus, setAnalyzerStatus] = useState(initialAnalyzerStatus);
   const [packetSummary, setPacketSummary] = useState(initialPacketSummary);
   const [detectionSummary, setDetectionSummary] = useState(initialDetectionSummary);
+  const [dbSuspiciousHosts, setDbSuspiciousHosts] = useState<SuspiciousHost[]>([]);
   const [trafficSamples, setTrafficSamples] = useState<TrafficSample[]>([]);
   const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([]);
   const [topology, setTopology] = useState(initialTopology);
 
   useEffect(() => {
     let ignored = false;
+    let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
     const loadDashboardHistory = async () => {
       try {
-        const [trafficResponse, protocolsResponse] = await Promise.all([
+        const [
+          trafficResponse,
+          protocolsResponse,
+          historySuspiciousHosts
+        ] = await Promise.all([
           fetch("/api/dashboard/traffic?range=5m&bucket=5s"),
-          fetch("/api/dashboard/protocols?range=1m")
+          fetch("/api/dashboard/protocols?range=1m"),
+          fetchDashboardSuspiciousHosts()
         ]);
 
         if (!trafficResponse.ok || !protocolsResponse.ok) {
@@ -458,6 +564,7 @@ export function useRealtime(): RealtimeState {
         }
 
         const protocolStats = toProtocolStats(protocols.items ?? []);
+        setDbSuspiciousHosts(historySuspiciousHosts);
         const historySamples = (traffic.items ?? [])
           .map(toHistoryTrafficSample)
           .sort((left, right) => left.timestampMs - right.timestampMs);
@@ -486,7 +593,9 @@ export function useRealtime(): RealtimeState {
             ...prev,
             timestamp: new Date(lastSample.timestampMs).toISOString(),
             total_bps: Math.round(lastSample.totalBits / Math.max(lastSample.windowSec, 1)),
-            total_pps: Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1))
+            total_pps: Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1)),
+            suspicious_host_count: historySuspiciousHosts.length,
+            suspicious_hosts: historySuspiciousHosts
           }));
         } else if (Object.keys(protocolStats).length > 0) {
           setPacketSummary((prev) => ({
@@ -495,7 +604,19 @@ export function useRealtime(): RealtimeState {
           }));
         }
 
-        if (completedHistorySamples.length > 0 || Object.keys(protocolStats).length > 0) {
+        if (historySuspiciousHosts.length > 0) {
+          setDetectionSummary((prev) => ({
+            ...prev,
+            suspicious_host_count: historySuspiciousHosts.length,
+            suspicious_hosts: historySuspiciousHosts
+          }));
+        }
+
+        if (
+          completedHistorySamples.length > 0 ||
+          Object.keys(protocolStats).length > 0 ||
+          historySuspiciousHosts.length > 0
+        ) {
           setSource("history");
         }
       } catch {
@@ -504,9 +625,21 @@ export function useRealtime(): RealtimeState {
     };
 
     void loadDashboardHistory();
+    refreshTimer = setInterval(() => {
+      void fetchDashboardSuspiciousHosts()
+        .then((historySuspiciousHosts) => {
+          if (!ignored) {
+            setDbSuspiciousHosts(historySuspiciousHosts);
+          }
+        })
+        .catch(() => {
+          // Suspicious host polling is best-effort; live WebSocket data still updates the dashboard.
+        });
+    }, SUSPICIOUS_HOST_REFRESH_MS);
 
     return () => {
       ignored = true;
+      if (refreshTimer) clearInterval(refreshTimer);
     };
   }, []);
 
@@ -516,7 +649,7 @@ export function useRealtime(): RealtimeState {
     let closedByEffect = false;
 
     const connect = () => {
-      socket = new WebSocket(websocketUrl);
+      socket = new WebSocket(getWebsocketUrl());
 
       socket.onopen = () => {
         setConnected(true);
@@ -596,6 +729,14 @@ export function useRealtime(): RealtimeState {
             const nextDetectionSummary = normalizeDetectionSummary(message.data);
 
             setDetectionSummary(nextDetectionSummary);
+            if (nextDetectionSummary.suspicious_hosts.length > 0) {
+              setDbSuspiciousHosts((prev) =>
+                mergeSuspiciousHosts(
+                  prev,
+                  nextDetectionSummary.suspicious_hosts
+                )
+              );
+            }
             setAnalyzerStatus((prev) => ({
               ...prev,
               timestamp: nextDetectionSummary.timestamp,
@@ -637,6 +778,18 @@ export function useRealtime(): RealtimeState {
     () => aggregateDetectionSummary(detectionSummary, trafficSamples),
     [detectionSummary, trafficSamples]
   );
+  const visibleDetectionSummary = useMemo(() => {
+    const suspiciousHosts = mergeSuspiciousHosts(
+      dbSuspiciousHosts,
+      aggregatedDetectionSummary.suspicious_hosts
+    );
+
+    return {
+      ...aggregatedDetectionSummary,
+      suspicious_host_count: suspiciousHosts.length,
+      suspicious_hosts: suspiciousHosts
+    };
+  }, [aggregatedDetectionSummary, dbSuspiciousHosts]);
   const trafficSeries = useMemo(
     () => buildTrafficSeries(trafficSamples),
     [trafficSamples]
@@ -648,20 +801,20 @@ export function useRealtime(): RealtimeState {
       source,
       analyzerStatus,
       packetSummary: aggregatedPacketSummary,
-      detectionSummary: aggregatedDetectionSummary,
+      detectionSummary: visibleDetectionSummary,
       trafficSeries,
       securityEvents,
       topology
     }),
     [
-      aggregatedDetectionSummary,
       aggregatedPacketSummary,
       analyzerStatus,
       connected,
       securityEvents,
       source,
       topology,
-      trafficSeries
+      trafficSeries,
+      visibleDetectionSummary
     ]
   );
 }

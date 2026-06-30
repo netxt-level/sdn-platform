@@ -1,5 +1,7 @@
 export function ProtocolBars({ stats }: { stats: Record<string, number> }) {
-  const entries = Object.entries(stats);
+  const entries = Object.entries(stats).sort(
+    ([, leftValue], [, rightValue]) => rightValue - leftValue
+  );
   const total = entries.reduce((sum, [, value]) => sum + value, 0);
 
   return (
