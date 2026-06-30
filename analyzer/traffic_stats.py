@@ -23,6 +23,7 @@ class TrafficStatsBuilder:
         self,
         packet_summary: dict[str, Any],
         packets: list[dict[str, Any]] | None = None,
+        extra_suspicious_hosts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
 
         window_sec = packet_summary.get("window_sec", 1)        # 패킷 집계 시간 범위
@@ -39,6 +40,11 @@ class TrafficStatsBuilder:
         suspicious_hosts = self._build_suspicious_hosts(
             host_stats=packet_summary.get("host_stats", []),
             window_sec=window_sec,
+        )
+
+        # 포트 스캔 의심 목록 추가
+        suspicious_hosts.extend(
+            self._build_extra_suspicious_hosts(extra_suspicious_hosts or [])
         )
 
         # 의심 호스트 개수 계산
@@ -88,11 +94,11 @@ class TrafficStatsBuilder:
 
             # 초당 패킷 수가 임계값 이상이면 의심 사유 추가
             if pps >= self.suspicious_pps_threshold:
-                reasons.append("pps threshold exceeded")
+                reasons.append("DoS")
 
             # 초당 비트 수가 임계값 이상이면 의심 사유 추가
-            if bps >= self.suspicious_bps_threshold:
-                reasons.append("bps threshold exceeded")
+            if bps >= self.suspicious_bps_threshold and "DoS" not in reasons:
+                reasons.append("DoS")
 
             # 의심 사유가 없으면 의심 호스트 목록에 포함하지 않음
             if not reasons:
@@ -104,6 +110,7 @@ class TrafficStatsBuilder:
                 "protocol": host.get("protocol"),                       # 프로토콜
                 "bps": bps,                                             # 호스트별 초당 비트 수
                 "pps": pps,                                             # 호스트별 초당 패킷 수
+                "attack_type": "DOS",                                   # 공격 유형
                 "reasons": reasons,                                     # 의심 판단 사유
             })
 
@@ -114,6 +121,50 @@ class TrafficStatsBuilder:
         )
 
         return suspicious_hosts
+
+    # 포트 스캔 등 외부 탐지기가 넘긴 의심 호스트 목록을 정규화하는 내부 함수
+    def _build_extra_suspicious_hosts(
+        self,
+        suspicious_hosts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        normalized_hosts = []
+
+        for suspicious_host in suspicious_hosts:
+            attack_type = suspicious_host.get("attack_type", "UNKNOWN")
+            reasons = suspicious_host.get("reasons")
+
+            if not reasons:
+                reasons = [self._format_attack_type_reason(attack_type)]
+
+            normalized_hosts.append({
+                "host": (
+                    suspicious_host.get("host")
+                    or suspicious_host.get("ip")
+                    or suspicious_host.get("src_ip")
+                ),
+                "ip": suspicious_host.get("ip") or suspicious_host.get("src_ip"),
+                "protocol": suspicious_host.get("protocol", "TCP"),
+                "bps": float(suspicious_host.get("bps", 0)),
+                "pps": float(suspicious_host.get("pps", 0)),
+                "attack_type": attack_type,
+                "reasons": reasons,
+            })
+
+        return [
+            suspicious_host
+            for suspicious_host in normalized_hosts
+            if suspicious_host["ip"]
+        ]
+
+    # 공격 유형 코드를 화면에 표시하기 쉬운 reason 값으로 변환하는 내부 함수
+    def _format_attack_type_reason(self, attack_type: str) -> str:
+        if attack_type == "PORT_SCAN":
+            return "Port Scan"
+
+        if attack_type == "DOS":
+            return "DoS"
+
+        return attack_type
 
     # 현재 활성화된 플로우 개수를 계산하는 내부 함수
     def _count_active_flows(

@@ -8,7 +8,7 @@ from packet_capture import PacketCaptureError, start_capture
 from packet_parser import parse_packet
 from packet_summary import PacketSummaryBuilder
 from traffic_stats import TrafficStatsBuilder
-
+from port_scan_detector import PortScanDetector
 
 INTERFACE = os.getenv("INTERFACE", "en0")
 ANALYZER_ID = os.getenv("ANALYZER_ID", "analyzer-1")
@@ -38,6 +38,11 @@ analyzer_status = AnalyzerStatus(
     interface=INTERFACE,
 )
 
+port_scan_detector = PortScanDetector(
+    window_sec=5,
+    unique_port_threshold=20,
+    alert_cooldown_sec=30,
+)
 
 def handle_packet(packet):
     metadata = parse_packet(packet)
@@ -50,7 +55,6 @@ def handle_packet(packet):
     with packets_lock:
         packets.append(metadata)
 
-
 def analysis_loop():
     while True:
         time.sleep(WINDOW_SEC)
@@ -59,12 +63,16 @@ def analysis_loop():
             packets_snapshot = list(packets)
             packets.clear()
 
+        port_scan_hosts = port_scan_detector.detect(packets_snapshot)
+
         packet_summary = summary_builder.build_packet_summary(
             packets_snapshot,
         )
 
         traffic_stats = traffic_builder.build_traffic_stats(
             packet_summary=packet_summary,
+            packets=packets_snapshot,
+            extra_suspicious_hosts=port_scan_hosts,
         )
 
         packet_summary_sent = backend_client.send_packet_summary(
@@ -82,7 +90,6 @@ def analysis_loop():
                 "failed to send analyzer metrics"
             )
 
-
 def status_loop():
     while True:
         time.sleep(STATUS_INTERVAL_SEC)
@@ -90,7 +97,6 @@ def status_loop():
         backend_client.send_analyzer_status(
             analyzer_status.to_dict()
         )
-
 
 if __name__ == "__main__":
     try:

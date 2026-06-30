@@ -1,56 +1,45 @@
-# Analyzer → Backend API 명세서
+# Analyzer -> Backend API 명세서
 
-## 공통 규칙
+이 문서는 현재 코드 기준으로 분석 서버가 백엔드 서버에 전송하는 API를 정리한다.
 
-### Content-Type
+- 분석 서버 호출 구현: `analyzer/backend_client.py`
+- 분석 서버 payload 생성: `analyzer/packet_summary.py`, `analyzer/traffic_stats.py`, `analyzer/analyzer_status.py`
+- 백엔드 수신 스키마: `backend/app/schemas/analyzer.py`
+- 백엔드 수신 라우터: `backend/app/api/analyzer.py`
 
-```http
-Content-Type: application/json
-```
+## 기본 정보
 
-### 공통 성공 응답
+| 항목 | 값 |
+|---|---|
+| 기본 Backend URL | `BACKEND_BASE_URL`, 기본값 `http://127.0.0.1:8000` |
+| Content-Type | `application/json` |
+| Timestamp 형식 | ISO 8601 문자열, 예: `2026-05-24T10:00:00+00:00` |
+| 공통 성공 응답 | `{"ok": true}` |
+| 유효성 검증 실패 | FastAPI 기본 `422 Unprocessable Entity` |
 
-```json
-{
-  "success": true,
-  "message": "요청 처리 성공"
-}
-```
+분석 서버는 `WINDOW_SEC`마다 패킷 요약과 탐지 요약을 전송하고, `STATUS_INTERVAL_SEC`마다 상태를 전송한다.
 
-### 공통 실패 응답
+| 환경변수 | 기본값 | 설명 |
+|---|---:|---|
+| `ANALYZER_ID` | `analyzer-1` | 분석 서버 식별자 |
+| `INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
+| `WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
+| `STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
+| `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
 
-```json
-{
-  "success": false,
-  "message": "요청 처리 실패",
-  "error": {
-    "code": "INVALID_REQUEST",
-    "detail": "상세 오류 메시지"
-  }
-}
-```
-
----
-
-## 1. 패킷 요약 정보 전달
-
-### Endpoint
+## 1. 패킷 요약 전달
 
 ```http
-POST /api/backend/analyzer/packet-summary
+POST /api/analyzer/packet-summary
 ```
 
-### 설명
-
-Analyzer가 일정 시간 동안 수집한 패킷 메타데이터를 요약하여 Backend로 전달한다.
-
-패킷 payload 원문은 포함하지 않는다.
+분석 서버가 집계 윈도우 동안 수집한 패킷을 프로토콜, 호스트 쌍 단위로 요약해 전송한다. 원본 패킷 payload는 포함하지 않는다.
 
 ### Request Body
 
 ```json
 {
-  "timestamp": "2026-05-24T10:00:00+09:00",
+  "timestamp": "2026-05-24T10:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "window_sec": 1,
   "total_packets": 90,
@@ -74,60 +63,76 @@ Analyzer가 일정 시간 동안 수집한 패킷 메타데이터를 요약하�
 }
 ```
 
-### 주요 필드
+### 필드
 
-| 필드 | 설명 |
-|---|---|
-| `timestamp` | 패킷 요약 생성 시각 |
-| `analyzer_id` | Analyzer 식별자 |
-| `window_sec` | 집계 시간 범위, 초 단위 |
-| `total_packets` | 집계 시간 내 전체 패킷 수 |
-| `total_bits` | 집계 시간 내 전체 비트 수 |
-| `protocol_stats` | 프로토콜별 패킷 수 |
-| `host_stats` | 출발지, 목적지, 프로토콜별 트래픽 요약 |
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `timestamp` | `datetime` | O | 패킷 요약 생성 시각 |
+| `analyzer_id` | `string` | O | 분석 서버 식별자 |
+| `window_sec` | `integer` | O | 집계 시간, 초 단위 |
+| `total_packets` | `integer` | O | 윈도우 내 전체 패킷 수 |
+| `total_bits` | `integer` | O | 윈도우 내 전체 비트 수 |
+| `protocol_stats` | `object<string, integer>` | O | 프로토콜별 패킷 수 |
+| `host_stats` | `HostStat[]` | O | 출발지/목적지/프로토콜별 통계 |
 
-### `host_stats` 필드
+### HostStat
 
-| 필드 | 설명 |
-|---|---|
-| `src_host` | 출발지 호스트 이름, 알 수 없으면 `null` |
-| `src_ip` | 출발지 IP |
-| `dst_host` | 목적지 호스트 이름, 알 수 없으면 `null` |
-| `dst_ip` | 목적지 IP |
-| `protocol` | 프로토콜 이름 |
-| `packet_count` | 해당 호스트 쌍과 프로토콜의 패킷 수 |
-| `bit_count` | 해당 호스트 쌍과 프로토콜의 비트 수 |
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `src_host` | `string \| null` | X | 출발지 호스트명 |
+| `src_ip` | `string \| null` | X | 출발지 IP |
+| `dst_host` | `string \| null` | X | 목적지 호스트명 |
+| `dst_ip` | `string \| null` | X | 목적지 IP |
+| `protocol` | `string` | O | 프로토콜 이름 |
+| `packet_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 패킷 수 |
+| `bit_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 비트 수 |
 
 ### Response Body
 
 ```json
 {
-  "success": true,
-  "message": "패킷 요약 정보 수신 완료"
+  "ok": true
 }
 ```
 
----
+### 백엔드 처리
 
-## 2. 트래픽 통계 전달
+- InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다.
+- Elasticsearch `sdn-traffic-summary` 인덱스에 저장한다.
+- WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
-### Endpoint
-
-```http
-POST /api/backend/analyzer/traffic-stats
+```json
+{
+  "type": "packet_summary",
+  "data": {
+    "timestamp": "2026-05-24T10:00:00+00:00",
+    "analyzer_id": "analyzer-1",
+    "window_sec": 1,
+    "total_packets": 90,
+    "total_bits": 273960,
+    "protocol_stats": {
+      "TCP": 87
+    },
+    "host_stats": []
+  }
+}
 ```
 
-### 설명
+## 2. 탐지 요약 전달
 
-`packet-summary`를 기반으로 계산한 네트워크 상태 요약 정보를 Backend로 전달한다.
+```http
+POST /api/analyzer/detection-summary
+```
 
-대시보드 카드, 프로토콜 비율 차트, 의심 호스트 표시 등에 사용한다.
+분석 서버가 패킷 요약과 탐지기 결과를 기반으로 네트워크 상태 및 의심 호스트 목록을 전송한다.
+
+코드상 분석 서버 메서드명은 `send_traffic_stats`지만, 실제 호출 경로는 `/api/analyzer/detection-summary`다.
 
 ### Request Body
 
 ```json
 {
-  "timestamp": "2026-05-24T10:00:00+09:00",
+  "timestamp": "2026-05-24T10:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "network_status": "warning",
   "total_bps": 273960.0,
@@ -142,123 +147,150 @@ POST /api/backend/analyzer/traffic-stats
       "bps": 81192.0,
       "pps": 16.0,
       "reasons": [
-        "bps threshold exceeded"
-      ]
+        "DoS"
+      ],
+      "attack_type": "DOS"
     }
   ]
 }
 ```
 
-### 주요 필드
+### 필드
 
-| 필드 | 설명 |
-|---|---|
-| `timestamp` | 트래픽 통계 생성 시각 |
-| `analyzer_id` | Analyzer 식별자 |
-| `network_status` | 네트워크 상태, `normal`, `warning`, `critical` |
-| `total_bps` | 전체 초당 비트 수 |
-| `total_pps` | 전체 초당 패킷 수 |
-| `active_flow_count` | 현재 윈도우에서 관측된 flow 개수 |
-| `suspicious_host_count` | suspicious 상태 host 수 |
-| `suspicious_hosts` | 임계치 기준을 초과한 의심 host 목록 |
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `timestamp` | `datetime` | O | 탐지 요약 생성 시각 |
+| `analyzer_id` | `string` | O | 분석 서버 식별자 |
+| `network_status` | `string` | O | 네트워크 상태. 현재 생성값은 `normal`, `warning`, `critical` |
+| `total_bps` | `number` | O | 전체 초당 비트 수 |
+| `total_pps` | `number` | O | 전체 초당 패킷 수 |
+| `active_flow_count` | `integer` | O | 현재 윈도우에서 관측한 flow 개수 |
+| `suspicious_host_count` | `integer` | O | 의심 호스트 수 |
+| `suspicious_hosts` | `SuspiciousHost[]` | O | 의심 호스트 목록 |
 
-### `suspicious_hosts` 필드
+현재 `TrafficStatsBuilder` 구현은 `total_bps=total_bits`, `total_pps=total_packets`로 값을 생성한다. 기본 `WINDOW_SEC=1`에서는 초당 값과 동일하지만, `WINDOW_SEC`를 1보다 크게 설정하면 필드명과 실제 계산 기준이 달라질 수 있다.
 
-| 필드 | 설명 |
-|---|---|
-| `host` | 출발지 호스트 이름 또는 IP |
-| `ip` | 출발지 IP |
-| `protocol` | 의심 트래픽의 프로토콜 |
-| `bps` | 해당 host의 초당 총 비트 수 |
-| `pps` | 해당 host의 초당 총 패킷 수 |
-| `reasons` | 의심 호스트로 판단한 사유 목록 |
+### SuspiciousHost
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `host` | `string \| null` | X | 호스트명 또는 IP |
+| `ip` | `string` | O | 의심 호스트 IP |
+| `protocol` | `string` | O | 의심 트래픽 프로토콜 |
+| `bps` | `number` | O | 해당 호스트 초당 비트 수 |
+| `pps` | `number` | O | 해당 호스트 초당 패킷 수 |
+| `reasons` | `string[]` | O | 의심 판단 사유 |
+| `attack_type` | `string \| null` | X | 공격/이상 트래픽 유형. 현재 생성값은 `DOS`, `PORT_SCAN` |
+
+현재 백엔드 스키마는 위 필드만 모델에 포함한다. 포트 스캔 탐지기가 내부적으로 만드는 `target_ip`, `unique_dst_port_count` 같은 추가 필드는 FastAPI/Pydantic 모델 변환 후 응답 broadcast 및 저장 payload에 포함되지 않는다.
 
 ### Response Body
 
 ```json
 {
-  "success": true,
-  "message": "트래픽 통계 수신 완료"
+  "ok": true
 }
 ```
 
----
+### 백엔드 처리
+
+- InfluxDB에 `network_status`, `suspicious_host_traffic` measurement로 저장한다.
+- Elasticsearch `sdn-detection-events` 인덱스에 저장한다.
+- WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
+
+```json
+{
+  "type": "detection_summary",
+  "data": {
+    "timestamp": "2026-05-24T10:00:00+00:00",
+    "analyzer_id": "analyzer-1",
+    "network_status": "warning",
+    "total_bps": 273960.0,
+    "total_pps": 90.0,
+    "active_flow_count": 15,
+    "suspicious_host_count": 1,
+    "suspicious_hosts": []
+  }
+}
+```
 
 ## 3. 분석 서버 상태 전달
 
-### Endpoint
-
 ```http
-POST /api/backend/analyzer/status
+POST /api/analyzer/status
 ```
 
-### 설명
-
-Analyzer의 실행 상태, 캡처 상태, Backend 연결 상태를 Backend로 전달한다.
-
-Frontend에서 Analyzer 연결 상태를 표시하는 데 사용할 수 있다.
+분석 서버의 실행 상태, 캡처 상태, 백엔드 전송 상태를 전송한다.
 
 ### Request Body
 
 ```json
 {
-  "timestamp": "2026-05-24T10:00:05+09:00",
+  "timestamp": "2026-05-24T10:00:05+00:00",
   "analyzer_id": "analyzer-1",
   "status": "running",
   "interface": "en0",
   "capture_active": true,
   "backend_connected": true,
-  "last_packet_at": "2026-05-24T10:00:04+09:00",
-  "last_summary_sent_at": "2026-05-24T10:00:05+09:00",
+  "last_packet_at": "2026-05-24T10:00:04+00:00",
+  "last_summary_sent_at": "2026-05-24T10:00:05+00:00",
   "error_message": null
 }
 ```
 
-### 주요 필드
+### 필드
 
-| 필드 | 설명 |
-|---|---|
-| `timestamp` | 상태 정보 생성 시각 |
-| `analyzer_id` | Analyzer 식별자 |
-| `status` | Analyzer 상태, `running`, `error`, `stopped` |
-| `interface` | 캡처 중인 네트워크 인터페이스 |
-| `capture_active` | 패킷 캡처 활성 여부 |
-| `backend_connected` | Backend 전송 성공 여부 |
-| `last_packet_at` | 마지막 패킷 수신 시각 |
-| `last_summary_sent_at` | 마지막 packet-summary 또는 traffic-stats 전송 성공 시각 |
-| `error_message` | 오류 메시지, 없으면 `null` |
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `timestamp` | `datetime` | O | 상태 정보 생성 시각 |
+| `analyzer_id` | `string` | O | 분석 서버 식별자 |
+| `status` | `string` | O | 분석 서버 상태. 현재 생성값은 `running`, `error` |
+| `interface` | `string` | O | 캡처 중인 네트워크 인터페이스 |
+| `capture_active` | `boolean` | O | 패킷 캡처 활성 여부 |
+| `backend_connected` | `boolean` | O | 최근 백엔드 전송 성공 여부 |
+| `last_packet_at` | `datetime \| null` | X | 마지막 패킷 수신 시각 |
+| `last_summary_sent_at` | `datetime \| null` | X | 마지막 요약 전송 성공 시각 |
+| `error_message` | `string \| null` | X | 오류 메시지 |
 
 ### Response Body
 
 ```json
 {
-  "success": true,
-  "message": "분석 서버 상태 수신 완료"
+  "ok": true
 }
 ```
 
----
+### 백엔드 처리
 
-## 전송 주기
+- PostgreSQL `sdn_controller.analyzer` 테이블에 `analyzer_id` 기준 upsert한다.
+- WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
-| 데이터 | 권장 전송 주기 |
+```json
+{
+  "type": "analyzer_status",
+  "data": {
+    "timestamp": "2026-05-24T10:00:05+00:00",
+    "analyzer_id": "analyzer-1",
+    "status": "running",
+    "interface": "en0",
+    "capture_active": true,
+    "backend_connected": true,
+    "last_packet_at": "2026-05-24T10:00:04+00:00",
+    "last_summary_sent_at": "2026-05-24T10:00:05+00:00",
+    "error_message": null
+  }
+}
+```
+
+## 전송 실패 처리
+
+분석 서버의 `BackendClient`는 각 POST 요청에 `timeout_sec=3.0`을 사용한다.
+
+| 실패 유형 | 분석 서버 동작 |
 |---|---|
-| `packet-summary` | 1초 |
-| `traffic-stats` | 1초 |
-| `status` | 5초 |
+| 연결 실패 | 콘솔에 전송 실패 로그 출력, `False` 반환 |
+| Timeout | 콘솔에 timeout 로그 출력, `False` 반환 |
+| HTTP 오류 응답 | 콘솔에 HTTP status 로그 출력, `False` 반환 |
+| 기타 요청 오류 | 콘솔에 일반 요청 오류 로그 출력, `False` 반환 |
 
----
-
-## 저장 방향
-
-Analyzer는 DB 저장 방식을 알 필요가 없다.
-
-Backend는 수신한 JSON을 저장소 목적에 맞게 분해하여 저장한다.
-
-예시:
-
-| API | 저장 방향 |
-|---|---|
-| `packet-summary` | InfluxDB의 `packet_summary_total`, `protocol_traffic`, `host_traffic` 등으로 분해 저장 |
-| `traffic-stats` | InfluxDB의 `traffic_status`, `suspicious_hosts` 등으로 분해 저장 |
-| `status` | PostgreSQL 또는 InfluxDB에 최신 상태 중심으로 저장 |
+패킷 요약과 탐지 요약 둘 다 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 둘 중 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
