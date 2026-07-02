@@ -118,11 +118,22 @@ def analysis_loop():
 # STATUS_INTERVAL_SEC마다 분석 서버의 현재 상태를 백엔드로 보고
 def status_loop():
     while True:
-        time.sleep(STATUS_INTERVAL_SEC)
+        try:
+            time.sleep(STATUS_INTERVAL_SEC)
 
-        backend_client.send_analyzer_status(
-            analyzer_status.to_dict()
-        )
+            status_sent = backend_client.send_analyzer_status(
+                analyzer_status.to_dict()
+            )
+
+            if not status_sent:
+                analyzer_status.mark_backend_failed(
+                    "failed to send analyzer status"
+                )
+
+        except Exception as exc:
+            error_message = f"status loop failed: {exc}"
+            analyzer_status.mark_backend_failed(error_message)
+            print(f"[Analyzer] {error_message}")
 
 
 if __name__ == "__main__":
