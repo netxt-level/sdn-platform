@@ -168,7 +168,7 @@ POST /api/analyzer/detection-summary
 | `suspicious_host_count` | `integer` | O | 의심 호스트 수 |
 | `suspicious_hosts` | `SuspiciousHost[]` | O | 의심 호스트 목록 |
 
-현재 `TrafficStatsBuilder` 구현은 `total_bps=total_bits`, `total_pps=total_packets`로 값을 생성한다. 기본 `ANALYZER_WINDOW_SEC=1`에서는 초당 값과 동일하지만, `ANALYZER_WINDOW_SEC`를 1보다 크게 설정하면 필드명과 실제 계산 기준이 달라질 수 있다.
+`TrafficStatsBuilder`는 윈도우 내 누적 패킷 수와 비트 수를 `window_sec`로 나누어 `total_pps`, `total_bps`를 초당 값으로 생성한다.
 
 ### SuspiciousHost
 

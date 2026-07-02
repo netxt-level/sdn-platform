@@ -70,43 +70,49 @@ def handle_packet(packet):
 # WINDOW_SEC마다 패킷 버퍼를 비우고 요약/탐지 결과를 백엔드로 전송
 def analysis_loop():
     while True:
-        time.sleep(WINDOW_SEC)
+        try:
+            time.sleep(WINDOW_SEC)
 
-        # 현재 윈도우의 패킷만 분석하기 위해 snapshot을 만든 뒤 버퍼를 초기화
-        with packets_lock:
-            packets_snapshot = list(packets)
-            packets.clear()
+            # 현재 윈도우의 패킷만 분석하기 위해 snapshot을 만든 뒤 버퍼를 초기화
+            with packets_lock:
+                packets_snapshot = list(packets)
+                packets.clear()
 
-        # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
-        port_scan_hosts = port_scan_detector.detect(packets_snapshot)
+            # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
+            port_scan_hosts = port_scan_detector.detect(packets_snapshot)
 
-        packet_summary = summary_builder.build_packet_summary(
-            packets_snapshot,
-        )
-
-        # traffic stats에는 DoS 의심 호스트와 포트 스캔 의심 호스트가 함께 포함
-        traffic_stats = traffic_builder.build_traffic_stats(
-            packet_summary=packet_summary,
-            packets=packets_snapshot,
-            extra_suspicious_hosts=port_scan_hosts,
-        )
-
-        # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
-        packet_summary_sent = backend_client.send_packet_summary(
-            packet_summary
-        )
-
-        traffic_stats_sent = backend_client.send_traffic_stats(
-            traffic_stats
-        )
-
-        # 두 요약 전송이 모두 성공한 경우에만 백엔드 연결 상태를 정상으로 표시
-        if packet_summary_sent and traffic_stats_sent:
-            analyzer_status.mark_summary_sent()
-        else:
-            analyzer_status.mark_backend_failed(
-                "failed to send analyzer metrics"
+            packet_summary = summary_builder.build_packet_summary(
+                packets_snapshot,
             )
+
+            # traffic stats에는 DoS 의심 호스트와 포트 스캔 의심 호스트가 함께 포함
+            traffic_stats = traffic_builder.build_traffic_stats(
+                packet_summary=packet_summary,
+                packets=packets_snapshot,
+                extra_suspicious_hosts=port_scan_hosts,
+            )
+
+            # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
+            packet_summary_sent = backend_client.send_packet_summary(
+                packet_summary
+            )
+
+            traffic_stats_sent = backend_client.send_traffic_stats(
+                traffic_stats
+            )
+
+            # 두 요약 전송이 모두 성공한 경우에만 백엔드 연결 상태를 정상으로 표시
+            if packet_summary_sent and traffic_stats_sent:
+                analyzer_status.mark_summary_sent()
+            else:
+                analyzer_status.mark_backend_failed(
+                    "failed to send analyzer metrics"
+                )
+
+        except Exception as exc:
+            error_message = f"analysis loop failed: {exc}"
+            analyzer_status.mark_backend_failed(error_message)
+            print(f"[Analyzer] {error_message}")
 
 
 # STATUS_INTERVAL_SEC마다 분석 서버의 현재 상태를 백엔드로 보고

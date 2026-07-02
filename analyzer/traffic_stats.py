@@ -31,10 +31,10 @@ class TrafficStatsBuilder:
         total_bits = packet_summary.get("total_bits", 0)        # 전체 비트 수
 
         # 전체 초당 패킷 수 계산
-        total_pps = total_packets
+        total_pps = total_packets / window_sec if window_sec > 0 else 0
 
         # 전체 초당 비트 수 계산
-        total_bps = total_bits
+        total_bps = total_bits / window_sec if window_sec > 0 else 0
 
         # 의심 호스트 목록 생성
         suspicious_hosts = self._build_suspicious_hosts(

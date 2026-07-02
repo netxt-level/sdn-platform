@@ -65,7 +65,7 @@
 
 ### 현재 주의사항
 
-- `total_bps`, `total_pps` 필드는 현재 구현상 `ANALYZER_WINDOW_SEC`로 나누지 않고 `total_bits`, `total_packets` 값을 그대로 사용한다. 기본 `ANALYZER_WINDOW_SEC=1`에서는 초당 값과 동일하다.
+- `total_bps`, `total_pps` 필드는 윈도우 내 누적 비트 수와 패킷 수를 `ANALYZER_WINDOW_SEC`로 나누어 초당 값으로 계산한다.
 - `analyzer/port_scan_detector.py`는 `analyzer/main.py`에서 import하므로 커밋 시 반드시 함께 포함해야 한다.
 
 ## 백엔드 서버
