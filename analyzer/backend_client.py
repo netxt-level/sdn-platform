@@ -1,4 +1,8 @@
+import logging
+
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 # 분석 서버가 만든 payload를 백엔드 FastAPI 서버로 전송하는 HTTP 클라이언트
@@ -49,21 +53,25 @@ class BackendClient:
 
         # 백엔드 서버가 내려가 있거나 네트워크 연결 자체가 실패한 경우
         except requests.exceptions.ConnectionError:
-            print(f"[Backend] {label} 전송 실패: 서버에 연결할 수 없습니다.")
+            logger.warning("%s 전송 실패: 서버에 연결할 수 없습니다.", label)
             return False
 
         # 백엔드 응답이 지정한 timeout 안에 오지 않은 경우
         except requests.exceptions.Timeout:
-            print(f"[Backend] {label} 전송 실패: 요청 시간이 초과되었습니다.")
+            logger.warning("%s 전송 실패: 요청 시간이 초과되었습니다.", label)
             return False
 
         # 백엔드가 HTTP 오류 상태 코드를 반환한 경우
         except requests.exceptions.HTTPError as exc:
             status_code = exc.response.status_code if exc.response else "unknown"
-            print(f"[Backend] {label} 전송 실패: HTTP {status_code} 응답을 받았습니다.")
+            logger.warning(
+                "%s 전송 실패: HTTP %s 응답을 받았습니다.",
+                label,
+                status_code,
+            )
             return False
 
         # requests 계열의 기타 예외를 분석 서버 밖으로 전파하지 않고 실패로 처리
         except requests.exceptions.RequestException:
-            print(f"[Backend] {label} 전송 실패: 요청 처리 중 오류가 발생했습니다.")
+            logger.warning("%s 전송 실패: 요청 처리 중 오류가 발생했습니다.", label)
             return False

@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 import time
@@ -9,6 +10,12 @@ from packet_parser import parse_packet
 from packet_summary import PacketSummaryBuilder
 from traffic_stats import TrafficStatsBuilder
 from port_scan_detector import PortScanDetector
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def get_int_env(name: str, default: int) -> int:
@@ -125,7 +132,7 @@ def analysis_loop():
         except Exception as exc:
             error_message = f"analysis loop failed: {exc}"
             analyzer_status.mark_backend_failed(error_message)
-            print(f"[Analyzer] {error_message}")
+            logger.exception(error_message)
 
 
 # STATUS_INTERVAL_SEC마다 분석 서버의 현재 상태를 백엔드로 보고
@@ -146,7 +153,7 @@ def status_loop():
         except Exception as exc:
             error_message = f"status loop failed: {exc}"
             analyzer_status.mark_backend_failed(error_message)
-            print(f"[Analyzer] {error_message}")
+            logger.exception(error_message)
 
 
 if __name__ == "__main__":
@@ -169,4 +176,4 @@ if __name__ == "__main__":
 
     except PacketCaptureError as exc:
         analyzer_status.mark_capture_failed(str(exc))
-        print(exc)
+        logger.error("packet capture failed: %s", exc)
