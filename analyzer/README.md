@@ -5,11 +5,11 @@
 ## 실행 흐름
 
 ```text
-packet_capture.py
-  -> packet_parser.py
-  -> packet_summary.py
-  -> traffic_stats.py / port_scan_detector.py
-  -> backend_client.py
+app/packet/capture.py
+  -> app/packet/parser.py
+  -> app/packet/summary.py
+  -> app/detection/traffic_stats.py / app/detection/port_scan.py
+  -> app/backend_client.py
   -> backend /api/analyzer/*
 ```
 
@@ -17,14 +17,15 @@ packet_capture.py
 
 | 파일 | 역할 |
 |---|---|
-| `main.py` | 실행 진입점, 캡처/분석/상태 전송 루프 구성 |
-| `packet_capture.py` | Scapy 기반 패킷 캡처 |
-| `packet_parser.py` | 패킷에서 IP, 포트, 프로토콜, 크기, TCP flag 추출 |
-| `packet_summary.py` | 윈도우 단위 패킷/프로토콜/호스트 통계 생성 |
-| `traffic_stats.py` | bps/pps 계산, DoS 의심 호스트, 네트워크 상태 생성 |
-| `port_scan_detector.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
-| `analyzer_status.py` | 분석 서버 상태 payload 생성 |
-| `backend_client.py` | 백엔드 API 전송 |
+| `app/main.py` | 실행 진입점, 캡처/분석/상태 전송 루프 구성 |
+| `app/config.py` | 환경변수 파싱 및 설정 객체 생성 |
+| `app/packet/capture.py` | Scapy 기반 패킷 캡처 |
+| `app/packet/parser.py` | 패킷에서 IP, 포트, 프로토콜, 크기, TCP flag 추출 |
+| `app/packet/summary.py` | 윈도우 단위 패킷/프로토콜/호스트 통계 생성 |
+| `app/detection/traffic_stats.py` | bps/pps 계산, DoS 의심 호스트, 네트워크 상태 생성 |
+| `app/detection/port_scan.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
+| `app/analyzer_status.py` | 분석 서버 상태 payload 생성 |
+| `app/backend_client.py` | 백엔드 API 전송 |
 | `analyzer-backend-api.md` | 분석 서버 -> 백엔드 API 상세 명세 |
 
 ## 환경변수
@@ -55,8 +56,8 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 | 탐지 | 구현 위치 | 설명 |
 |---|---|---|
-| DoS 의심 | `traffic_stats.py` | 호스트별 pps/bps가 기준 이상이면 의심 호스트로 포함 |
-| Port Scan 의심 | `port_scan_detector.py` | 짧은 시간 안에 같은 대상의 여러 TCP 목적지 포트로 SYN 패킷을 보내면 탐지 |
+| DoS 의심 | `app/detection/traffic_stats.py` | 호스트별 pps/bps가 기준 이상이면 의심 호스트로 포함 |
+| Port Scan 의심 | `app/detection/port_scan.py` | 짧은 시간 안에 같은 대상의 여러 TCP 목적지 포트로 SYN 패킷을 보내면 탐지 |
 
 탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다.
 
@@ -74,16 +75,16 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 탐지 로직을 추가하거나 조정할 때는 보통 아래 파일을 수정한다.
 
 ```text
-traffic_stats.py
-port_scan_detector.py
-packet_parser.py
+app/detection/traffic_stats.py
+app/detection/port_scan.py
+app/packet/parser.py
 ```
 
 백엔드 전송 payload를 바꿔야 한다면 아래 파일과 백엔드 스키마를 함께 확인한다.
 
 ```text
-packet_summary.py
-traffic_stats.py
-backend_client.py
+app/packet/summary.py
+app/detection/traffic_stats.py
+app/backend_client.py
 ../backend/app/schemas/analyzer.py
 ```

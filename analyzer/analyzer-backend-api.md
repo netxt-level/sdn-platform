@@ -2,8 +2,8 @@
 
 이 문서는 현재 코드 기준으로 분석 서버가 백엔드 서버에 전송하는 API를 정리한다.
 
-- 분석 서버 호출 구현: `analyzer/backend_client.py`
-- 분석 서버 payload 생성: `analyzer/packet_summary.py`, `analyzer/traffic_stats.py`, `analyzer/analyzer_status.py`
+- 분석 서버 호출 구현: `analyzer/app/backend_client.py`
+- 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/analyzer_status.py`
 - 백엔드 수신 스키마: `backend/app/schemas/analyzer.py`
 - 백엔드 수신 라우터: `backend/app/api/analyzer.py`
 

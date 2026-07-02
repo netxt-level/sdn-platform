@@ -31,3 +31,8 @@ def start_capture(interface: str, packet_handler: PacketHandler):
         raise PacketCaptureError(
             f"packet capture failed on interface {interface}:{exc}"
         ) from exc
+    except ValueError as exc:
+        # Scapy가 존재하지 않는 인터페이스를 ValueError로 보고하는 경우
+        raise PacketCaptureError(
+            f"packet capture failed on interface {interface}: {exc}"
+        ) from exc

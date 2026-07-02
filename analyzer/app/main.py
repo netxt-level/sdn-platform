@@ -1,15 +1,15 @@
 import logging
-import os
 import threading
 import time
 
-from analyzer_status import AnalyzerStatus
-from backend_client import BackendClient
-from packet_capture import PacketCaptureError, start_capture
-from packet_parser import parse_packet
-from packet_summary import PacketSummaryBuilder
-from traffic_stats import TrafficStatsBuilder
-from port_scan_detector import PortScanDetector
+from app.analyzer_status import AnalyzerStatus
+from app.backend_client import BackendClient
+from app.config import load_config
+from app.detection.port_scan import PortScanDetector
+from app.detection.traffic_stats import TrafficStatsBuilder
+from app.packet.capture import PacketCaptureError, start_capture
+from app.packet.parser import parse_packet
+from app.packet.summary import PacketSummaryBuilder
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,24 +18,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_int_env(name: str, default: int) -> int:
-    value = os.getenv(name)
-
-    if value is None:
-        return default
-
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer") from exc
-
-
 # 실행 환경에 따라 바뀌는 분석 서버 설정값
-ANALYZER_ID = os.getenv("ANALYZER_ID", "analyzer-1")
-INTERFACE = os.getenv("ANALYZER_INTERFACE", "en0")
-WINDOW_SEC = get_int_env("ANALYZER_WINDOW_SEC", 1)
-STATUS_INTERVAL_SEC = get_int_env("ANALYZER_STATUS_INTERVAL_SEC", 5)
-BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
+config = load_config()
+ANALYZER_ID = config.analyzer_id
+INTERFACE = config.interface
+WINDOW_SEC = config.window_sec
+STATUS_INTERVAL_SEC = config.status_interval_sec
+BACKEND_BASE_URL = config.backend_base_url
 
 # 캡처 스레드가 쌓고 분석 스레드가 비우는 공유 패킷 버퍼
 packets = []
