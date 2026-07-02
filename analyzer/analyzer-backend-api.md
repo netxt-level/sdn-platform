@@ -17,14 +17,14 @@
 | 공통 성공 응답 | `{"ok": true}` |
 | 유효성 검증 실패 | FastAPI 기본 `422 Unprocessable Entity` |
 
-분석 서버는 `WINDOW_SEC`마다 패킷 요약과 탐지 요약을 전송하고, `STATUS_INTERVAL_SEC`마다 상태를 전송한다.
+분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약과 탐지 요약을 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
 
 | 환경변수 | 기본값 | 설명 |
 |---|---:|---|
 | `ANALYZER_ID` | `analyzer-1` | 분석 서버 식별자 |
-| `INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
-| `WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
-| `STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
+| `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
+| `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
+| `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
 
 ## 1. 패킷 요약 전달
@@ -168,7 +168,7 @@ POST /api/analyzer/detection-summary
 | `suspicious_host_count` | `integer` | O | 의심 호스트 수 |
 | `suspicious_hosts` | `SuspiciousHost[]` | O | 의심 호스트 목록 |
 
-현재 `TrafficStatsBuilder` 구현은 `total_bps=total_bits`, `total_pps=total_packets`로 값을 생성한다. 기본 `WINDOW_SEC=1`에서는 초당 값과 동일하지만, `WINDOW_SEC`를 1보다 크게 설정하면 필드명과 실제 계산 기준이 달라질 수 있다.
+현재 `TrafficStatsBuilder` 구현은 `total_bps=total_bits`, `total_pps=total_packets`로 값을 생성한다. 기본 `ANALYZER_WINDOW_SEC=1`에서는 초당 값과 동일하지만, `ANALYZER_WINDOW_SEC`를 1보다 크게 설정하면 필드명과 실제 계산 기준이 달라질 수 있다.
 
 ### SuspiciousHost
 

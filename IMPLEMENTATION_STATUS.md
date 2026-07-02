@@ -35,7 +35,7 @@
 
 - 네트워크 인터페이스 기반 패킷 캡처
 - 패킷 메타데이터 파싱
-- `WINDOW_SEC` 단위 패킷 요약 생성
+- `ANALYZER_WINDOW_SEC` 단위 패킷 요약 생성
 - 프로토콜별 패킷 수 집계
 - 출발지/목적지/프로토콜별 host traffic 집계
 - 전체 패킷 수, 전체 bit 수 계산
@@ -57,15 +57,15 @@
 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
-| `INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_ID` | `analyzer-1` | 분석 서버 ID |
-| `WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
-| `STATUS_INTERVAL_SEC` | `5` | 상태 전송 주기 |
+| `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
+| `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
+| `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 전송 주기 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 서버 주소 |
 
 ### 현재 주의사항
 
-- `total_bps`, `total_pps` 필드는 현재 구현상 `WINDOW_SEC`로 나누지 않고 `total_bits`, `total_packets` 값을 그대로 사용한다. 기본 `WINDOW_SEC=1`에서는 초당 값과 동일하다.
+- `total_bps`, `total_pps` 필드는 현재 구현상 `ANALYZER_WINDOW_SEC`로 나누지 않고 `total_bits`, `total_packets` 값을 그대로 사용한다. 기본 `ANALYZER_WINDOW_SEC=1`에서는 초당 값과 동일하다.
 - `analyzer/port_scan_detector.py`는 `analyzer/main.py`에서 import하므로 커밋 시 반드시 함께 포함해야 한다.
 
 ## 백엔드 서버

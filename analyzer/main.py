@@ -11,10 +11,10 @@ from traffic_stats import TrafficStatsBuilder
 from port_scan_detector import PortScanDetector
 
 # 실행 환경에 따라 바뀌는 분석 서버 설정값
-INTERFACE = os.getenv("INTERFACE", "en0")
 ANALYZER_ID = os.getenv("ANALYZER_ID", "analyzer-1")
-WINDOW_SEC = int(os.getenv("WINDOW_SEC", "1"))
-STATUS_INTERVAL_SEC = int(os.getenv("STATUS_INTERVAL_SEC", "5"))
+INTERFACE = os.getenv("ANALYZER_INTERFACE", "en0")
+WINDOW_SEC = int(os.getenv("ANALYZER_WINDOW_SEC", "1"))
+STATUS_INTERVAL_SEC = int(os.getenv("ANALYZER_STATUS_INTERVAL_SEC", "5"))
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000")
 
 # 캡처 스레드가 쌓고 분석 스레드가 비우는 공유 패킷 버퍼
