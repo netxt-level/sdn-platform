@@ -26,6 +26,7 @@ WINDOW_SEC = config.window_sec
 STATUS_INTERVAL_SEC = config.status_interval_sec
 BACKEND_BASE_URL = config.backend_base_url
 
+# 아래 객체들은 캡처, 분석, 전송 루프가 공유하는 런타임 구성요소다.
 # 캡처 스레드가 쌓고 분석 스레드가 비우는 공유 패킷 버퍼
 packets = []
 packets_lock = threading.Lock()
@@ -119,6 +120,7 @@ def analysis_loop():
                 )
 
         except Exception as exc:
+            # 탐지 로직 예외로 분석 스레드가 죽지 않도록 오류 상태를 남기고 다음 윈도우로 넘어간다.
             error_message = f"analysis loop failed: {exc}"
             analyzer_status.mark_backend_failed(error_message)
             logger.exception(error_message)
@@ -135,11 +137,13 @@ def status_loop():
             )
 
             if not status_sent:
+                # 상태 전송 실패도 다음 상태 보고에 반영되도록 백엔드 연결 실패로 표시한다.
                 analyzer_status.mark_backend_failed(
                     "failed to send analyzer status"
                 )
 
         except Exception as exc:
+            # 상태 전송 스레드도 예외 한 번으로 종료되지 않게 보호한다.
             error_message = f"status loop failed: {exc}"
             analyzer_status.mark_backend_failed(error_message)
             logger.exception(error_message)

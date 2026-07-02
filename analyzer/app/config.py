@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AnalyzerConfig:
+    """분석 서버 실행에 필요한 환경 설정을 한 객체로 묶는다."""
+
     analyzer_id: str
     interface: str
     window_sec: int
@@ -12,6 +14,7 @@ class AnalyzerConfig:
 
 
 def get_int_env(name: str, default: int) -> int:
+    # 숫자 환경변수는 시작 시점에 검증해 잘못된 설정을 명확한 오류로 드러낸다.
     value = os.getenv(name)
 
     if value is None:

@@ -38,6 +38,7 @@ class BackendClient:
 
     # 모든 전송 API가 공유하는 POST 처리 함수
     def _post(self, path: str, payload: dict, label: str) -> bool:
+        # 전송 실패는 예외를 밖으로 던지지 않고 False로 반환해 분석 루프를 계속 유지한다.
         url = f"{self.base_url}{path}"
 
         try:
