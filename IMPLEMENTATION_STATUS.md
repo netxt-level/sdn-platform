@@ -21,14 +21,15 @@
 
 | 파일 | 구현 내용 |
 |---|---|
-| `analyzer/main.py` | 분석 서버 실행 진입점, 캡처 루프, 분석 루프, 상태 전송 루프 |
-| `analyzer/packet_capture.py` | 네트워크 인터페이스 패킷 캡처 |
-| `analyzer/packet_parser.py` | 캡처 패킷에서 IP, 포트, 프로토콜, 크기 등 메타데이터 추출 |
-| `analyzer/packet_summary.py` | 윈도우 단위 패킷 요약 생성 |
-| `analyzer/traffic_stats.py` | 네트워크 상태, bps/pps, 의심 호스트 목록 생성 |
-| `analyzer/port_scan_detector.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
-| `analyzer/analyzer_status.py` | 분석 서버 상태 관리 |
-| `analyzer/backend_client.py` | 백엔드 API 전송 클라이언트 |
+| `analyzer/app/main.py` | 분석 서버 실행 진입점, 캡처 루프, 분석 루프, 상태 전송 루프 |
+| `analyzer/app/config.py` | 환경변수 파싱 및 분석 서버 설정 생성 |
+| `analyzer/app/packet/capture.py` | 네트워크 인터페이스 패킷 캡처 |
+| `analyzer/app/packet/parser.py` | 캡처 패킷에서 IP, 포트, 프로토콜, 크기 등 메타데이터 추출 |
+| `analyzer/app/packet/summary.py` | 윈도우 단위 패킷 요약 생성 |
+| `analyzer/app/detection/traffic_stats.py` | 네트워크 상태, bps/pps, 의심 호스트 목록 생성 |
+| `analyzer/app/detection/port_scan.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
+| `analyzer/app/analyzer_status.py` | 분석 서버 상태 관리 |
+| `analyzer/app/backend_client.py` | 백엔드 API 전송 클라이언트 |
 | `analyzer/analyzer-backend-api.md` | 분석 서버 -> 백엔드 API 명세 |
 
 ### 구현된 기능
@@ -67,7 +68,7 @@
 ### 현재 주의사항
 
 - `total_bps`, `total_pps` 필드는 윈도우 내 누적 비트 수와 패킷 수를 `ANALYZER_WINDOW_SEC`로 나누어 초당 값으로 계산한다.
-- `analyzer/port_scan_detector.py`는 `analyzer/main.py`에서 import하므로 커밋 시 반드시 함께 포함해야 한다.
+- `analyzer/app/detection/port_scan.py`는 `analyzer/app/main.py`에서 import하므로 커밋 시 반드시 함께 포함해야 한다.
 
 ## 백엔드 서버
 
@@ -223,7 +224,7 @@ Alembic migration은 `migrations/`에 구성되어 있다.
 
 ## 커밋 전 체크 사항
 
-- 분석 서버 커밋에는 `analyzer/main.py`, `analyzer/traffic_stats.py`, `analyzer/port_scan_detector.py`, `analyzer/analyzer-backend-api.md` 포함 여부를 확인한다.
+- 분석 서버 커밋에는 `analyzer/app/main.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/detection/port_scan.py`, `analyzer/analyzer-backend-api.md` 포함 여부를 확인한다.
 - 백엔드 커밋에는 `backend/app/api/dashboard.py`, `backend/app/db/influxdb.py`, `backend/app/schemas/analyzer.py`, `backend/backend-api.md` 포함 여부를 확인한다.
 - 프론트엔드 커밋에는 `frontend/app/page.tsx`, `frontend/hooks/useRealtime.ts`, `frontend/components/dashboard/ProtocolBars.tsx`, `frontend/types/analyzer.ts` 포함 여부를 확인한다.
 - `__pycache__/`, `.DS_Store` 같은 생성 파일은 커밋하지 않는 것이 좋다.
