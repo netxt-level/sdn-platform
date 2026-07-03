@@ -9,7 +9,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, DoS/Port Scan 의심 탐지, 백엔드 전송 구현 |
 | 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회 API, WebSocket broadcast 구현 |
 | 프론트엔드 | `frontend/` | 실시간 대시보드와 운영 화면 구현 |
-| 인프라 | `docker-compose.yml`, `migrations/` | PostgreSQL, InfluxDB, Elasticsearch, Alembic migration 구성 |
 
 ## 전체 구조
 
@@ -62,9 +61,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 ### Infrastructure
 
 - Docker Compose
-- PostgreSQL 16
-- InfluxDB 2.7
-- Elasticsearch 8.15.3
 
 ## 구현된 기능
 
@@ -109,12 +105,12 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | 화면 | 경로 | 상태 |
 |---|---|---|
 | 대시보드 | `/` | 구현됨 |
-| Flow Rules | `/flow-rules` | 구현됨 |
-| Path | `/path` | 구현됨 |
-| Security Events | `/security/events` | 구현됨 |
-| Security Rules | `/security/rules` | 구현됨 |
-| Topology | `/topology` | 구현됨 |
-| Settings | `/settings` | 구현됨 |
+| Flow Rules | `/flow-rules` | 구현중 |
+| Path | `/path` | 구현중 |
+| Security Events | `/security/events` | 구현중 |
+| Security Rules | `/security/rules` | 구현중 |
+| Topology | `/topology` | 구현중 |
+| Settings | `/settings` | 구현중 |
 
 ## API 요약
 
