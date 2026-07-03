@@ -1,12 +1,21 @@
 from logging.config import fileConfig
 import os
 from pathlib import Path
+import sys
 from urllib.parse import quote_plus
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_PATH = PROJECT_ROOT / "backend"
+if str(BACKEND_PATH) not in sys.path:
+    sys.path.insert(0, str(BACKEND_PATH))
+
+from app.models.base import Base
+import app.models
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -17,11 +26,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -30,7 +35,7 @@ target_metadata = None
 
 
 def load_env_file() -> None:
-    env_path = Path(__file__).resolve().parents[1] / ".env"
+    env_path = PROJECT_ROOT / ".env"
     if not env_path.exists():
         return
 
