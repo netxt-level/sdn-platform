@@ -64,7 +64,11 @@ class BackendClient:
 
         # 백엔드가 HTTP 오류 상태 코드를 반환한 경우
         except requests.exceptions.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response else "unknown"
+            status_code = (
+                exc.response.status_code
+                if exc.response is not None
+                else "unknown"
+            )
             logger.warning(
                 "%s 전송 실패: HTTP %s 응답을 받았습니다.",
                 label,
