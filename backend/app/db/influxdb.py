@@ -1,13 +1,11 @@
-import os
 import re
 from datetime import datetime
 from typing import Any
 
-from dotenv import load_dotenv
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-load_dotenv()
+from app.core.config import settings
 
 _DURATION_SECONDS = {
     "s": 1,
@@ -16,13 +14,6 @@ _DURATION_SECONDS = {
     "d": 60 * 60 * 24,
     "w": 60 * 60 * 24 * 7,
 }
-
-# env 파일 환경변수 확인
-def get_env(name: str, default: str | None = None) -> str:
-    value = os.getenv(name, default)
-    if value is None:
-        raise RuntimeError(f"Missing environment variable: {name}")
-    return value
 
 # API payload의 timestamp 문자열을 InfluxDB에 넣을 수 있는 datetime으로 변경
 def parse_timestamp(value: str | datetime) -> datetime:
@@ -33,13 +24,10 @@ def parse_timestamp(value: str | datetime) -> datetime:
 
 # InfluxDB 접속 클라이언트 생성
 def get_influx_client() -> InfluxDBClient:
-    host = get_env("INFLUXDB_HOST", "localhost")
-    port = get_env("INFLUXDB_PORT", "8086")
-
     return InfluxDBClient(
-        url=f"http://{host}:{port}",
-        token=get_env("INFLUXDB_TOKEN"),
-        org=get_env("INFLUXDB_ORG"),
+        url=settings.influxdb_url,
+        token=settings.influxdb_token,
+        org=settings.influxdb_org,
     )
 
 
@@ -61,7 +49,7 @@ def query_traffic_series(range_value: str, bucket_value: str) -> list[dict[str, 
     bucket_seconds = duration_to_seconds(bucket_value)
 
     query = f'''
-from(bucket: "{get_env("INFLUXDB_BUCKET")}")
+from(bucket: "{settings.influxdb_bucket}")
   |> range(start: -{range_value})
   |> filter(fn: (r) => r["_measurement"] == "traffic_summary")
   |> filter(fn: (r) => r["_field"] == "total_packets" or r["_field"] == "total_bits")
@@ -72,7 +60,7 @@ from(bucket: "{get_env("INFLUXDB_BUCKET")}")
 
     client = get_influx_client()
     try:
-        tables = client.query_api().query(query, org=get_env("INFLUXDB_ORG"))
+        tables = client.query_api().query(query, org=settings.influxdb_org)
 
         items = []
         for table in tables:
@@ -97,7 +85,7 @@ def query_protocol_stats(range_value: str) -> list[dict[str, Any]]:
     range_value = validate_duration(range_value)
 
     query = f'''
-from(bucket: "{get_env("INFLUXDB_BUCKET")}")
+from(bucket: "{settings.influxdb_bucket}")
   |> range(start: -{range_value})
   |> filter(fn: (r) => r["_measurement"] == "protocol_stats")
   |> filter(fn: (r) => r["_field"] == "packet_count")
@@ -108,7 +96,7 @@ from(bucket: "{get_env("INFLUXDB_BUCKET")}")
 
     client = get_influx_client()
     try:
-        tables = client.query_api().query(query, org=get_env("INFLUXDB_ORG"))
+        tables = client.query_api().query(query, org=settings.influxdb_org)
 
         protocol_counts = []
         total_packets = 0
@@ -150,7 +138,7 @@ def query_suspicious_hosts(range_value: str) -> list[dict[str, Any]]:
     range_value = validate_duration(range_value)
 
     query = f'''
-from(bucket: "{get_env("INFLUXDB_BUCKET")}")
+from(bucket: "{settings.influxdb_bucket}")
   |> range(start: -{range_value})
   |> filter(fn: (r) => r["_measurement"] == "suspicious_host_traffic")
   |> filter(fn: (r) => r["_field"] == "bps" or r["_field"] == "pps" or r["_field"] == "reason")
@@ -162,7 +150,7 @@ from(bucket: "{get_env("INFLUXDB_BUCKET")}")
 
     client = get_influx_client()
     try:
-        tables = client.query_api().query(query, org=get_env("INFLUXDB_ORG"))
+        tables = client.query_api().query(query, org=settings.influxdb_org)
 
         items = []
         for table in tables:
@@ -262,8 +250,8 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
 
         # 여러 measurement의 point들을 한 번에 저장
         write_api.write(
-            bucket=get_env("INFLUXDB_BUCKET"),
-            org=get_env("INFLUXDB_ORG"),
+            bucket=settings.influxdb_bucket,
+            org=settings.influxdb_org,
             record=points,
         )
     finally:
@@ -330,8 +318,8 @@ def write_detection_summary(detection: dict[str, Any]) -> None:
 
         # network_status와 suspicious_host_traffic point들을 저장
         write_api.write(
-            bucket=get_env("INFLUXDB_BUCKET"),
-            org=get_env("INFLUXDB_ORG"),
+            bucket=settings.influxdb_bucket,
+            org=settings.influxdb_org,
             record=points,
         )
     finally:

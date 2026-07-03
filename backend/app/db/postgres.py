@@ -1,30 +1,14 @@
-import os
-
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-load_dotenv()
-
-# 환경변수 값을 가져오는 공통 함수
-def get_env(name: str, default: str | None = None) -> str:
-    value = os.getenv(name, default)
-    if value is None:
-        raise RuntimeError(f"Missing environment variable: {name}")
-    return value
+from app.core.config import settings
 
 
 # PostgreSQL 연결에 사용할 SQLAlchemy Engine을 생성
 def get_postgres_engine() -> Engine:
-    host = get_env("POSTGRES_HOST", "localhost")
-    port = get_env("POSTGRES_PORT", "5432")
-    user = get_env("POSTGRES_USER")
-    password = get_env("POSTGRES_PASSWORD")
-    db = get_env("POSTGRES_DB")
-
     # 커넥션 풀에서 꺼낸 연결이 살아있는지 미리 확인
     return create_engine(
-        f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}",
+        settings.postgres_dsn,
         pool_pre_ping=True,
     )
 

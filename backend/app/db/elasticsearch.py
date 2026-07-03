@@ -1,28 +1,16 @@
-import os
 import time
 
-from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
 from elasticsearch import ConnectionError as ElasticsearchConnectionError
 
-load_dotenv()
-
-# env 파일 환경변수 로드
-def get_env(name: str, default: str | None = None) -> str:
-    value = os.getenv(name, default)
-    if value is None:
-        raise RuntimeError(f"Missing environment variable: {name}")
-    return value
+from app.core.config import settings
 
 # elasticsearch 클라이언트 생성 함수
 def get_elasticsearch_client() -> Elasticsearch:
-
-    host = get_env("ELASTICSEARCH_HOST", "localhost")
-    port = get_env("ELASTICSEARCH_HTTP_PORT", "9200")
     # password = get_env("ELASTIC_PASSWORD")
 
     return Elasticsearch(
-        f"http://{host}:{port}",
+        settings.elasticsearch_url,
         # basic_auth=("elastic", password),
     )
 
