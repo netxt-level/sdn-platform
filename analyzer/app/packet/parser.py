@@ -1,5 +1,5 @@
 from scapy.layers.inet import IP, TCP, UDP, ICMP
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import ARP, Ether
 
 # 캡처된 패킷에서 필요한 메타데이터를 추출하는 함수
 def parse_packet(packet):
@@ -15,6 +15,22 @@ def parse_packet(packet):
         metadata["src_mac"] = packet[Ether].src # 출발지 MAC 주소
         metadata["dst_mac"] = packet[Ether].dst # 목적지 MAC 주소
     
+    # ARP는 IP 계층이 없어서 별도로 먼저 처리
+    if ARP in packet:
+        arp_packet = packet[ARP]
+        metadata["protocol"] = "ARP"
+        metadata["eth_type"] = "ARP"
+        metadata["src_ip"] = arp_packet.psrc
+        metadata["dst_ip"] = arp_packet.pdst
+        metadata["src_mac"] = metadata.get("src_mac") or arp_packet.hwsrc
+        metadata["dst_mac"] = metadata.get("dst_mac") or arp_packet.hwdst
+        metadata["arp_opcode"] = "reply" if arp_packet.op == 2 else "request"
+        metadata["arp_sender_ip"] = arp_packet.psrc
+        metadata["arp_sender_mac"] = arp_packet.hwsrc
+        metadata["arp_target_ip"] = arp_packet.pdst
+        metadata["arp_target_mac"] = arp_packet.hwdst
+        return metadata
+
     # 패킷에 IP 계층이 포함되어 있는지 확인    
     if IP in packet:
         metadata["src_ip"] = packet[IP].src # 출발지 IP 주소

@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from .backend_contract import result_to_backend_payload
+from .engine import SecurityAnalysisEngine
+from .io import load_security_input
+from .ryu_adapter import flow_rules_from_policies
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run an SDN security scenario sample.")
+    parser.add_argument("--input", required=True, help="Scenario JSON path.")
+    parser.add_argument("--datapath-id", default="s1", help="Datapath id for flow-rule output.")
+    parser.add_argument("--backend-out", help="Optional backend payload output path.")
+    parser.add_argument("--flow-out", help="Optional flow-rule output path.")
+    args = parser.parse_args()
+
+    packets, links, baseline, config = load_security_input(args.input)
+    result = SecurityAnalysisEngine(config=config, baseline=baseline).analyze(
+        packets,
+        links=links,
+    )
+    backend_payload = result_to_backend_payload(result)
+    flow_payload = {
+        "flow_rules": flow_rules_from_policies(
+            result.policies,
+            datapath_id=args.datapath_id,
+        ),
+    }
+
+    if args.backend_out:
+        _write_json(args.backend_out, backend_payload)
+    if args.flow_out:
+        _write_json(args.flow_out, flow_payload)
+
+    print(json.dumps(backend_payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _write_json(path: str, payload: dict[str, object]) -> None:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

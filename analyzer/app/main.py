@@ -10,6 +10,7 @@ from app.detection.traffic_stats import TrafficStatsBuilder
 from app.packet.capture import PacketCaptureError, start_capture
 from app.packet.parser import parse_packet
 from app.packet.summary import PacketSummaryBuilder
+from app.security import DetectionConfig, SecurityRuntime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,6 +41,18 @@ summary_builder = PacketSummaryBuilder(
 # packet-summary와 원본 패킷 목록을 기반으로 detection-summary payload 생성
 traffic_builder = TrafficStatsBuilder(
     analyzer_id=ANALYZER_ID,
+)
+
+security_runtime = SecurityRuntime(
+    config=DetectionConfig(
+        gateway_ip=config.security_gateway_ip,
+        gateway_mac=config.security_gateway_mac,
+        trusted_ip_mac={
+            config.security_gateway_ip: config.security_gateway_mac,
+        },
+    ),
+    datapath_id="s1",
+    event_cooldown_seconds=config.security_event_cooldown_sec,
 )
 
 # 백엔드 API 호출을 담당하는 클라이언트
@@ -102,6 +115,11 @@ def analysis_loop():
                 extra_suspicious_hosts=port_scan_hosts,
             )
 
+            security_output = security_runtime.analyze_snapshot(
+                packets_snapshot,
+                datapath_id="s1",
+            )
+
             # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
             packet_summary_sent = backend_client.send_packet_summary(
                 packet_summary
@@ -111,8 +129,14 @@ def analysis_loop():
                 traffic_stats
             )
 
+            security_events_sent = True
+            if security_output.backend_payload["events"]:
+                security_events_sent = backend_client.send_security_events(
+                    security_output.backend_payload
+                )
+
             # 두 요약 전송이 모두 성공한 경우에만 백엔드 연결 상태를 정상으로 표시
-            if packet_summary_sent and traffic_stats_sent:
+            if packet_summary_sent and traffic_stats_sent and security_events_sent:
                 analyzer_status.mark_summary_sent()
             else:
                 analyzer_status.mark_backend_failed(

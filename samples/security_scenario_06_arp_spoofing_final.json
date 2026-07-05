@@ -1,0 +1,39 @@
+{
+  "config": {
+    "window_seconds": 10,
+    "trusted_ip_mac": {
+      "10.0.0.254": "00:00:00:00:ff:ff"
+    },
+    "gateway_ip": "10.0.0.254",
+    "gateway_mac": "00:00:00:00:ff:ff",
+    "arp_reply_pps_threshold": 20
+  },
+  "baseline_packets": [
+    {
+      "timestamp": "2026-07-03T00:00:00+00:00",
+      "protocol": "ARP",
+      "src_mac": "00:00:00:00:ff:ff",
+      "arp_opcode": "reply",
+      "arp_sender_ip": "10.0.0.254",
+      "arp_sender_mac": "00:00:00:00:ff:ff",
+      "arp_target_ip": "10.0.0.1",
+      "arp_target_mac": "00:00:00:00:00:01",
+      "packet_count": 1
+    }
+  ],
+  "packets": [
+    {
+      "timestamp": "2026-07-03T00:00:09+00:00",
+      "protocol": "ARP",
+      "src_mac": "00:00:00:00:00:02",
+      "dst_mac": "ff:ff:ff:ff:ff:ff",
+      "arp_opcode": "reply",
+      "arp_sender_ip": "10.0.0.254",
+      "arp_sender_mac": "00:00:00:00:00:02",
+      "arp_target_ip": "10.0.0.1",
+      "arp_target_mac": "00:00:00:00:00:01",
+      "packet_count": 5
+    }
+  ],
+  "links": []
+}

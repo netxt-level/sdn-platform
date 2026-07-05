@@ -29,6 +29,13 @@ class BackendClient:
         )
 
     # 분석 서버 실행/캡처/백엔드 연결 상태를 백엔드에 전송
+    def send_security_events(self, security_payload: dict) -> bool:
+        return self._post(
+            path="/api/security/events",
+            payload=security_payload,
+            label="security events",
+        )
+
     def send_analyzer_status(self, analyzer_status: dict) -> bool:
         return self._post(
             path="/api/analyzer/status",

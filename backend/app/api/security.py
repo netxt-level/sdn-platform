@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Query
 
 from app.services.security_service import SecurityService
@@ -11,3 +13,10 @@ def get_security_events(
     limit: int = Query(50, ge=1, le=500),
 ):
     return security_service.get_events(limit)
+
+
+@router.post("/events")
+async def receive_security_events(payload: dict[str, Any]):
+    await security_service.receive_events(payload)
+
+    return {"ok": True}
