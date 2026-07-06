@@ -28,7 +28,7 @@ export default function SecurityEventsPage() {
     <>
       <PageHeader
         title="보안 이벤트"
-        description="ICMP Flood, SYN Flood, UDP Flood, Port Scan 같은 탐지 이벤트와 대응 상태를 관리합니다."
+        description="ICMP Flood, Port Scan 탐지 이벤트와 대응 상태를 관리합니다."
         connected={state.connected}
         source={state.source}
       />
@@ -46,7 +46,7 @@ export default function SecurityEventsPage() {
           title="보안 이벤트 목록"
           action={
             <div className="flex flex-wrap items-center gap-2">
-              {["전체", "ICMP Flood", "SYN Flood", "UDP Flood", "Port Scan"].map((label, index) => (
+              {["전체", "ICMP Flood", "Port Scan"].map((label, index) => (
                 <button
                   key={label}
                   className={[

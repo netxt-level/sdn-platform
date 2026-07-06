@@ -197,7 +197,7 @@ POST /api/analyzer/detection-summary
 POST /api/security/events
 ```
 
-분석 서버가 포트 스캔, ICMP/UDP/SYN flood, ARP spoofing 같은 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`다. ARP spoofing은 같은 형식으로 합류한다.
+분석 서버가 포트 스캔, ICMP flood 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`다.
 
 ### Request Body
 
@@ -246,17 +246,17 @@ POST /api/security/events
 | `event_id` | `string` | O | 이벤트 식별자. 같은 탐지 대상은 안정적인 ID를 사용 |
 | `timestamp` | `datetime` | O | 이벤트 발생/생성 시각 |
 | `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `DDOS`, `SPOOFING` |
-| `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`, 예정 `ARP_SPOOFING` |
-| `severity` | `string` | O | 위험도. 현재 `medium`, `high`, 예정 `critical` |
+| `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `DDOS` |
+| `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD` |
+| `severity` | `string` | O | 위험도. 현재 `medium`, `high` |
 | `confidence` | `string` | O | 탐지 신뢰도. 현재 `medium`, `high` |
 | `status` | `string` | O | 이벤트 상태. 최초 생성값은 `detected` |
 | `src_ip` | `string` | O | 공격/의심 트래픽 출발지 IP |
 | `dst_ip` | `string` | O | 공격/의심 트래픽 대상 IP |
 | `protocol` | `string` | O | 프로토콜 |
 | `detection_rule` | `string` | O | 적용된 탐지 기준 이름 |
-| `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `rate_limit`, 예정 `drop` |
-| `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2`, 예정 `L3` |
+| `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `rate_limit` |
+| `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2` |
 | `evidence` | `object` | O | 탐지 유형별 상세 근거 |
 | `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 정보. analyzer 1단계에서는 `null` |
 
@@ -266,9 +266,6 @@ POST /api/security/events
 |---|---|---|
 | `PORT_SCAN` | `tcp_syn_unique_ports` | `window_seconds`, `unique_dst_port_count` |
 | `ICMP_FLOOD` | `icmp_pps_threshold` | `window_seconds`, `packet_count`, `pps`, `pps_threshold` |
-| `UDP_FLOOD` | `udp_pps_or_bps_threshold` | `window_seconds`, `packet_count`, `pps`, `bps`, `pps_threshold`, `bps_threshold` |
-| `SYN_FLOOD` | `tcp_syn_pps_threshold` | `window_seconds`, `packet_count`, `syn_count`, `syn_pps`, `pps_threshold` |
-| `ARP_SPOOFING` | `gateway_mac_mismatch` 예정 | `spoofed_ip`, `trusted_mac`, `observed_mac`, `arp_opcode` |
 
 ### 백엔드 처리
 

@@ -127,45 +127,6 @@ export const mockSecurityEvents: SecurityEvent[] = [
     pps: 42,
     bps: 172000,
     action: "block"
-  },
-  {
-    id: "evt-1040",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-    attack_type: "SYN_FLOOD",
-    severity: "high",
-    status: "blocked",
-    src_ip: "10.0.0.2",
-    dst_ip: "10.0.0.4",
-    protocol: "TCP",
-    pps: 438,
-    bps: 904000,
-    action: "block"
-  },
-  {
-    id: "evt-1039",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    attack_type: "UDP_FLOOD",
-    severity: "medium",
-    status: "detected",
-    src_ip: "10.0.0.3",
-    dst_ip: "10.0.0.4",
-    protocol: "UDP",
-    pps: 164,
-    bps: 382000,
-    action: "reroute"
-  },
-  {
-    id: "evt-1038",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 32).toISOString(),
-    attack_type: "UNKNOWN",
-    severity: "low",
-    status: "resolved",
-    src_ip: "10.0.0.1",
-    dst_ip: "10.0.0.4",
-    protocol: "TCP",
-    pps: 24,
-    bps: 76000,
-    action: "none"
   }
 ];
 

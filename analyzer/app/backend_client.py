@@ -28,7 +28,7 @@ class BackendClient:
             label="traffic stats",
         )
 
-    # 포트 스캔, DDoS, ARP spoofing 등 보안 이벤트를 백엔드에 전송
+    # 포트 스캔, ICMP flood 보안 이벤트를 백엔드에 전송
     def send_security_events(self, security_events: dict) -> bool:
         return self._post(
             path="/api/security/events",

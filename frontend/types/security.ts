@@ -1,9 +1,6 @@
 export type AttackType =
   | "ICMP_FLOOD"
-  | "SYN_FLOOD"
-  | "UDP_FLOOD"
-  | "PORT_SCAN"
-  | "UNKNOWN";
+  | "PORT_SCAN";
 
 export type SecuritySeverity = "low" | "medium" | "high" | "critical";
 

@@ -54,14 +54,12 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 ## 현재 탐지 범위
 
-현재 구현된 탐지는 다음 네 가지다.
+현재 구현된 탐지는 다음 두 가지다.
 
 | 탐지 | 구현 위치 | 설명 |
 |---|---|---|
 | Port Scan | `app/detection/port_scan.py`, `app/detection/security_events.py` | 짧은 시간 안에 같은 대상의 여러 TCP 목적지 포트로 SYN 패킷을 보내면 탐지 |
 | ICMP Flood | `app/detection/security_events.py` | ICMP pps가 기준 이상이면 탐지 |
-| UDP Flood | `app/detection/security_events.py` | UDP pps 또는 bps가 기준 이상이면 탐지 |
-| SYN Flood | `app/detection/security_events.py` | SYN-only TCP pps가 기준 이상이면 탐지 |
 
 탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다. `PORT_SCAN`, `ICMP_FLOOD`의 탐지 조건과 대응 레벨 정책은 `../SECURITY_DETECTION_POLICY.md`를 기준으로 한다.
 

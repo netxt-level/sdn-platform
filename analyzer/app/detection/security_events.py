@@ -11,15 +11,9 @@ class SecurityEventBuilder:
         self,
         analyzer_id: str = "analyzer-1",
         icmp_pps_threshold: float = 1000,
-        udp_pps_threshold: float = 1000,
-        udp_bps_threshold: float = 5_000_000,
-        syn_pps_threshold: float = 1000,
     ):
         self.analyzer_id = analyzer_id
         self.icmp_pps_threshold = icmp_pps_threshold
-        self.udp_pps_threshold = udp_pps_threshold
-        self.udp_bps_threshold = udp_bps_threshold
-        self.syn_pps_threshold = syn_pps_threshold
 
     def build_security_events(
         self,
@@ -97,11 +91,11 @@ class SecurityEventBuilder:
         window_sec: int | float,
         packets: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        grouped = defaultdict(lambda: {"packets": 0, "bits": 0, "syn_packets": 0})
+        grouped = defaultdict(lambda: {"packets": 0})
 
         for packet in packets:
             protocol = packet.get("protocol")
-            if protocol not in {"ICMP", "UDP", "TCP"}:
+            if protocol != "ICMP":
                 continue
 
             src_ip = packet.get("src_ip")
@@ -111,17 +105,12 @@ class SecurityEventBuilder:
 
             key = (protocol, src_ip, dst_ip)
             grouped[key]["packets"] += 1
-            grouped[key]["bits"] += int(packet.get("packet_size", 0)) * 8
-
-            if protocol == "TCP" and _is_syn_without_ack(packet.get("tcp_flags", "")):
-                grouped[key]["syn_packets"] += 1
 
         events = []
         divisor = window_sec if window_sec > 0 else 1
 
         for (protocol, src_ip, dst_ip), stats in grouped.items():
             pps = stats["packets"] / divisor
-            bps = stats["bits"] / divisor
 
             if protocol == "ICMP" and pps >= self.icmp_pps_threshold:
                 events.append(
@@ -142,58 +131,6 @@ class SecurityEventBuilder:
                             "packet_count": stats["packets"],
                             "pps": pps,
                             "pps_threshold": self.icmp_pps_threshold,
-                        },
-                    )
-                )
-
-            if protocol == "UDP" and (
-                pps >= self.udp_pps_threshold or bps >= self.udp_bps_threshold
-            ):
-                events.append(
-                    self._event(
-                        timestamp=timestamp,
-                        attack_category="DDOS",
-                        attack_type="UDP_FLOOD",
-                        severity="high",
-                        confidence="medium",
-                        src_ip=src_ip,
-                        dst_ip=dst_ip,
-                        protocol="UDP",
-                        detection_rule="udp_pps_or_bps_threshold",
-                        recommended_action="rate_limit",
-                        response_level="L2",
-                        evidence={
-                            "window_seconds": window_sec,
-                            "packet_count": stats["packets"],
-                            "pps": pps,
-                            "bps": bps,
-                            "pps_threshold": self.udp_pps_threshold,
-                            "bps_threshold": self.udp_bps_threshold,
-                        },
-                    )
-                )
-
-            syn_pps = stats["syn_packets"] / divisor
-            if protocol == "TCP" and syn_pps >= self.syn_pps_threshold:
-                events.append(
-                    self._event(
-                        timestamp=timestamp,
-                        attack_category="DDOS",
-                        attack_type="SYN_FLOOD",
-                        severity="high",
-                        confidence="medium",
-                        src_ip=src_ip,
-                        dst_ip=dst_ip,
-                        protocol="TCP",
-                        detection_rule="tcp_syn_pps_threshold",
-                        recommended_action="rate_limit",
-                        response_level="L2",
-                        evidence={
-                            "window_seconds": window_sec,
-                            "packet_count": stats["packets"],
-                            "syn_count": stats["syn_packets"],
-                            "syn_pps": syn_pps,
-                            "pps_threshold": self.syn_pps_threshold,
                         },
                     )
                 )
@@ -241,11 +178,6 @@ class SecurityEventBuilder:
             "evidence": evidence,
             "mitigation": None,
         }
-
-
-def _is_syn_without_ack(flags: Any) -> bool:
-    text = str(flags)
-    return "S" in text and "A" not in text
 
 
 def _event_id(*parts: str) -> str:

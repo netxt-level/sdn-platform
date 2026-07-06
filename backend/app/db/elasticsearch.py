@@ -20,7 +20,7 @@ def create_elasticsearch_indices() -> None:
 
     생성 대상:
         1. sdn-security-events
-            - 포트 스캔, DDoS, ARP spoofing 같은 보안 이벤트 저장
+            - 포트 스캔, ICMP flood 같은 보안 이벤트 저장
     """
 
     # Elasticsearch 클라이언트 생성
@@ -132,11 +132,7 @@ def query_suspicious_hosts_from_security_events(
                 "ip": ip,
                 "protocol": protocol,
                 "bps": float(evidence.get("bps") or 0),
-                "pps": float(
-                    evidence.get("pps")
-                    or evidence.get("syn_pps")
-                    or 0
-                ),
+                "pps": float(evidence.get("pps") or 0),
                 "reasons": [reason],
                 "attack_type": attack_type,
                 "severity": event.get("severity"),
