@@ -263,13 +263,13 @@ InfluxDB `protocol_stats` measurement에서 프로토콜별 패킷 수를 조회
 GET /api/dashboard/suspicious-hosts
 ```
 
-InfluxDB `suspicious_host_traffic` measurement에서 최신 의심 호스트 목록을 조회한다. 이 endpoint는 현재 legacy 경로이며, 다음 단계에서 Elasticsearch `sdn-security-events` 기반으로 재구성한다.
+Elasticsearch `sdn-security-events` 인덱스의 최신 보안 이벤트에서 의심 호스트 목록을 파생해 조회한다.
 
 ### Query Parameters
 
 | 이름 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---:|---|---|
-| `range` | `duration` | X | `1w` | 조회 기간 |
+| `range` | `duration` | X | `1w` | 과거 클라이언트 호환용 파라미터. 현재 응답은 최신 보안 이벤트 기준 |
 
 ### Response Body
 
@@ -281,15 +281,17 @@ InfluxDB `suspicious_host_traffic` measurement에서 최신 의심 호스트 목
     {
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
-      "host": "52.182.143.209",
-      "ip": "52.182.143.209",
+      "host": "10.0.0.11",
+      "ip": "10.0.0.11",
       "protocol": "TCP",
-      "bps": 81192.0,
-      "pps": 16.0,
+      "bps": 0.0,
+      "pps": 0.0,
       "reasons": [
-        "DoS"
+        "tcp_syn_unique_ports"
       ],
-      "attack_type": "DOS"
+      "attack_type": "PORT_SCAN",
+      "severity": "medium",
+      "status": "detected"
     }
   ]
 }

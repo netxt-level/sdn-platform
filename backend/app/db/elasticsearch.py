@@ -104,3 +104,54 @@ def search_security_events(limit: int = 50) -> list[dict]:
         return items
     finally:
         es.close()
+
+
+def query_suspicious_hosts_from_security_events(
+    limit: int = 100,
+) -> list[dict]:
+    events = search_security_events(limit)
+    hosts: dict[tuple[str, str, str], dict] = {}
+
+    for event in events:
+        ip = event.get("src_ip")
+        if not ip:
+            continue
+
+        protocol = event.get("protocol") or "UNKNOWN"
+        attack_type = event.get("attack_type") or "UNKNOWN"
+        key = (ip, protocol, attack_type)
+        evidence = event.get("evidence") or {}
+        reason = event.get("detection_rule") or attack_type
+
+        hosts.setdefault(
+            key,
+            {
+                "timestamp": event.get("timestamp") or event.get("@timestamp"),
+                "analyzer_id": event.get("analyzer_id"),
+                "host": ip,
+                "ip": ip,
+                "protocol": protocol,
+                "bps": float(evidence.get("bps") or 0),
+                "pps": float(
+                    evidence.get("pps")
+                    or evidence.get("syn_pps")
+                    or 0
+                ),
+                "reasons": [reason],
+                "attack_type": attack_type,
+                "severity": event.get("severity"),
+                "status": event.get("status"),
+            },
+        )
+
+    return sorted(
+        hosts.values(),
+        key=lambda item: (
+            item.get("severity") == "critical",
+            item.get("severity") == "high",
+            item["bps"],
+            item["pps"],
+            item["ip"],
+        ),
+        reverse=True,
+    )
