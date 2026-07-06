@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.schemas.analyzer import (
+    AnalyzerChangeMessageRequest,
     AnalyzerStatusRequest,
     DetectionSummaryRequest,
     PacketSummaryRequest,
@@ -38,5 +39,13 @@ async def receive_packet_summary(payload: PacketSummaryRequest):
 async def receive_detection_summary(payload: DetectionSummaryRequest):
     data = payload.model_dump(mode="json")
     await analyzer_service.receive_detection_summary(data)
+
+    return {"ok": True}
+
+
+@router.post("/changes")
+async def receive_analyzer_change(payload: AnalyzerChangeMessageRequest):
+    data = payload.model_dump(mode="json")
+    await analyzer_service.receive_change_message(data)
 
     return {"ok": True}

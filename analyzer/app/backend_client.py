@@ -44,6 +44,14 @@ class BackendClient:
             label="analyzer status",
         )
 
+    # 분석 서버에서 감지한 변경 메시지를 백엔드에 전송
+    def send_change_message(self, change_message: dict) -> bool:
+        return self._post(
+            path="/api/analyzer/changes",
+            payload=change_message,
+            label="analyzer change message",
+        )
+
     # 모든 전송 API가 공유하는 POST 처리 함수
     def _post(self, path: str, payload: dict, label: str) -> bool:
         # 전송 실패는 예외를 밖으로 던지지 않고 False로 반환해 분석 루프를 계속 유지한다.

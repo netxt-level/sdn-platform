@@ -168,6 +168,64 @@ POST /api/analyzer/detection-summary
 - InfluxDB `network_status` measurement에 저장한다.
 - WebSocket으로 `{"type":"detection_summary","data":...}` 메시지를 broadcast한다.
 
+### 2.5 분석 서버 변경 메시지 수신
+
+```http
+POST /api/analyzer/changes
+```
+
+분석 서버가 생성한 변경 메시지를 수신한다. 메시지 세부 구조가 확정되기 전 단계이므로 공통 추적 필드만 검증하고, 변경 상세는 `payload`와 추가 필드로 받을 수 있다.
+
+### Request Body
+
+```json
+{
+  "timestamp": "2026-05-24T10:00:00+00:00",
+  "analyzer_id": "analyzer-1",
+  "message_type": "analyzer_change",
+  "change_type": "security_policy",
+  "resource_type": "flow_rule_candidate",
+  "resource_id": "candidate-001",
+  "operation": "create",
+  "sequence": 1,
+  "correlation_id": "corr-001",
+  "payload": {
+    "src_ip": "10.0.0.10",
+    "dst_ip": "10.0.0.20",
+    "recommended_action": "drop"
+  },
+  "metadata": {}
+}
+```
+
+### 필드
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `timestamp` | `datetime` | O | 변경 메시지 생성 시각 |
+| `analyzer_id` | `string` | O | 분석 서버 식별자 |
+| `message_type` | `string` | X | 메시지 타입. 기본값은 `analyzer_change` |
+| `change_type` | `string \| null` | X | 변경 유형 |
+| `resource_type` | `string \| null` | X | 변경 대상 리소스 타입 |
+| `resource_id` | `string \| null` | X | 변경 대상 리소스 ID |
+| `operation` | `string \| null` | X | `create`, `update`, `delete` 등 변경 작업 |
+| `sequence` | `integer \| null` | X | 분석 서버 내 메시지 순번 |
+| `correlation_id` | `string \| null` | X | 요청 추적용 상관 ID |
+| `payload` | `object` | X | 변경 상세 payload |
+| `metadata` | `object` | X | 부가 메타데이터 |
+
+### Response Body
+
+```json
+{
+  "ok": true
+}
+```
+
+### Side Effects
+
+- WebSocket으로 `{"type":"analyzer_change","data":...}` 메시지를 broadcast한다.
+
 ## 3. Dashboard API
 
 ### 3.1 대시보드 요약
