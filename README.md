@@ -6,7 +6,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 | 영역 | 경로 | 진행 상태 |
 |---|---|---|
-| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, DoS/Port Scan 의심 탐지, 백엔드 전송 구현 |
+| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ICMP Flood/Port Scan 탐지, 백엔드 전송 구현 |
 | 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회 API, WebSocket broadcast 구현 |
 | 프론트엔드 | `frontend/` | 실시간 대시보드와 운영 화면 구현 |
 
@@ -74,7 +74,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 프로토콜별 패킷 수 집계
 - 출발지/목적지/프로토콜별 host traffic 집계
 - 전체 패킷 수와 전체 bit 수 계산
-- bps/pps 기반 DoS 의심 호스트 탐지
+- ICMP pps 기반 ICMP Flood 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
 - 분석 서버 상태 주기적 보고
 - 백엔드 전송 실패, timeout, HTTP 오류 처리
@@ -98,7 +98,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 최근 5분 트래픽 시계열 차트
 - 최근 1분 프로토콜 통계 표시
 - 의심 호스트 목록 표시
-- DoS/Port Scan 유형별 필터링
+- ICMP Flood/Port Scan 유형별 필터링
 - WebSocket 실시간 수신
 - 백엔드 히스토리 API 초기 조회
 - DB 의심 호스트 polling 및 실시간 데이터 병합

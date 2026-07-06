@@ -373,6 +373,8 @@ Elasticsearch `sdn-security-events` 인덱스에서 최신 보안 이벤트를 �
       "id": "elastic-document-id",
       "@timestamp": "2026-05-24T10:00:00+00:00",
       "event_id": "evt-4c8a9d4d4d5a",
+      "event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
+      "dedup_key": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
       "attack_category": "RECON",
@@ -384,11 +386,20 @@ Elasticsearch `sdn-security-events` 인덱스에서 최신 보안 이벤트를 �
       "dst_ip": "10.0.0.4",
       "protocol": "TCP",
       "detection_rule": "tcp_syn_unique_ports",
-      "recommended_action": "monitor",
-      "response_level": "L1",
+      "recommended_action": "alert",
+      "response_level": "L2",
       "evidence": {
+        "matched_conditions": [
+          "tcp_syn_without_ack",
+          "same_source_target_pair",
+          "unique_dst_port_threshold_exceeded",
+          "syn_count_threshold_satisfied"
+        ],
         "window_seconds": 5,
-        "unique_dst_port_count": 20
+        "unique_dst_port_count": 20,
+        "unique_dst_ports": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+        "syn_count": 20,
+        "score": 70
       },
       "mitigation": null
     }

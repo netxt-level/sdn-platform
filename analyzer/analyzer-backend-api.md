@@ -193,7 +193,6 @@ POST /api/analyzer/detection-summary
 ### 백엔드 처리
 
 - InfluxDB에 `network_status` measurement로 저장한다.
-- Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
 ```json
@@ -334,7 +333,7 @@ POST /api/security/events
 | `dst_ip` | `string` | O | 공격/의심 트래픽 대상 IP |
 | `protocol` | `string` | O | 프로토콜 |
 | `detection_rule` | `string` | O | 적용된 탐지 기준 이름 |
-| `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `rate_limit` |
+| `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `alert`, `rate_limit` |
 | `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2` |
 | `evidence` | `object` | O | 탐지 유형별 상세 근거 |
 | `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 후보. `PORT_SCAN`과 `L1` 이벤트는 `null`, `ICMP_FLOOD` L2는 `RATE_LIMIT` 후보 |
@@ -348,12 +347,12 @@ POST /api/security/events
 
 ### 백엔드 처리
 
-백엔드 구현 단계에서 아래 동작을 확정한다.
+백엔드는 `POST /api/security/events` 요청을 검증한 뒤 이벤트 단위로 처리한다.
 
-- `POST /api/security/events` 요청 검증
-- 보안 이벤트 전용 DB 저장 구조
-- WebSocket 메시지 타입 `security_events` 또는 `security_event`
-- 기존 의심 호스트 화면/조회 API를 security events 기반으로 재구성
+- `backend/app/schemas/security.py`의 `SecurityEventPayload` / `SecurityEvent` 스키마로 요청을 검증한다.
+- Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
+- WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
+- 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
 
 ## 4. 분석 서버 상태 전달
 

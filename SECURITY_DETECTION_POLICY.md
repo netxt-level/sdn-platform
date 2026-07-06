@@ -179,6 +179,8 @@
 ```json
 {
   "event_id": "evt-...",
+  "event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
+  "dedup_key": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
   "timestamp": "2026-05-24T10:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "attack_category": "RECON",
@@ -201,7 +203,7 @@
     ],
     "window_seconds": 5,
     "unique_dst_port_count": 20,
-    "unique_dst_ports": [21, 22, 23, 80, 443],
+    "unique_dst_ports": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     "syn_count": 20,
     "score": 70
   },
@@ -270,6 +272,8 @@
 ```json
 {
   "event_id": "evt-...",
+  "event_fingerprint": "764e3e790da17f7a5e21e51af7b4d06608bd450a",
+  "dedup_key": "764e3e790da17f7a5e21e51af7b4d06608bd450a",
   "timestamp": "2026-05-24T10:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "attack_category": "DDOS",
@@ -294,6 +298,8 @@
     "packet_count": 1200,
     "pps": 1200,
     "pps_threshold": 1000,
+    "min_packet_count": 1000,
+    "high_pps_threshold": 3000,
     "score": 80
   },
   "mitigation": {
