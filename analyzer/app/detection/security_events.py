@@ -11,9 +11,17 @@ class SecurityEventBuilder:
         self,
         analyzer_id: str = "analyzer-1",
         icmp_pps_threshold: float = 1000,
+        rate_limit_priority: int = 500,
+        rate_limit_idle_timeout: int = 60,
+        rate_limit_hard_timeout: int = 300,
+        rate_limit_pps: int = 100,
     ):
         self.analyzer_id = analyzer_id
         self.icmp_pps_threshold = icmp_pps_threshold
+        self.rate_limit_priority = rate_limit_priority
+        self.rate_limit_idle_timeout = rate_limit_idle_timeout
+        self.rate_limit_hard_timeout = rate_limit_hard_timeout
+        self.rate_limit_pps = rate_limit_pps
 
     def build_security_events(
         self,
@@ -132,10 +140,30 @@ class SecurityEventBuilder:
                             "pps": pps,
                             "pps_threshold": self.icmp_pps_threshold,
                         },
+                        mitigation=self._rate_limit_mitigation(
+                            src_ip=src_ip,
+                            dst_ip=dst_ip,
+                        ),
                     )
                 )
 
         return events
+
+    def _rate_limit_mitigation(self, *, src_ip: str, dst_ip: str) -> dict[str, Any]:
+        return {
+            "action": "RATE_LIMIT",
+            "target": "flow",
+            "match": {
+                "eth_type": 2048,
+                "ipv4_src": src_ip,
+                "ipv4_dst": dst_ip,
+                "ip_proto": 1,
+            },
+            "priority": self.rate_limit_priority,
+            "idle_timeout": self.rate_limit_idle_timeout,
+            "hard_timeout": self.rate_limit_hard_timeout,
+            "rate_limit_pps": self.rate_limit_pps,
+        }
 
     def _event(
         self,
@@ -152,6 +180,7 @@ class SecurityEventBuilder:
         recommended_action: str,
         response_level: str,
         evidence: dict[str, Any],
+        mitigation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "event_id": _event_id(
@@ -176,7 +205,7 @@ class SecurityEventBuilder:
             "recommended_action": recommended_action,
             "response_level": response_level,
             "evidence": evidence,
-            "mitigation": None,
+            "mitigation": mitigation,
         }
 
 

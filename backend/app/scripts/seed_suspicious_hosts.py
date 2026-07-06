@@ -65,7 +65,20 @@ def build_dummy_security_events() -> list[dict]:
                 "pps": 1200.0,
                 "pps_threshold": 1000,
             },
-            "mitigation": None,
+            "mitigation": {
+                "action": "RATE_LIMIT",
+                "target": "flow",
+                "match": {
+                    "eth_type": 2048,
+                    "ipv4_src": "10.0.0.23",
+                    "ipv4_dst": "10.0.0.5",
+                    "ip_proto": 1,
+                },
+                "priority": 500,
+                "idle_timeout": 60,
+                "hard_timeout": 300,
+                "rate_limit_pps": 100,
+            },
         },
     ]
 

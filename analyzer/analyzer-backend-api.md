@@ -226,6 +226,42 @@ POST /api/security/events
         "unique_dst_port_count": 20
       },
       "mitigation": null
+    },
+    {
+      "event_id": "evt-8e44e9b97a2c",
+      "timestamp": "2026-05-24T10:00:00+00:00",
+      "analyzer_id": "analyzer-1",
+      "attack_category": "DDOS",
+      "attack_type": "ICMP_FLOOD",
+      "severity": "high",
+      "confidence": "medium",
+      "status": "detected",
+      "src_ip": "10.0.0.2",
+      "dst_ip": "10.0.0.4",
+      "protocol": "ICMP",
+      "detection_rule": "icmp_pps_threshold",
+      "recommended_action": "rate_limit",
+      "response_level": "L2",
+      "evidence": {
+        "window_seconds": 1,
+        "packet_count": 1200,
+        "pps": 1200,
+        "pps_threshold": 1000
+      },
+      "mitigation": {
+        "action": "RATE_LIMIT",
+        "target": "flow",
+        "match": {
+          "eth_type": 2048,
+          "ipv4_src": "10.0.0.2",
+          "ipv4_dst": "10.0.0.4",
+          "ip_proto": 1
+        },
+        "priority": 500,
+        "idle_timeout": 60,
+        "hard_timeout": 300,
+        "rate_limit_pps": 100
+      }
     }
   ]
 }
@@ -258,7 +294,7 @@ POST /api/security/events
 | `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `rate_limit` |
 | `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2` |
 | `evidence` | `object` | O | 탐지 유형별 상세 근거 |
-| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 정보. analyzer 1단계에서는 `null` |
+| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 후보. `PORT_SCAN`과 `L1` 이벤트는 `null`, `ICMP_FLOOD` L2는 `RATE_LIMIT` 후보 |
 
 ### 탐지별 evidence
 
