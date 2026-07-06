@@ -102,7 +102,6 @@ POST /api/analyzer/packet-summary
 ### 백엔드 처리
 
 - InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다. `host_traffic`은 `src_ip`, `src_port`, `dst_ip`, `dst_port`, `protocol` 기준으로 조회할 수 있게 저장한다.
-- Elasticsearch `sdn-traffic-summary` 인덱스에 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
 ```json
@@ -175,7 +174,7 @@ POST /api/analyzer/detection-summary
 ### 백엔드 처리
 
 - InfluxDB에 `network_status` measurement로 저장한다.
-- Elasticsearch 저장 여부와 인덱스는 백엔드 구현 단계에서 확정한다.
+- Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
 ```json

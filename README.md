@@ -29,7 +29,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | Backend | `8000` | FastAPI API 서버 |
 | PostgreSQL | `5433` -> `5432` | 분석 서버 상태 저장 |
 | InfluxDB | `8086` | 트래픽 시계열/탐지 지표 저장 |
-| Elasticsearch | `9200`, `9300` | 트래픽 요약 및 보안 이벤트 저장 |
+| Elasticsearch | `9200`, `9300` | 보안 이벤트 저장 |
 
 ## 기술 스택
 
@@ -81,8 +81,9 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 ### 백엔드 서버
 
 - 분석 서버 상태 수신 및 PostgreSQL upsert
-- 패킷 요약 수신 및 InfluxDB/Elasticsearch 저장
-- 탐지 요약 수신 및 InfluxDB/Elasticsearch 저장
+- 패킷 요약 수신 및 InfluxDB 저장
+- 트래픽 상태 요약 수신 및 InfluxDB 저장
+- 보안 이벤트 수신 및 Elasticsearch 저장
 - 대시보드 조회 API 제공
 - 보안 이벤트 조회 API 제공
 - Flow 목록 조회 API 제공
@@ -122,7 +123,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `GET` | `/api/analyzer/status` | 분석 서버 상태 조회 |
 | `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
 | `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
-| `POST` | `/api/analyzer/detection-summary` | 탐지 요약 수신 |
+| `POST` | `/api/analyzer/detection-summary` | 트래픽 상태 요약 수신 |
 | `GET` | `/api/dashboard/summary` | 대시보드 요약 조회 |
 | `GET` | `/api/dashboard/traffic` | 트래픽 시계열 조회 |
 | `GET` | `/api/dashboard/protocols` | 프로토콜 통계 조회 |
@@ -235,8 +236,8 @@ docker compose down -v
 | 저장소 | 저장 내용 |
 |---|---|
 | PostgreSQL | 분석 서버 최신 상태, `sdn_controller.analyzer` |
-| InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태, 의심 호스트 |
-| Elasticsearch | 트래픽 요약 문서, 탐지 이벤트 문서 |
+| InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태 |
+| Elasticsearch | 보안 이벤트 문서, `sdn-security-events` |
 
 Alembic migration은 `migrations/`에 있다.
 

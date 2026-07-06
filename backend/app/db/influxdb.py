@@ -273,9 +273,7 @@ def write_detection_summary(detection: dict[str, Any]) -> None:
     #   "network_status": "warning",
     #   "total_bps": 273960.0,
     #   "total_pps": 90.0,
-    #   "active_flow_count": 15,
-    #   "suspicious_host_count": 1,
-    #   "suspicious_hosts": [...]
+    #   "active_flow_count": 15
     # }
 
     timestamp = parse_timestamp(detection["timestamp"])
@@ -290,39 +288,14 @@ def write_detection_summary(detection: dict[str, Any]) -> None:
         .field("total_bps", float(detection["total_bps"]))
         .field("total_pps", float(detection["total_pps"]))
         .field("active_flow_count", int(detection["active_flow_count"]))
-        .field("suspicious_host_count", int(detection["suspicious_host_count"]))
         .time(timestamp, WritePrecision.NS)
     ]
-
-    # measurement: suspicious_host_traffic
-    # 의심 호스트별 bps/pps를 저장
-    for suspicious_host in detection.get("suspicious_hosts", []):
-        reasons = suspicious_host.get("reasons", [])
-        reason = "; ".join(reasons) if reasons else "suspicious host detected"
-        attack_type = infer_suspicious_host_attack_type(suspicious_host)
-        point = (
-            Point("suspicious_host_traffic")
-            .tag("analyzer_id", analyzer_id)
-            .tag("ip", suspicious_host["ip"])
-            .tag("protocol", suspicious_host["protocol"])
-            .tag("attack_type", attack_type)
-            .field("bps", float(suspicious_host["bps"]))
-            .field("pps", float(suspicious_host["pps"]))
-            .field("reason", reason)
-            .time(timestamp, WritePrecision.NS)
-        )
-
-        # host 이름이 있으면 tag로 추가
-        if suspicious_host.get("host"):
-            point = point.tag("host", suspicious_host["host"])
-
-        points.append(point)
 
     client = get_influx_client()
     try:
         write_api = client.write_api(write_options=SYNCHRONOUS)
 
-        # network_status와 suspicious_host_traffic point들을 저장
+        # network_status point를 저장
         write_api.write(
             bucket=settings.influxdb_bucket,
             org=settings.influxdb_org,

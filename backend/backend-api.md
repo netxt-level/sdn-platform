@@ -143,7 +143,6 @@ POST /api/analyzer/packet-summary
 ### Side Effects
 
 - InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다. `host_traffic`은 `src_ip`, `src_port`, `dst_ip`, `dst_port`, `protocol` 기준의 집계 트래픽을 저장한다.
-- Elasticsearch `sdn-traffic-summary` 인덱스에 저장한다.
 - WebSocket으로 `{"type":"packet_summary","data":...}` 메시지를 broadcast한다.
 
 ### 2.4 탐지 요약 수신
@@ -166,8 +165,7 @@ POST /api/analyzer/detection-summary
 
 ### Side Effects
 
-- InfluxDB `network_status`, `suspicious_host_traffic` measurement에 저장한다.
-- Elasticsearch `sdn-detection-events` 인덱스에 저장한다.
+- InfluxDB `network_status` measurement에 저장한다.
 - WebSocket으로 `{"type":"detection_summary","data":...}` 메시지를 broadcast한다.
 
 ## 3. Dashboard API
@@ -265,7 +263,7 @@ InfluxDB `protocol_stats` measurement에서 프로토콜별 패킷 수를 조회
 GET /api/dashboard/suspicious-hosts
 ```
 
-InfluxDB `suspicious_host_traffic` measurement에서 최신 의심 호스트 목록을 조회한다.
+InfluxDB `suspicious_host_traffic` measurement에서 최신 의심 호스트 목록을 조회한다. 이 endpoint는 현재 legacy 경로이며, 다음 단계에서 Elasticsearch `sdn-security-events` 기반으로 재구성한다.
 
 ### Query Parameters
 
@@ -332,13 +330,30 @@ GET /api/flows
 
 ## 5. Security API
 
+### 보안 이벤트 수신
+
+```http
+POST /api/security/events
+```
+
+분석 서버가 전송한 공통 보안 이벤트 payload를 수신한다.
+
+### Request Body
+
+상세 request body는 `analyzer/analyzer-backend-api.md`의 "보안 이벤트 전달"을 따른다.
+
+### Side Effects
+
+- Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
+- WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
+
 ### 보안 이벤트 목록 조회
 
 ```http
 GET /api/security/events
 ```
 
-Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 조회한다.
+Elasticsearch `sdn-security-events` 인덱스에서 최신 보안 이벤트를 조회한다.
 
 ### Query Parameters
 
@@ -355,26 +370,25 @@ Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 
     {
       "id": "elastic-document-id",
       "@timestamp": "2026-05-24T10:00:00+00:00",
+      "event_id": "evt-4c8a9d4d4d5a",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
-      "network_status": "warning",
-      "total_bps": 273960.0,
-      "total_pps": 90.0,
-      "active_flow_count": 15,
-      "suspicious_host_count": 1,
-      "suspicious_hosts": [
-        {
-          "host": "52.182.143.209",
-          "ip": "52.182.143.209",
-          "protocol": "TCP",
-          "bps": 81192.0,
-          "pps": 16.0,
-          "reasons": [
-            "DoS"
-          ],
-          "attack_type": "DOS"
-        }
-      ]
+      "attack_category": "RECON",
+      "attack_type": "PORT_SCAN",
+      "severity": "medium",
+      "confidence": "high",
+      "status": "detected",
+      "src_ip": "10.0.0.2",
+      "dst_ip": "10.0.0.4",
+      "protocol": "TCP",
+      "detection_rule": "tcp_syn_unique_ports",
+      "recommended_action": "monitor",
+      "response_level": "L1",
+      "evidence": {
+        "window_seconds": 5,
+        "unique_dst_port_count": 20
+      },
+      "mitigation": null
     }
   ]
 }
@@ -439,11 +453,22 @@ WS /ws/analyzer
     "network_status": "warning",
     "total_bps": 273960.0,
     "total_pps": 90.0,
-    "active_flow_count": 15,
-    "suspicious_host_count": 1,
-    "suspicious_hosts": []
+    "active_flow_count": 15
   }
 }
 ```
 
-프론트엔드 타입에는 과거 호환용으로 `traffic_analysis`, `security_event`, `topology_update` 메시지도 정의되어 있지만, 현재 백엔드 코드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`다.
+#### Security Events
+
+```json
+{
+  "type": "security_events",
+  "data": {
+    "timestamp": "2026-05-24T10:00:00+00:00",
+    "analyzer_id": "analyzer-1",
+    "events": []
+  }
+}
+```
+
+프론트엔드 타입에는 과거 호환용으로 `traffic_analysis`, `security_event`, `topology_update` 메시지도 정의되어 있지만, 현재 백엔드 코드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_events`다.
