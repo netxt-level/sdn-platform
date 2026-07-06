@@ -63,7 +63,7 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 | UDP Flood | `app/detection/security_events.py` | UDP pps 또는 bps가 기준 이상이면 탐지 |
 | SYN Flood | `app/detection/security_events.py` | SYN-only TCP pps가 기준 이상이면 탐지 |
 
-탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다.
+탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다. `PORT_SCAN`, `ICMP_FLOOD`의 탐지 조건과 대응 레벨 정책은 `../SECURITY_DETECTION_POLICY.md`를 기준으로 한다.
 
 ## 개발 시 주의사항
 
