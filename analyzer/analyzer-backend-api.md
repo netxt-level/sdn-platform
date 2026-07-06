@@ -237,11 +237,20 @@ POST /api/security/events
       "dst_ip": "10.0.0.4",
       "protocol": "TCP",
       "detection_rule": "tcp_syn_unique_ports",
-      "recommended_action": "monitor",
-      "response_level": "L1",
+      "recommended_action": "alert",
+      "response_level": "L2",
       "evidence": {
+        "matched_conditions": [
+          "tcp_syn_without_ack",
+          "same_source_target_pair",
+          "unique_dst_port_threshold_exceeded",
+          "syn_count_threshold_satisfied"
+        ],
         "window_seconds": 5,
-        "unique_dst_port_count": 20
+        "unique_dst_port_count": 20,
+        "unique_dst_ports": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+        "syn_count": 20,
+        "score": 70
       },
       "mitigation": null
     },
@@ -261,10 +270,19 @@ POST /api/security/events
       "recommended_action": "rate_limit",
       "response_level": "L2",
       "evidence": {
+        "matched_conditions": [
+          "icmp_protocol",
+          "same_source_target_pair",
+          "icmp_pps_threshold_exceeded",
+          "min_packet_count_satisfied"
+        ],
         "window_seconds": 1,
         "packet_count": 1200,
         "pps": 1200,
-        "pps_threshold": 1000
+        "pps_threshold": 1000,
+        "min_packet_count": 1000,
+        "high_pps_threshold": 3000,
+        "score": 80
       },
       "mitigation": {
         "action": "RATE_LIMIT",
@@ -318,8 +336,8 @@ POST /api/security/events
 
 | attack_type | detection_rule | 주요 evidence |
 |---|---|---|
-| `PORT_SCAN` | `tcp_syn_unique_ports` | `window_seconds`, `unique_dst_port_count` |
-| `ICMP_FLOOD` | `icmp_pps_threshold` | `window_seconds`, `packet_count`, `pps`, `pps_threshold` |
+| `PORT_SCAN` | `tcp_syn_unique_ports` | `matched_conditions`, `window_seconds`, `unique_dst_port_count`, `unique_dst_ports`, `syn_count`, `score` |
+| `ICMP_FLOOD` | `icmp_pps_threshold` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `pps_threshold`, `min_packet_count`, `high_pps_threshold`, `score` |
 
 ### 백엔드 처리
 

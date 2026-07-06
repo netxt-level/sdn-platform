@@ -355,9 +355,5 @@
 
 | 항목 | 설명 |
 |---|---|
-| `matched_conditions` 추가 | 현재 security event evidence에 충족 조건 목록을 포함하도록 수정 |
-| `score` 추가 | 조건별 가중치를 계산해 evidence에 포함 |
-| `PORT_SCAN` evidence 보강 | `unique_dst_ports`, `syn_count` 추가 |
-| threshold 설정 분리 | 이 문서의 확정 기준값을 환경변수 또는 analyzer config로 이동 |
 | 이벤트 식별/중복 억제 적용 | `event_fingerprint`, `event_id`, `dedup_key`, cooldown 정책 반영 |
 | rolling window 적용 | ICMP flood 탐지에도 rolling window 적용 |

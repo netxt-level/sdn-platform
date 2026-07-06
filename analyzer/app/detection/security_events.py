@@ -143,32 +143,68 @@ class SecurityEventBuilder:
         divisor = window_sec if window_sec > 0 else 1
 
         for (protocol, src_ip, dst_ip), stats in grouped.items():
+            packet_count = stats["packets"]
             pps = stats["packets"] / divisor
 
             if protocol == "ICMP" and pps >= self.icmp_pps_threshold:
+                matched_conditions = [
+                    "icmp_protocol",
+                    "same_source_target_pair",
+                    "icmp_pps_threshold_exceeded",
+                ]
+                score = 60
+
+                if packet_count >= self.icmp_min_packet_count:
+                    matched_conditions.append("min_packet_count_satisfied")
+                    score += 20
+
+                high_pps_threshold = min(
+                    self.icmp_high_pps_threshold,
+                    self.icmp_pps_threshold * self.icmp_high_pps_multiplier,
+                )
+                if pps >= high_pps_threshold:
+                    matched_conditions.append("high_pps_exceeded")
+                    score += 15
+
+                score = min(score, 100)
+                is_l2 = score >= 80
+                severity = "high" if is_l2 else "medium"
+                confidence = "high" if score >= 95 else "medium"
+                recommended_action = "rate_limit" if is_l2 else "monitor"
+                response_level = "L2" if is_l2 else "L1"
+                mitigation = (
+                    self._rate_limit_mitigation(
+                        src_ip=src_ip,
+                        dst_ip=dst_ip,
+                    )
+                    if is_l2
+                    else None
+                )
+
                 events.append(
                     self._event(
                         timestamp=timestamp,
                         attack_category="DDOS",
                         attack_type="ICMP_FLOOD",
-                        severity="high",
-                        confidence="medium",
+                        severity=severity,
+                        confidence=confidence,
                         src_ip=src_ip,
                         dst_ip=dst_ip,
                         protocol="ICMP",
                         detection_rule="icmp_pps_threshold",
-                        recommended_action="rate_limit",
-                        response_level="L2",
+                        recommended_action=recommended_action,
+                        response_level=response_level,
                         evidence={
+                            "matched_conditions": matched_conditions,
                             "window_seconds": window_sec,
-                            "packet_count": stats["packets"],
+                            "packet_count": packet_count,
                             "pps": pps,
                             "pps_threshold": self.icmp_pps_threshold,
+                            "min_packet_count": self.icmp_min_packet_count,
+                            "high_pps_threshold": high_pps_threshold,
+                            "score": score,
                         },
-                        mitigation=self._rate_limit_mitigation(
-                            src_ip=src_ip,
-                            dst_ip=dst_ip,
-                        ),
+                        mitigation=mitigation,
                     )
                 )
 
