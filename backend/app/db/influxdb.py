@@ -223,7 +223,7 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
         )
 
     # measurement: host_traffic
-    # src_ip -> dst_ip 단위의 트래픽 수치를 저장
+    # src_ip:src_port -> dst_ip:dst_port 단위의 트래픽 수치를 저장
     for host_stat in summary.get("host_stats", []):
         point = (
             Point("host_traffic")
@@ -234,13 +234,19 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
             .time(timestamp, WritePrecision.NS)
         )
 
-        # src_ip, dst_ip는 필터링에 자주 쓸 수 있어서 tag로 둔다.
+        # src_ip, dst_ip, port는 필터링에 자주 쓸 수 있어서 tag로 둔다.
         # 값이 null이면 tag로 넣지 않는다.
         if host_stat.get("src_ip"):
             point = point.tag("src_ip", host_stat["src_ip"])
 
+        if host_stat.get("src_port") is not None:
+            point = point.tag("src_port", str(host_stat["src_port"]))
+
         if host_stat.get("dst_ip"):
             point = point.tag("dst_ip", host_stat["dst_ip"])
+
+        if host_stat.get("dst_port") is not None:
+            point = point.tag("dst_port", str(host_stat["dst_port"]))
 
         points.append(point)
 

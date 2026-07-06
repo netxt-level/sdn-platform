@@ -79,8 +79,10 @@ def create_elasticsearch_indices() -> None:
                         "properties": {
                             "src_host": {"type": "keyword"},    # 출발지 호스트 이름
                             "src_ip": {"type": "ip"},           # 출발지 IP
+                            "src_port": {"type": "integer"},    # 출발지 포트
                             "dst_host": {"type": "keyword"},    # 목적지 호스트 이름
                             "dst_ip": {"type": "ip"},           # 목적지 IP
+                            "dst_port": {"type": "integer"},    # 목적지 포트
                             "protocol": {"type": "keyword"},    # 해당 통신에서 사용된 프로토콜
                             "packet_count": {"type": "long"},   # 해당 호스트 간 통신 패킷 수
                             "bit_count": {"type": "long"},      # 해당 호스트 간 통신 비트 수

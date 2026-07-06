@@ -235,7 +235,7 @@ docker compose down -v
 | 저장소 | 저장 내용 |
 |---|---|
 | PostgreSQL | 분석 서버 최신 상태, `sdn_controller.analyzer` |
-| InfluxDB | 트래픽 시계열, 프로토콜 통계, host traffic, 네트워크 상태, 의심 호스트 |
+| InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태, 의심 호스트 |
 | Elasticsearch | 트래픽 요약 문서, 탐지 이벤트 문서 |
 
 Alembic migration은 `migrations/`에 있다.

@@ -16,8 +16,10 @@ class AnalyzerStatusRequest(BaseModel):                 # 분석 서버 상태 �
 class HostStat(BaseModel):                              # 호스트/프로토콜별 통계 모델
     src_host: Optional[str] = None                      # 출발지 호스트명
     src_ip: Optional[str] = None                        # 출발지 IP
+    src_port: Optional[int] = None                      # 출발지 포트
     dst_host: Optional[str] = None                      # 목적지 호스트명
     dst_ip: Optional[str] = None                        # 목적지 IP
+    dst_port: Optional[int] = None                      # 목적지 포트
     protocol: str                                       # 프로토콜
     packet_count: int                                   # 패킷 수
     bit_count: int                                      # 비트 수

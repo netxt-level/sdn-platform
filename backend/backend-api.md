@@ -142,7 +142,7 @@ POST /api/analyzer/packet-summary
 
 ### Side Effects
 
-- InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다.
+- InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다. `host_traffic`은 `src_ip`, `src_port`, `dst_ip`, `dst_port`, `protocol` 기준의 집계 트래픽을 저장한다.
 - Elasticsearch `sdn-traffic-summary` 인덱스에 저장한다.
 - WebSocket으로 `{"type":"packet_summary","data":...}` 메시지를 broadcast한다.
 

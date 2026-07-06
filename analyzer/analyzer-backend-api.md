@@ -53,8 +53,10 @@ POST /api/analyzer/packet-summary
     {
       "src_host": null,
       "src_ip": "52.182.143.209",
+      "src_port": 443,
       "dst_host": null,
       "dst_ip": "172.30.1.3",
+      "dst_port": 51544,
       "protocol": "TCP",
       "packet_count": 16,
       "bit_count": 81192
@@ -81,11 +83,13 @@ POST /api/analyzer/packet-summary
 |---|---|---:|---|
 | `src_host` | `string \| null` | X | 출발지 호스트명 |
 | `src_ip` | `string \| null` | X | 출발지 IP |
+| `src_port` | `integer \| null` | X | 출발지 포트. 포트가 없는 프로토콜이면 `null` |
 | `dst_host` | `string \| null` | X | 목적지 호스트명 |
 | `dst_ip` | `string \| null` | X | 목적지 IP |
+| `dst_port` | `integer \| null` | X | 목적지 포트. 포트가 없는 프로토콜이면 `null` |
 | `protocol` | `string` | O | 프로토콜 이름 |
-| `packet_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 패킷 수 |
-| `bit_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 비트 수 |
+| `packet_count` | `integer` | O | 해당 호스트 쌍, 포트, 프로토콜의 패킷 수 |
+| `bit_count` | `integer` | O | 해당 호스트 쌍, 포트, 프로토콜의 비트 수 |
 
 ### Response Body
 
@@ -97,7 +101,7 @@ POST /api/analyzer/packet-summary
 
 ### 백엔드 처리
 
-- InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다.
+- InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다. `host_traffic`은 `src_ip`, `src_port`, `dst_ip`, `dst_port`, `protocol` 기준으로 조회할 수 있게 저장한다.
 - Elasticsearch `sdn-traffic-summary` 인덱스에 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
