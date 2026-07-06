@@ -272,9 +272,17 @@ Alembic migration은 `migrations/`에 있다.
 - `/api/dashboard/summary`는 현재 고정 mock 값을 반환한다.
 - `/api/flows`는 현재 sample 값을 반환하며 `src_ip` query parameter를 실제 필터링에 사용하지 않는다.
 - 일부 프론트엔드 화면은 mock/static 데이터 기반 UI를 포함한다.
-- `backend/tests/` 디렉터리는 있으나 실제 테스트 코드는 아직 작성되어 있지 않다.
+- `backend/tests/` 디렉터리는 있으나 실제 백엔드 테스트 코드는 아직 작성되어 있지 않다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
 - 패킷 캡처는 OS/컨테이너 권한과 네트워크 인터페이스 설정에 영향을 받는다.
+
+## 테스트
+
+Analyzer 보안 탐지 명세 단위 테스트는 표준 라이브러리 `unittest`로 실행한다.
+
+```bash
+PYTHONPYCACHEPREFIX=/private/tmp/sdn-platform-pycache python3 -m unittest discover -s analyzer/tests -v
+```
 
 ## 성능 확인 및 테스트 다음 단계
 
