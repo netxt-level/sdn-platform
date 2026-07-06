@@ -5,11 +5,24 @@ from datetime import datetime, timedelta
 # TCP SYN 패킷이 짧은 시간 안에 여러 목적지 포트로 향하는지 확인해
 # 단순 포트 스캔 의심 호스트를 찾아내는 탐지기
 class PortScanDetector:
-    def __init__(self, window_sec=5, unique_port_threshold=20, alert_cooldown_sec=30):
+    def __init__(
+        self,
+        window_sec=5,
+        unique_port_threshold=20,
+        syn_count_threshold=20,
+        multi_target_window_sec=30,
+        multi_target_threshold=3,
+        high_unique_dst_port_threshold=50,
+        alert_cooldown_sec=60,
+    ):
         # 최근 window_sec초 안에 관측된 SYN 이벤트만 탐지 기준으로 사용
         self.window_sec = window_sec
         # 동일 출발지/목적지 조합에서 서로 다른 목적지 포트가 이 값 이상이면 의심으로 판단
         self.unique_port_threshold = unique_port_threshold
+        self.syn_count_threshold = syn_count_threshold
+        self.multi_target_window_sec = multi_target_window_sec
+        self.multi_target_threshold = multi_target_threshold
+        self.high_unique_dst_port_threshold = high_unique_dst_port_threshold
         # 같은 출발지/목적지 조합에 대해 알림이 반복 생성되는 것을 막는 최소 간격
         self.alert_cooldown_sec = alert_cooldown_sec
 

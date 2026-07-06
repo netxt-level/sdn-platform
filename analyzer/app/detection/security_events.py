@@ -11,6 +11,12 @@ class SecurityEventBuilder:
         self,
         analyzer_id: str = "analyzer-1",
         icmp_pps_threshold: float = 1000,
+        icmp_min_packet_count: int = 1000,
+        icmp_high_pps_threshold: float = 3000,
+        icmp_high_pps_multiplier: float = 3.0,
+        icmp_baseline_spike_multiplier: float = 5.0,
+        icmp_baseline_min_pps: float = 100,
+        icmp_alert_cooldown_sec: int = 60,
         rate_limit_priority: int = 500,
         rate_limit_idle_timeout: int = 60,
         rate_limit_hard_timeout: int = 300,
@@ -18,6 +24,12 @@ class SecurityEventBuilder:
     ):
         self.analyzer_id = analyzer_id
         self.icmp_pps_threshold = icmp_pps_threshold
+        self.icmp_min_packet_count = icmp_min_packet_count
+        self.icmp_high_pps_threshold = icmp_high_pps_threshold
+        self.icmp_high_pps_multiplier = icmp_high_pps_multiplier
+        self.icmp_baseline_spike_multiplier = icmp_baseline_spike_multiplier
+        self.icmp_baseline_min_pps = icmp_baseline_min_pps
+        self.icmp_alert_cooldown_sec = icmp_alert_cooldown_sec
         self.rate_limit_priority = rate_limit_priority
         self.rate_limit_idle_timeout = rate_limit_idle_timeout
         self.rate_limit_hard_timeout = rate_limit_hard_timeout

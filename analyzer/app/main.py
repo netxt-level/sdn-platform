@@ -45,6 +45,17 @@ traffic_builder = TrafficStatsBuilder(
 
 security_event_builder = SecurityEventBuilder(
     analyzer_id=ANALYZER_ID,
+    icmp_pps_threshold=config.icmp_pps_threshold,
+    icmp_min_packet_count=config.icmp_min_packet_count,
+    icmp_high_pps_threshold=config.icmp_high_pps_threshold,
+    icmp_high_pps_multiplier=config.icmp_high_pps_multiplier,
+    icmp_baseline_spike_multiplier=config.icmp_baseline_spike_multiplier,
+    icmp_baseline_min_pps=config.icmp_baseline_min_pps,
+    icmp_alert_cooldown_sec=config.icmp_alert_cooldown_sec,
+    rate_limit_priority=config.rate_limit_priority,
+    rate_limit_idle_timeout=config.rate_limit_idle_timeout,
+    rate_limit_hard_timeout=config.rate_limit_hard_timeout,
+    rate_limit_pps=config.rate_limit_pps,
 )
 
 # 백엔드 API 호출을 담당하는 클라이언트
@@ -61,9 +72,13 @@ analyzer_status = AnalyzerStatus(
 
 # TCP SYN 기반 포트 스캔 의심 호스트 탐지기
 port_scan_detector = PortScanDetector(
-    window_sec=5,
-    unique_port_threshold=20,
-    alert_cooldown_sec=30,
+    window_sec=config.port_scan_window_sec,
+    unique_port_threshold=config.port_scan_unique_dst_port_threshold,
+    syn_count_threshold=config.port_scan_syn_count_threshold,
+    multi_target_window_sec=config.port_scan_multi_target_window_sec,
+    multi_target_threshold=config.port_scan_multi_target_threshold,
+    high_unique_dst_port_threshold=config.port_scan_high_unique_dst_port_threshold,
+    alert_cooldown_sec=config.port_scan_alert_cooldown_sec,
 )
 
 
