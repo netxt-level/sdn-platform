@@ -1,6 +1,6 @@
 # SDN Analyzer
 
-분석 서버는 네트워크 인터페이스에서 패킷을 캡처하고, 짧은 시간 윈도우 단위로 트래픽 요약과 탐지 요약을 만들어 백엔드 서버로 전송한다. 컨트롤러에 직접 flow rule을 설치하지 않고, 탐지 결과와 상태만 백엔드에 전달한다.
+분석 서버는 네트워크 인터페이스에서 패킷을 캡처하고, 짧은 시간 윈도우 단위로 패킷 요약, 트래픽 상태 요약, 보안 이벤트를 만들어 백엔드 서버로 전송한다. 컨트롤러에 직접 flow rule을 설치하지 않고, 탐지 결과와 상태만 백엔드에 전달한다.
 
 ## 실행 흐름
 
@@ -8,9 +8,9 @@
 app/packet/capture.py
   -> app/packet/parser.py
   -> app/packet/summary.py
-  -> app/detection/traffic_stats.py / app/detection/port_scan.py
+  -> app/detection/traffic_stats.py / app/detection/port_scan.py / app/detection/security_events.py
   -> app/backend_client.py
-  -> backend /api/analyzer/*
+  -> backend /api/analyzer/*, /api/security/events
 ```
 
 ## 주요 파일
@@ -22,8 +22,9 @@ app/packet/capture.py
 | `app/packet/capture.py` | Scapy 기반 패킷 캡처 |
 | `app/packet/parser.py` | 패킷에서 IP, 포트, 프로토콜, 크기, TCP flag 추출 |
 | `app/packet/summary.py` | 윈도우 단위 패킷/프로토콜/호스트 통계 생성 |
-| `app/detection/traffic_stats.py` | bps/pps 계산, DoS 의심 호스트, 네트워크 상태 생성 |
+| `app/detection/traffic_stats.py` | bps/pps 계산, 네트워크 상태 생성 |
 | `app/detection/port_scan.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
+| `app/detection/security_events.py` | 포트 스캔/DDoS 탐지 결과를 공통 보안 이벤트 payload로 변환 |
 | `app/analyzer_status.py` | 분석 서버 상태 payload 생성 |
 | `app/backend_client.py` | 백엔드 API 전송 |
 | `analyzer-backend-api.md` | 분석 서버 -> 백엔드 API 상세 명세 |
@@ -45,19 +46,22 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | `POST` | `/api/analyzer/packet-summary` | 패킷 요약 전송 |
-| `POST` | `/api/analyzer/detection-summary` | 탐지 요약 전송 |
+| `POST` | `/api/analyzer/detection-summary` | 트래픽 상태 요약 전송 |
+| `POST` | `/api/security/events` | 보안 이벤트 전송 |
 | `POST` | `/api/analyzer/status` | 분석 서버 상태 전송 |
 
 요청/응답 필드 상세는 `analyzer-backend-api.md`를 기준으로 한다.
 
 ## 현재 탐지 범위
 
-현재 구현된 탐지는 다음 두 가지다.
+현재 구현된 탐지는 다음 네 가지다.
 
 | 탐지 | 구현 위치 | 설명 |
 |---|---|---|
-| DoS 의심 | `app/detection/traffic_stats.py` | 호스트별 pps/bps가 기준 이상이면 의심 호스트로 포함 |
-| Port Scan 의심 | `app/detection/port_scan.py` | 짧은 시간 안에 같은 대상의 여러 TCP 목적지 포트로 SYN 패킷을 보내면 탐지 |
+| Port Scan | `app/detection/port_scan.py`, `app/detection/security_events.py` | 짧은 시간 안에 같은 대상의 여러 TCP 목적지 포트로 SYN 패킷을 보내면 탐지 |
+| ICMP Flood | `app/detection/security_events.py` | ICMP pps가 기준 이상이면 탐지 |
+| UDP Flood | `app/detection/security_events.py` | UDP pps 또는 bps가 기준 이상이면 탐지 |
+| SYN Flood | `app/detection/security_events.py` | SYN-only TCP pps가 기준 이상이면 탐지 |
 
 탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다.
 
@@ -75,8 +79,8 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 탐지 로직을 추가하거나 조정할 때는 보통 아래 파일을 수정한다.
 
 ```text
-app/detection/traffic_stats.py
 app/detection/port_scan.py
+app/detection/security_events.py
 app/packet/parser.py
 ```
 
@@ -85,6 +89,8 @@ app/packet/parser.py
 ```text
 app/packet/summary.py
 app/detection/traffic_stats.py
+app/detection/security_events.py
 app/backend_client.py
 ../backend/app/schemas/analyzer.py
+../backend/app/schemas/security.py
 ```

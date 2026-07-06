@@ -71,7 +71,7 @@ class PortScanDetector:
 
             self.last_alert_at[alert_key] = now
 
-            # TrafficStatsBuilder가 suspicious_hosts에 합칠 수 있는 형태로 반환한다.
+            # SecurityEventBuilder가 공통 보안 이벤트로 변환할 수 있는 형태로 반환한다.
             detected.append({
                 "host": src_ip,
                 "ip": src_ip,

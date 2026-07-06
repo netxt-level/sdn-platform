@@ -28,6 +28,14 @@ class BackendClient:
             label="traffic stats",
         )
 
+    # 포트 스캔, DDoS, ARP spoofing 등 보안 이벤트를 백엔드에 전송
+    def send_security_events(self, security_events: dict) -> bool:
+        return self._post(
+            path="/api/security/events",
+            payload=security_events,
+            label="security events",
+        )
+
     # 분석 서버 실행/캡처/백엔드 연결 상태를 백엔드에 전송
     def send_analyzer_status(self, analyzer_status: dict) -> bool:
         return self._post(

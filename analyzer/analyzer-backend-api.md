@@ -3,7 +3,7 @@
 이 문서는 현재 코드 기준으로 분석 서버가 백엔드 서버에 전송하는 API를 정리한다.
 
 - 분석 서버 호출 구현: `analyzer/app/backend_client.py`
-- 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/analyzer_status.py`
+- 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/detection/security_events.py`, `analyzer/app/analyzer_status.py`
 - 백엔드 수신 스키마: `backend/app/schemas/analyzer.py`
 - 백엔드 수신 라우터: `backend/app/api/analyzer.py`
 
@@ -17,7 +17,7 @@
 | 공통 성공 응답 | `{"ok": true}` |
 | 유효성 검증 실패 | FastAPI 기본 `422 Unprocessable Entity` |
 
-분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약과 탐지 요약을 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
+분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약, 트래픽 상태 요약, 보안 이벤트를 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
 
 | 환경변수 | 기본값 | 설명 |
 |---|---:|---|
@@ -118,15 +118,15 @@ POST /api/analyzer/packet-summary
 }
 ```
 
-## 2. 탐지 요약 전달
+## 2. 트래픽 상태 요약 전달
 
 ```http
 POST /api/analyzer/detection-summary
 ```
 
-분석 서버가 패킷 요약과 탐지기 결과를 기반으로 네트워크 상태 및 의심 호스트 목록을 전송한다.
+분석 서버가 패킷 요약을 기반으로 네트워크 전체 트래픽 상태를 전송한다. 의심 호스트와 공격 탐지 결과는 이 payload에 포함하지 않고, `POST /api/security/events`로 분리한다.
 
-코드상 분석 서버 메서드명은 `send_traffic_stats`지만, 실제 호출 경로는 `/api/analyzer/detection-summary`다.
+코드상 분석 서버 메서드명은 `send_traffic_stats`지만, 실제 호출 경로는 기존 호환 경로인 `/api/analyzer/detection-summary`다.
 
 ### Request Body
 
@@ -137,21 +137,7 @@ POST /api/analyzer/detection-summary
   "network_status": "warning",
   "total_bps": 273960.0,
   "total_pps": 90.0,
-  "active_flow_count": 15,
-  "suspicious_host_count": 1,
-  "suspicious_hosts": [
-    {
-      "host": "52.182.143.209",
-      "ip": "52.182.143.209",
-      "protocol": "TCP",
-      "bps": 81192.0,
-      "pps": 16.0,
-      "reasons": [
-        "DoS"
-      ],
-      "attack_type": "DOS"
-    }
-  ]
+  "active_flow_count": 15
 }
 ```
 
@@ -165,24 +151,14 @@ POST /api/analyzer/detection-summary
 | `total_bps` | `number` | O | 전체 초당 비트 수 |
 | `total_pps` | `number` | O | 전체 초당 패킷 수 |
 | `active_flow_count` | `integer` | O | 현재 윈도우에서 관측한 flow 개수 |
-| `suspicious_host_count` | `integer` | O | 의심 호스트 수 |
-| `suspicious_hosts` | `SuspiciousHost[]` | O | 의심 호스트 목록 |
 
 `TrafficStatsBuilder`는 윈도우 내 누적 패킷 수와 비트 수를 `window_sec`로 나누어 `total_pps`, `total_bps`를 초당 값으로 생성한다.
 
-### SuspiciousHost
+`network_status`는 전체 트래픽 기준으로 계산한다.
 
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `host` | `string \| null` | X | 호스트명 또는 IP |
-| `ip` | `string` | O | 의심 호스트 IP |
-| `protocol` | `string` | O | 의심 트래픽 프로토콜 |
-| `bps` | `number` | O | 해당 호스트 초당 비트 수 |
-| `pps` | `number` | O | 해당 호스트 초당 패킷 수 |
-| `reasons` | `string[]` | O | 의심 판단 사유 |
-| `attack_type` | `string \| null` | X | 공격/이상 트래픽 유형. 현재 생성값은 `DOS`, `PORT_SCAN` |
-
-현재 백엔드 스키마는 위 필드만 모델에 포함한다. 포트 스캔 탐지기가 내부적으로 만드는 `target_ip`, `unique_dst_port_count` 같은 추가 필드는 FastAPI/Pydantic 모델 변환 후 응답 broadcast 및 저장 payload에 포함되지 않는다.
+- `critical`: 전체 `total_bps` 또는 `total_pps`가 critical 기준 이상
+- `warning`: 전체 `total_bps` 또는 `total_pps`가 suspicious 기준 이상
+- `normal`: 위 조건에 해당하지 않음
 
 ### Response Body
 
@@ -194,8 +170,8 @@ POST /api/analyzer/detection-summary
 
 ### 백엔드 처리
 
-- InfluxDB에 `network_status`, `suspicious_host_traffic` measurement로 저장한다.
-- Elasticsearch `sdn-detection-events` 인덱스에 저장한다.
+- InfluxDB에 `network_status` measurement로 저장한다.
+- Elasticsearch 저장 여부와 인덱스는 백엔드 구현 단계에서 확정한다.
 - WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
 ```json
@@ -207,14 +183,100 @@ POST /api/analyzer/detection-summary
     "network_status": "warning",
     "total_bps": 273960.0,
     "total_pps": 90.0,
-    "active_flow_count": 15,
-    "suspicious_host_count": 1,
-    "suspicious_hosts": []
+    "active_flow_count": 15
   }
 }
 ```
 
-## 3. 분석 서버 상태 전달
+## 3. 보안 이벤트 전달
+
+```http
+POST /api/security/events
+```
+
+분석 서버가 포트 스캔, ICMP/UDP/SYN flood, ARP spoofing 같은 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`다. ARP spoofing은 같은 형식으로 합류한다.
+
+### Request Body
+
+```json
+{
+  "timestamp": "2026-05-24T10:00:00+00:00",
+  "analyzer_id": "analyzer-1",
+  "events": [
+    {
+      "event_id": "evt-4c8a9d4d4d5a",
+      "timestamp": "2026-05-24T10:00:00+00:00",
+      "analyzer_id": "analyzer-1",
+      "attack_category": "RECON",
+      "attack_type": "PORT_SCAN",
+      "severity": "medium",
+      "confidence": "high",
+      "status": "detected",
+      "src_ip": "10.0.0.2",
+      "dst_ip": "10.0.0.4",
+      "protocol": "TCP",
+      "detection_rule": "tcp_syn_unique_ports",
+      "recommended_action": "monitor",
+      "response_level": "L1",
+      "evidence": {
+        "window_seconds": 5,
+        "unique_dst_port_count": 20
+      },
+      "mitigation": null
+    }
+  ]
+}
+```
+
+### 필드
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `timestamp` | `datetime` | O | 이벤트 묶음 생성 시각 |
+| `analyzer_id` | `string` | O | 분석 서버 식별자 |
+| `events` | `SecurityEvent[]` | O | 보안 이벤트 목록 |
+
+### SecurityEvent
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| `event_id` | `string` | O | 이벤트 식별자. 같은 탐지 대상은 안정적인 ID를 사용 |
+| `timestamp` | `datetime` | O | 이벤트 발생/생성 시각 |
+| `analyzer_id` | `string` | O | 분석 서버 식별자 |
+| `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `DDOS`, `SPOOFING` |
+| `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`, 예정 `ARP_SPOOFING` |
+| `severity` | `string` | O | 위험도. 현재 `medium`, `high`, 예정 `critical` |
+| `confidence` | `string` | O | 탐지 신뢰도. 현재 `medium`, `high` |
+| `status` | `string` | O | 이벤트 상태. 최초 생성값은 `detected` |
+| `src_ip` | `string` | O | 공격/의심 트래픽 출발지 IP |
+| `dst_ip` | `string` | O | 공격/의심 트래픽 대상 IP |
+| `protocol` | `string` | O | 프로토콜 |
+| `detection_rule` | `string` | O | 적용된 탐지 기준 이름 |
+| `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `rate_limit`, 예정 `drop` |
+| `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2`, 예정 `L3` |
+| `evidence` | `object` | O | 탐지 유형별 상세 근거 |
+| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 정보. analyzer 1단계에서는 `null` |
+
+### 탐지별 evidence
+
+| attack_type | detection_rule | 주요 evidence |
+|---|---|---|
+| `PORT_SCAN` | `tcp_syn_unique_ports` | `window_seconds`, `unique_dst_port_count` |
+| `ICMP_FLOOD` | `icmp_pps_threshold` | `window_seconds`, `packet_count`, `pps`, `pps_threshold` |
+| `UDP_FLOOD` | `udp_pps_or_bps_threshold` | `window_seconds`, `packet_count`, `pps`, `bps`, `pps_threshold`, `bps_threshold` |
+| `SYN_FLOOD` | `tcp_syn_pps_threshold` | `window_seconds`, `packet_count`, `syn_count`, `syn_pps`, `pps_threshold` |
+| `ARP_SPOOFING` | `gateway_mac_mismatch` 예정 | `spoofed_ip`, `trusted_mac`, `observed_mac`, `arp_opcode` |
+
+### 백엔드 처리
+
+백엔드 구현 단계에서 아래 동작을 확정한다.
+
+- `POST /api/security/events` 요청 검증
+- 보안 이벤트 전용 DB 저장 구조
+- WebSocket 메시지 타입 `security_events` 또는 `security_event`
+- 기존 의심 호스트 화면/조회 API를 security events 기반으로 재구성
+
+## 4. 분석 서버 상태 전달
 
 ```http
 POST /api/analyzer/status

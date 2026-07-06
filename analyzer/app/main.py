@@ -6,6 +6,7 @@ from app.analyzer_status import AnalyzerStatus
 from app.backend_client import BackendClient
 from app.config import load_config
 from app.detection.port_scan import PortScanDetector
+from app.detection.security_events import SecurityEventBuilder
 from app.detection.traffic_stats import TrafficStatsBuilder
 from app.packet.capture import PacketCaptureError, start_capture
 from app.packet.parser import parse_packet
@@ -39,6 +40,10 @@ summary_builder = PacketSummaryBuilder(
 
 # packet-summary와 원본 패킷 목록을 기반으로 detection-summary payload 생성
 traffic_builder = TrafficStatsBuilder(
+    analyzer_id=ANALYZER_ID,
+)
+
+security_event_builder = SecurityEventBuilder(
     analyzer_id=ANALYZER_ID,
 )
 
@@ -89,17 +94,23 @@ def analysis_loop():
                 packets.clear()
 
             # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
-            port_scan_hosts = port_scan_detector.detect(packets_snapshot)
+            port_scan_alerts = port_scan_detector.detect(packets_snapshot)
 
             packet_summary = summary_builder.build_packet_summary(
                 packets_snapshot,
             )
 
-            # traffic stats에는 DoS 의심 호스트와 포트 스캔 의심 호스트가 함께 포함
+            # traffic stats는 네트워크 전체 트래픽 상태만 포함한다.
             traffic_stats = traffic_builder.build_traffic_stats(
                 packet_summary=packet_summary,
                 packets=packets_snapshot,
-                extra_suspicious_hosts=port_scan_hosts,
+            )
+
+            # 보안 탐지 결과는 traffic stats와 분리해 공통 SecurityEvent 형식으로 전송한다.
+            security_events = security_event_builder.build_security_events(
+                packet_summary=packet_summary,
+                packets=packets_snapshot,
+                port_scan_alerts=port_scan_alerts,
             )
 
             # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
@@ -110,6 +121,9 @@ def analysis_loop():
             traffic_stats_sent = backend_client.send_traffic_stats(
                 traffic_stats
             )
+
+            if security_events["events"]:
+                backend_client.send_security_events(security_events)
 
             # 두 요약 전송이 모두 성공한 경우에만 백엔드 연결 상태를 정상으로 표시
             if packet_summary_sent and traffic_stats_sent:
