@@ -63,17 +63,61 @@ class PortScanDetector:
         # 탐지 윈도우 밖의 오래된 이벤트는 제거한다.
         self._expire_old_events(now)
 
-        grouped = defaultdict(set)
+        window_cutoff = now - timedelta(seconds=self.window_sec)
+        multi_target_cutoff = now - timedelta(seconds=self.multi_target_window_sec)
+        grouped = defaultdict(lambda: {"ports": set(), "syn_count": 0})
+        multi_target_grouped = defaultdict(set)
 
         # 출발지/목적지 쌍마다 접근한 목적지 포트 종류를 모은다.
         for event in self.events:
-            key = (event["src_ip"], event["dst_ip"])
-            grouped[key].add(event["dst_port"])
+            if event["timestamp"] >= window_cutoff:
+                key = (event["src_ip"], event["dst_ip"])
+                grouped[key]["ports"].add(event["dst_port"])
+                grouped[key]["syn_count"] += 1
 
-        for (src_ip, dst_ip), ports in grouped.items():
+            if event["timestamp"] >= multi_target_cutoff:
+                key = (event["src_ip"], event["dst_ip"])
+                multi_target_grouped[key].add(event["dst_port"])
+
+        scanned_targets_by_source = defaultdict(set)
+        for (src_ip, dst_ip), ports in multi_target_grouped.items():
+            if len(ports) >= self.unique_port_threshold:
+                scanned_targets_by_source[src_ip].add(dst_ip)
+
+        for (src_ip, dst_ip), stats in grouped.items():
+            ports = stats["ports"]
+            syn_count = stats["syn_count"]
+
             # 고유 목적지 포트 수가 임계값보다 작으면 정상 연결 시도로 간주한다.
             if len(ports) < self.unique_port_threshold:
                 continue
+
+            matched_conditions = [
+                "tcp_syn_without_ack",
+                "same_source_target_pair",
+                "unique_dst_port_threshold_exceeded",
+            ]
+            score = 60
+
+            if syn_count >= self.syn_count_threshold:
+                matched_conditions.append("syn_count_threshold_satisfied")
+                score += 10
+
+            if (
+                len(scanned_targets_by_source[src_ip])
+                >= self.multi_target_threshold
+            ):
+                matched_conditions.append("multi_target_scan")
+                score += 15
+
+            if len(ports) >= self.high_unique_dst_port_threshold:
+                matched_conditions.append("high_unique_dst_port_count")
+                score += 15
+
+            score = min(score, 100)
+            has_auxiliary_condition = len(matched_conditions) > 3
+            response_level = "L2" if has_auxiliary_condition else "L1"
+            recommended_action = "alert" if has_auxiliary_condition else "monitor"
 
             alert_key = (src_ip, dst_ip)
             last_alert = self.last_alert_at.get(alert_key)
@@ -96,13 +140,21 @@ class PortScanDetector:
                     "Port Scan",
                 ],
                 "target_ip": dst_ip,
+                "window_seconds": self.window_sec,
                 "unique_dst_port_count": len(ports),
+                "unique_dst_ports": sorted(ports),
+                "syn_count": syn_count,
+                "matched_conditions": matched_conditions,
+                "score": score,
+                "response_level": response_level,
+                "recommended_action": recommended_action,
             })
 
         return detected
 
     def _expire_old_events(self, now):
-        cutoff = now - timedelta(seconds=self.window_sec)
+        retention_sec = max(self.window_sec, self.multi_target_window_sec)
+        cutoff = now - timedelta(seconds=retention_sec)
 
         # deque는 시간 순서대로 쌓이므로 앞에서부터 만료된 이벤트를 제거한다.
         while self.events and self.events[0]["timestamp"] < cutoff:

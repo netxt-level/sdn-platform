@@ -82,6 +82,15 @@ class SecurityEventBuilder:
                 continue
 
             unique_port_count = int(alert.get("unique_dst_port_count") or 0)
+            unique_dst_ports = alert.get("unique_dst_ports") or []
+            matched_conditions = alert.get("matched_conditions") or [
+                "tcp_syn_without_ack",
+                "same_source_target_pair",
+                "unique_dst_port_threshold_exceeded",
+            ]
+            score = int(alert.get("score") or 60)
+            recommended_action = alert.get("recommended_action") or "monitor"
+            response_level = alert.get("response_level") or "L1"
             events.append(
                 self._event(
                     timestamp=timestamp,
@@ -93,11 +102,15 @@ class SecurityEventBuilder:
                     dst_ip=dst_ip,
                     protocol="TCP",
                     detection_rule="tcp_syn_unique_ports",
-                    recommended_action="monitor",
-                    response_level="L1",
+                    recommended_action=recommended_action,
+                    response_level=response_level,
                     evidence={
-                        "window_seconds": window_sec,
+                        "matched_conditions": matched_conditions,
+                        "window_seconds": alert.get("window_seconds") or window_sec,
                         "unique_dst_port_count": unique_port_count,
+                        "unique_dst_ports": unique_dst_ports,
+                        "syn_count": int(alert.get("syn_count") or 0),
+                        "score": score,
                     },
                 )
             )
