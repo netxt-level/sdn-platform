@@ -17,6 +17,7 @@ class SecurityEventBuilder:
         icmp_baseline_spike_multiplier: float = 5.0,
         icmp_baseline_min_pps: float = 100,
         icmp_alert_cooldown_sec: int = 60,
+        event_dedup_window_sec: int = 60,
         rate_limit_priority: int = 500,
         rate_limit_idle_timeout: int = 60,
         rate_limit_hard_timeout: int = 300,
@@ -30,10 +31,12 @@ class SecurityEventBuilder:
         self.icmp_baseline_spike_multiplier = icmp_baseline_spike_multiplier
         self.icmp_baseline_min_pps = icmp_baseline_min_pps
         self.icmp_alert_cooldown_sec = icmp_alert_cooldown_sec
+        self.event_dedup_window_sec = event_dedup_window_sec
         self.rate_limit_priority = rate_limit_priority
         self.rate_limit_idle_timeout = rate_limit_idle_timeout
         self.rate_limit_hard_timeout = rate_limit_hard_timeout
         self.rate_limit_pps = rate_limit_pps
+        self.recent_events = {}
 
     def build_security_events(
         self,
@@ -41,21 +44,30 @@ class SecurityEventBuilder:
         packets: list[dict[str, Any]],
         port_scan_alerts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        timestamp = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        timestamp = now.isoformat()
         window_sec = packet_summary.get("window_sec", 1)
+        event_window_sec = window_sec if window_sec > 0 else 1
+        window_start_epoch = int(
+            now.timestamp() // event_window_sec * event_window_sec
+        )
 
         events = []
         events.extend(
             self._build_port_scan_events(
                 timestamp=timestamp,
+                now=now,
                 window_sec=window_sec,
+                window_start_epoch=window_start_epoch,
                 alerts=port_scan_alerts or [],
             )
         )
         events.extend(
             self._build_flood_events(
                 timestamp=timestamp,
+                now=now,
                 window_sec=window_sec,
+                window_start_epoch=window_start_epoch,
                 packets=packets,
             )
         )
@@ -70,7 +82,9 @@ class SecurityEventBuilder:
         self,
         *,
         timestamp: str,
+        now: datetime,
         window_sec: int | float,
+        window_start_epoch: int,
         alerts: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         events = []
@@ -91,29 +105,31 @@ class SecurityEventBuilder:
             score = int(alert.get("score") or 60)
             recommended_action = alert.get("recommended_action") or "monitor"
             response_level = alert.get("response_level") or "L1"
-            events.append(
-                self._event(
-                    timestamp=timestamp,
-                    attack_category="RECON",
-                    attack_type="PORT_SCAN",
-                    severity="medium",
-                    confidence="high",
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    protocol="TCP",
-                    detection_rule="tcp_syn_unique_ports",
-                    recommended_action=recommended_action,
-                    response_level=response_level,
-                    evidence={
-                        "matched_conditions": matched_conditions,
-                        "window_seconds": alert.get("window_seconds") or window_sec,
-                        "unique_dst_port_count": unique_port_count,
-                        "unique_dst_ports": unique_dst_ports,
-                        "syn_count": int(alert.get("syn_count") or 0),
-                        "score": score,
-                    },
-                )
+            event = self._event(
+                timestamp=timestamp,
+                attack_category="RECON",
+                attack_type="PORT_SCAN",
+                severity="medium",
+                confidence="high",
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                protocol="TCP",
+                detection_rule="tcp_syn_unique_ports",
+                recommended_action=recommended_action,
+                response_level=response_level,
+                evidence={
+                    "matched_conditions": matched_conditions,
+                    "window_seconds": alert.get("window_seconds") or window_sec,
+                    "unique_dst_port_count": unique_port_count,
+                    "unique_dst_ports": unique_dst_ports,
+                    "syn_count": int(alert.get("syn_count") or 0),
+                    "score": score,
+                },
+                now=now,
+                window_start_epoch=window_start_epoch,
             )
+            if event is not None:
+                events.append(event)
 
         return events
 
@@ -121,7 +137,9 @@ class SecurityEventBuilder:
         self,
         *,
         timestamp: str,
+        now: datetime,
         window_sec: int | float,
+        window_start_epoch: int,
         packets: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         grouped = defaultdict(lambda: {"packets": 0})
@@ -181,32 +199,34 @@ class SecurityEventBuilder:
                     else None
                 )
 
-                events.append(
-                    self._event(
-                        timestamp=timestamp,
-                        attack_category="DDOS",
-                        attack_type="ICMP_FLOOD",
-                        severity=severity,
-                        confidence=confidence,
-                        src_ip=src_ip,
-                        dst_ip=dst_ip,
-                        protocol="ICMP",
-                        detection_rule="icmp_pps_threshold",
-                        recommended_action=recommended_action,
-                        response_level=response_level,
-                        evidence={
-                            "matched_conditions": matched_conditions,
-                            "window_seconds": window_sec,
-                            "packet_count": packet_count,
-                            "pps": pps,
-                            "pps_threshold": self.icmp_pps_threshold,
-                            "min_packet_count": self.icmp_min_packet_count,
-                            "high_pps_threshold": high_pps_threshold,
-                            "score": score,
-                        },
-                        mitigation=mitigation,
-                    )
+                event = self._event(
+                    timestamp=timestamp,
+                    attack_category="DDOS",
+                    attack_type="ICMP_FLOOD",
+                    severity=severity,
+                    confidence=confidence,
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    protocol="ICMP",
+                    detection_rule="icmp_pps_threshold",
+                    recommended_action=recommended_action,
+                    response_level=response_level,
+                    evidence={
+                        "matched_conditions": matched_conditions,
+                        "window_seconds": window_sec,
+                        "packet_count": packet_count,
+                        "pps": pps,
+                        "pps_threshold": self.icmp_pps_threshold,
+                        "min_packet_count": self.icmp_min_packet_count,
+                        "high_pps_threshold": high_pps_threshold,
+                        "score": score,
+                    },
+                    mitigation=mitigation,
+                    now=now,
+                    window_start_epoch=window_start_epoch,
                 )
+                if event is not None:
+                    events.append(event)
 
         return events
 
@@ -242,16 +262,37 @@ class SecurityEventBuilder:
         response_level: str,
         evidence: dict[str, Any],
         mitigation: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        now: datetime,
+        window_start_epoch: int,
+    ) -> dict[str, Any] | None:
+        event_fingerprint = _event_fingerprint(
+            self.analyzer_id,
+            attack_type,
+            src_ip,
+            dst_ip,
+            protocol,
+            detection_rule,
+        )
+        dedup_key = event_fingerprint
+
+        if self._is_duplicate(
+            dedup_key=dedup_key,
+            now=now,
+            severity=severity,
+            response_level=response_level,
+        ):
+            return None
+
+        self.recent_events[dedup_key] = {
+            "timestamp": now,
+            "severity": severity,
+            "response_level": response_level,
+        }
+
         return {
-            "event_id": _event_id(
-                self.analyzer_id,
-                attack_type,
-                src_ip,
-                dst_ip,
-                protocol,
-                detection_rule,
-            ),
+            "event_id": _event_id(event_fingerprint, str(window_start_epoch)),
+            "event_fingerprint": event_fingerprint,
+            "dedup_key": dedup_key,
             "timestamp": timestamp,
             "analyzer_id": self.analyzer_id,
             "attack_category": attack_category,
@@ -269,8 +310,54 @@ class SecurityEventBuilder:
             "mitigation": mitigation,
         }
 
+    def _is_duplicate(
+        self,
+        *,
+        dedup_key: str,
+        now: datetime,
+        severity: str,
+        response_level: str,
+    ) -> bool:
+        last_event = self.recent_events.get(dedup_key)
+        if last_event is None:
+            return False
+
+        elapsed = (now - last_event["timestamp"]).total_seconds()
+        if elapsed >= self.event_dedup_window_sec:
+            return False
+
+        if _policy_rank(response_level) > _policy_rank(last_event["response_level"]):
+            return False
+
+        if _severity_rank(severity) > _severity_rank(last_event["severity"]):
+            return False
+
+        return True
+
 
 def _event_id(*parts: str) -> str:
     raw = "|".join(parts)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
     return f"evt-{digest}"
+
+
+def _event_fingerprint(*parts: str) -> str:
+    raw = "|".join(parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _policy_rank(value: str) -> int:
+    return {
+        "L1": 1,
+        "L2": 2,
+        "L3": 3,
+    }.get(value, 0)
+
+
+def _severity_rank(value: str) -> int:
+    return {
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "critical": 4,
+    }.get(value, 0)

@@ -45,6 +45,8 @@ def create_elasticsearch_indices() -> None:
                 "properties": {
                     "@timestamp": {"type": "date"},
                     "event_id": {"type": "keyword"},
+                    "event_fingerprint": {"type": "keyword"},
+                    "dedup_key": {"type": "keyword"},
                     "timestamp": {"type": "date"},
                     "analyzer_id": {"type": "keyword"},
                     "attack_category": {"type": "keyword"},

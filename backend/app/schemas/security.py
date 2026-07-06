@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 class SecurityEvent(BaseModel):
     event_id: str
+    event_fingerprint: str
+    dedup_key: str
     timestamp: datetime
     analyzer_id: str
     attack_category: str

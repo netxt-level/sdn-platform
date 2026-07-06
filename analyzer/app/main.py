@@ -52,6 +52,7 @@ security_event_builder = SecurityEventBuilder(
     icmp_baseline_spike_multiplier=config.icmp_baseline_spike_multiplier,
     icmp_baseline_min_pps=config.icmp_baseline_min_pps,
     icmp_alert_cooldown_sec=config.icmp_alert_cooldown_sec,
+    event_dedup_window_sec=config.event_dedup_window_sec,
     rate_limit_priority=config.rate_limit_priority,
     rate_limit_idle_timeout=config.rate_limit_idle_timeout,
     rate_limit_hard_timeout=config.rate_limit_hard_timeout,

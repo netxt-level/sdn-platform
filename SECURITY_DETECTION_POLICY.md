@@ -48,6 +48,8 @@
 | 필드 | 설명 |
 |---|---|
 | `event_id` | 이벤트 식별자 |
+| `event_fingerprint` | 같은 공격 흐름을 묶는 안정적인 fingerprint |
+| `dedup_key` | 중복 억제 기준 키. 기본값은 `event_fingerprint` |
 | `timestamp` | 이벤트 생성 시각 |
 | `analyzer_id` | 분석 서버 ID |
 | `attack_category` | 공격 분류 |
@@ -355,5 +357,4 @@
 
 | 항목 | 설명 |
 |---|---|
-| 이벤트 식별/중복 억제 적용 | `event_fingerprint`, `event_id`, `dedup_key`, cooldown 정책 반영 |
 | rolling window 적용 | ICMP flood 탐지에도 rolling window 적용 |

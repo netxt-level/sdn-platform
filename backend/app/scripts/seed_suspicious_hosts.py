@@ -25,6 +25,8 @@ def build_dummy_security_events() -> list[dict]:
     return [
         {
             "event_id": "seed-port-scan-001",
+            "event_fingerprint": "fp-seed-port-scan-001",
+            "dedup_key": "fp-seed-port-scan-001",
             "timestamp": timestamp,
             "analyzer_id": "analyzer-1",
             "attack_category": "RECON",
@@ -55,6 +57,8 @@ def build_dummy_security_events() -> list[dict]:
         },
         {
             "event_id": "seed-icmp-flood-001",
+            "event_fingerprint": "fp-seed-icmp-flood-001",
+            "dedup_key": "fp-seed-icmp-flood-001",
             "timestamp": timestamp,
             "analyzer_id": "analyzer-1",
             "attack_category": "DDOS",

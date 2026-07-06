@@ -40,6 +40,7 @@
 | `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | ICMP baseline 급증 배수 기준 |
 | `ICMP_BASELINE_MIN_PPS` | `100` | ICMP baseline 급증 최소 pps 기준 |
 | `ICMP_ALERT_COOLDOWN_SEC` | `60` | ICMP Flood 중복 알림 억제 시간 |
+| `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
 | `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
 | `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
 | `RATE_LIMIT_HARD_TIMEOUT` | `300` | Rate limit 후보 hard timeout |
@@ -226,6 +227,8 @@ POST /api/security/events
   "events": [
     {
       "event_id": "evt-4c8a9d4d4d5a",
+      "event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
+      "dedup_key": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
       "attack_category": "RECON",
@@ -256,6 +259,8 @@ POST /api/security/events
     },
     {
       "event_id": "evt-8e44e9b97a2c",
+      "event_fingerprint": "764e3e790da17f7a5e21e51af7b4d06608bd450a",
+      "dedup_key": "764e3e790da17f7a5e21e51af7b4d06608bd450a",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
       "attack_category": "DDOS",
@@ -315,7 +320,9 @@ POST /api/security/events
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---:|---|
-| `event_id` | `string` | O | 이벤트 식별자. 같은 탐지 대상은 안정적인 ID를 사용 |
+| `event_id` | `string` | O | 이벤트 식별자. `event_fingerprint + window_start_epoch` 기반으로 생성 |
+| `event_fingerprint` | `string` | O | 같은 공격 흐름을 묶는 안정적인 fingerprint |
+| `dedup_key` | `string` | O | 중복 억제 기준 키. 기본값은 `event_fingerprint` |
 | `timestamp` | `datetime` | O | 이벤트 발생/생성 시각 |
 | `analyzer_id` | `string` | O | 분석 서버 식별자 |
 | `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `DDOS` |

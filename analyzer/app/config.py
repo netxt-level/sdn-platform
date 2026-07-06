@@ -25,6 +25,7 @@ class AnalyzerConfig:
     icmp_baseline_spike_multiplier: float
     icmp_baseline_min_pps: float
     icmp_alert_cooldown_sec: int
+    event_dedup_window_sec: int
     rate_limit_priority: int
     rate_limit_idle_timeout: int
     rate_limit_hard_timeout: int
@@ -99,6 +100,7 @@ def load_config() -> AnalyzerConfig:
         ),
         icmp_baseline_min_pps=get_float_env("ICMP_BASELINE_MIN_PPS", 100),
         icmp_alert_cooldown_sec=get_int_env("ICMP_ALERT_COOLDOWN_SEC", 60),
+        event_dedup_window_sec=get_int_env("EVENT_DEDUP_WINDOW_SEC", 60),
         rate_limit_priority=get_int_env("RATE_LIMIT_PRIORITY", 500),
         rate_limit_idle_timeout=get_int_env("RATE_LIMIT_IDLE_TIMEOUT", 60),
         rate_limit_hard_timeout=get_int_env("RATE_LIMIT_HARD_TIMEOUT", 300),

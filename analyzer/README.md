@@ -52,6 +52,7 @@ app/packet/capture.py
 | `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | ICMP baseline 급증 배수 기준 |
 | `ICMP_BASELINE_MIN_PPS` | `100` | ICMP baseline 급증 최소 pps 기준 |
 | `ICMP_ALERT_COOLDOWN_SEC` | `60` | ICMP Flood 중복 알림 억제 시간 |
+| `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
 | `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
 | `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
 | `RATE_LIMIT_HARD_TIMEOUT` | `300` | Rate limit 후보 hard timeout |
