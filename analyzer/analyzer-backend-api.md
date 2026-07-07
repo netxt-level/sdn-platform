@@ -209,66 +209,7 @@ POST /api/analyzer/detection-summary
 }
 ```
 
-## 3. 변경 메시지 전달
-
-```http
-POST /api/analyzer/changes
-```
-
-분석 서버가 변경 메시지를 백엔드로 전송한다. 다음 단계에서 이 메시지를 보안 대응 정책, flow rule 후보, 컨트롤러 적용 요청으로 변환할 수 있도록 공통 추적 필드와 유연한 `payload`를 함께 전달한다.
-
-### Request Body
-
-```json
-{
-  "timestamp": "2026-05-24T10:00:00+00:00",
-  "analyzer_id": "analyzer-1",
-  "message_type": "analyzer_change",
-  "change_type": "security_policy",
-  "resource_type": "flow_rule_candidate",
-  "resource_id": "candidate-001",
-  "operation": "create",
-  "sequence": 1,
-  "correlation_id": "corr-001",
-  "payload": {
-    "src_ip": "10.0.0.10",
-    "dst_ip": "10.0.0.20",
-    "recommended_action": "drop"
-  },
-  "metadata": {}
-}
-```
-
-### 필드
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `timestamp` | `datetime` | O | 변경 메시지 생성 시각 |
-| `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `message_type` | `string` | X | 메시지 타입. 기본값은 `analyzer_change` |
-| `change_type` | `string \| null` | X | 변경 유형 |
-| `resource_type` | `string \| null` | X | 변경 대상 리소스 타입 |
-| `resource_id` | `string \| null` | X | 변경 대상 리소스 ID |
-| `operation` | `string \| null` | X | `create`, `update`, `delete` 등 변경 작업 |
-| `sequence` | `integer \| null` | X | 분석 서버 내 메시지 순번 |
-| `correlation_id` | `string \| null` | X | 요청 추적용 상관 ID |
-| `payload` | `object` | X | 변경 상세 payload |
-| `metadata` | `object` | X | 부가 메타데이터 |
-
-### Response Body
-
-```json
-{
-  "ok": true
-}
-```
-
-### 백엔드 처리
-
-- WebSocket `/ws/analyzer` 구독자에게 `{"type":"analyzer_change","data":...}` 메시지를 broadcast한다.
-- 현재 단계에서는 DB 저장이나 컨트롤러 전송을 수행하지 않는다.
-
-## 4. 보안 이벤트 전달
+## 3. 보안 이벤트 전달
 
 ```http
 POST /api/security/events
@@ -413,7 +354,7 @@ POST /api/security/events
 - WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 - 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
 
-## 5. 분석 서버 상태 전달
+## 4. 분석 서버 상태 전달
 
 ```http
 POST /api/analyzer/status
@@ -493,3 +434,11 @@ POST /api/analyzer/status
 | 기타 요청 오류 | 콘솔에 일반 요청 오류 로그 출력, `False` 반환 |
 
 패킷 요약과 탐지 요약 둘 다 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 둘 중 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
+
+## 추가 예정
+
+### 분석 서버 설정 변경 응답
+
+백엔드가 분석 서버에 탐지 임계값, 캡처 상태, 정책 버전 같은 설정 변경을 요청하는 기능이 추가되면, 분석 서버가 적용 결과를 백엔드로 보고하는 별도 메시지를 도입할 수 있다.
+
+현재 보안 대응과 flow rule 생성의 입력은 `POST /api/security/events`의 보안 이벤트이며, 별도의 분석 변경 메시지 API는 구현하지 않는다.

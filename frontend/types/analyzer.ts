@@ -93,17 +93,3 @@ export type IncomingDetectionSummary = {
   suspicious_hosts?: SuspiciousHost[];
   top_talkers?: TopTalker[];
 };
-
-export type AnalyzerChangeMessage = {
-  timestamp: string;
-  analyzer_id: string;
-  message_type: string;
-  change_type?: string | null;
-  resource_type?: string | null;
-  resource_id?: string | null;
-  operation?: string | null;
-  sequence?: number | null;
-  correlation_id?: string | null;
-  payload: Record<string, unknown>;
-  metadata: Record<string, unknown>;
-};

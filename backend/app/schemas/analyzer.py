@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Any, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Optional
+from pydantic import BaseModel
 
 class AnalyzerStatusRequest(BaseModel):                 # 분석 서버 상태 요청 모델
     timestamp: datetime                                 # 상태 보고 시각
@@ -40,18 +40,3 @@ class DetectionSummaryRequest(BaseModel):               # 트래픽 상태 요�
     total_bps: float                                    # 전체 초당 비트 수
     total_pps: float                                    # 전체 초당 패킷 수
     active_flow_count: int                              # 활성 flow 수
-
-class AnalyzerChangeMessageRequest(BaseModel):          # 분석 서버 변경 메시지 요청 모델
-    model_config = ConfigDict(extra="allow")
-
-    timestamp: datetime                                 # 변경 메시지 생성 시각
-    analyzer_id: str                                    # 분석 서버 ID
-    message_type: str = "analyzer_change"               # 메시지 타입
-    change_type: Optional[str] = None                   # 변경 유형
-    resource_type: Optional[str] = None                 # 변경 대상 리소스 타입
-    resource_id: Optional[str] = None                   # 변경 대상 리소스 ID
-    operation: Optional[str] = None                     # create/update/delete 등 변경 작업
-    sequence: Optional[int] = None                      # 분석 서버 내 메시지 순번
-    correlation_id: Optional[str] = None                # 추적용 상관 ID
-    payload: dict[str, Any] = Field(default_factory=dict) # 변경 상세 payload
-    metadata: dict[str, Any] = Field(default_factory=dict) # 부가 메타데이터

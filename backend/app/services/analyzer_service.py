@@ -40,9 +40,3 @@ class AnalyzerService:
             "type": "detection_summary",
             "data": payload,
         })
-
-    async def receive_change_message(self, payload: dict[str, Any]) -> None:
-        await manager.broadcast({
-            "type": "analyzer_change",
-            "data": payload,
-        })
