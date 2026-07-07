@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,11 @@ class FlowRule(Base):
     source_event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     source_event_fingerprint: Mapped[str | None] = mapped_column(
         String(128),
+        nullable=True,
+    )
+    security_response_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("sdn_controller.security_responses.id"),
         nullable=True,
     )
     analyzer_id: Mapped[str] = mapped_column(String(30), nullable=False)

@@ -305,13 +305,13 @@ Elasticsearch `sdn-security-events` 인덱스의 최신 보안 이벤트에서 �
 GET /api/flows
 ```
 
-현재 코드에서는 고정 sample 값을 반환한다. `src_ip` query parameter를 받을 수 있지만, 현재 구현에서는 필터링에 사용하지 않는다.
+PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회한다. `src_ip`를 지정하면 `match.ipv4_src` 기준으로 필터링한다.
 
 ### Query Parameters
 
 | 이름 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---:|---|---|
-| `src_ip` | `string` | X | 없음 | 현재 미사용 |
+| `src_ip` | `string` | X | 없음 | `match.ipv4_src` 기준 필터 |
 
 ### Response Body
 
@@ -319,12 +319,36 @@ GET /api/flows
 {
   "items": [
     {
-      "timestamp": "2026-05-24T10:00:00+09:00",
-      "src_ip": "52.182.143.209",
-      "dst_ip": "172.30.1.3",
-      "protocol": "TCP",
-      "packet_count": 16,
-      "byte_count": 10149
+      "id": "rule-uuid-001",
+      "source_event_id": "evt-4c8a9d4d4d5a",
+      "source_event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
+      "security_response_id": "resp-uuid-001",
+      "analyzer_id": "analyzer-1",
+      "switch_id": null,
+      "target": "flow",
+      "action": "RATE_LIMIT",
+      "match": {
+        "eth_type": 2048,
+        "ipv4_src": "10.0.0.2",
+        "ipv4_dst": "10.0.0.4",
+        "ip_proto": 1
+      },
+      "priority": 500,
+      "idle_timeout": 60,
+      "hard_timeout": 300,
+      "rate_limit_pps": 100,
+      "status": "PENDING",
+      "controller_rule_id": null,
+      "controller_response": null,
+      "error_message": null,
+      "requested_at": null,
+      "applied_at": null,
+      "created_at": "2026-05-24T10:00:00+00:00",
+      "updated_at": "2026-05-24T10:00:00+00:00",
+      "timestamp": "2026-05-24T10:00:00+00:00",
+      "src_ip": "10.0.0.2",
+      "dst_ip": "10.0.0.4",
+      "protocol": "ICMP"
     }
   ]
 }
@@ -348,6 +372,10 @@ POST /api/security/events
 
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
+
+### 추가 저장 구조
+
+보안 대응 자동 생성 단계에서는 이벤트의 `recommended_action`과 `mitigation`을 기반으로 PostgreSQL `sdn_controller.security_responses`에 대응 결정/상태를 저장하고, 필요한 경우 `sdn_controller.flow_rules`에 생성된 rule을 연결한다. 현재 엔드포인트는 아직 보안 대응/flow rule 자동 생성을 수행하지 않는다.
 
 ### 보안 이벤트 목록 조회
 

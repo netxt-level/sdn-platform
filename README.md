@@ -256,7 +256,7 @@ docker compose down -v
 
 | 저장소 | 저장 내용 |
 |---|---|
-| PostgreSQL | 분석 서버 최신 상태, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.flow_rules` |
+| PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
 | InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태 |
 | Elasticsearch | 보안 이벤트 문서, `sdn-security-events` |
 
@@ -267,11 +267,12 @@ Alembic migration은 `migrations/`에 있다.
 | `migrations/versions/001_init_schema.py` | `sdn_controller` schema 및 `updated_at` trigger 함수 생성 |
 | `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
 | `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
+| `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
 
 ## 현재 제한 사항
 
 - `/api/dashboard/summary`는 현재 고정 mock 값을 반환한다.
-- `/api/flows`는 현재 sample 값을 반환하며 `src_ip` query parameter를 실제 필터링에 사용하지 않는다.
+- `/api/flows`는 `sdn_controller.flow_rules`를 조회하며, 아직 flow rule 자동 생성 로직은 연결되지 않았다.
 - 일부 프론트엔드 화면은 mock/static 데이터 기반 UI를 포함한다.
 - `backend/tests/` 디렉터리는 있으나 실제 백엔드 테스트 코드는 아직 작성되어 있지 않다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.

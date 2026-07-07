@@ -105,7 +105,7 @@
 | `GET` | `/api/dashboard/traffic` | InfluxDB 트래픽 시계열 조회 |
 | `GET` | `/api/dashboard/protocols` | InfluxDB 프로토콜 통계 조회 |
 | `GET` | `/api/dashboard/suspicious-hosts` | InfluxDB 의심 호스트 조회 |
-| `GET` | `/api/flows` | flow 목록 조회, 현재 sample 값 반환 |
+| `GET` | `/api/flows` | PostgreSQL flow rule 목록 조회 |
 | `GET` | `/api/security/events` | Elasticsearch 탐지 이벤트 조회 |
 | `WS` | `/ws/analyzer` | 실시간 분석 이벤트 broadcast |
 
@@ -113,7 +113,7 @@
 
 | 저장소 | 저장/조회 내용 |
 |---|---|
-| PostgreSQL | 분석 서버 최신 상태, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.flow_rules` |
+| PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
 | InfluxDB | 트래픽 시계열, 프로토콜 통계, host traffic, 네트워크 상태, 의심 호스트 |
 | Elasticsearch | 트래픽 요약 문서, 탐지 이벤트 문서 |
 
@@ -129,7 +129,8 @@
 
 ### 현재 주의사항
 
-- `/api/dashboard/summary`와 `/api/flows`는 현재 DB 기반 조회가 아니라 고정 sample/mock 값을 반환한다.
+- `/api/dashboard/summary`는 현재 고정 sample/mock 값을 반환한다.
+- `/api/flows`는 DB 기반 조회로 전환되었지만, 아직 flow rule 자동 생성 로직은 연결되지 않았다.
 - InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
 - `backend/app/scripts/seed_suspicious_hosts.py`는 의심 호스트 테스트 데이터를 넣기 위한 보조 스크립트다.
 
@@ -222,6 +223,7 @@ Alembic migration은 `migrations/`에 구성되어 있다.
 | `migrations/versions/001_init_schema.py` | `sdn_controller` schema 및 `updated_at` trigger 함수 생성 |
 | `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
 | `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
+| `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
 
 ## 커밋 전 체크 사항
 
