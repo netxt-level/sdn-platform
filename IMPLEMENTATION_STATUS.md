@@ -113,7 +113,7 @@
 
 | 저장소 | 저장/조회 내용 |
 |---|---|
-| PostgreSQL | 분석 서버 최신 상태, `sdn_controller.analyzer` |
+| PostgreSQL | 분석 서버 최신 상태, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.flow_rules` |
 | InfluxDB | 트래픽 시계열, 프로토콜 통계, host traffic, 네트워크 상태, 의심 호스트 |
 | Elasticsearch | 트래픽 요약 문서, 탐지 이벤트 문서 |
 
@@ -221,6 +221,7 @@ Alembic migration은 `migrations/`에 구성되어 있다.
 |---|---|
 | `migrations/versions/001_init_schema.py` | `sdn_controller` schema 및 `updated_at` trigger 함수 생성 |
 | `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
+| `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
 
 ## 커밋 전 체크 사항
 
