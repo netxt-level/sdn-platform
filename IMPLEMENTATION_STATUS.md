@@ -130,7 +130,8 @@
 ### 현재 주의사항
 
 - `/api/dashboard/summary`는 현재 고정 sample/mock 값을 반환한다.
-- `/api/flows`는 DB 기반 조회로 전환되었지만, 아직 flow rule 자동 생성 로직은 연결되지 않았다.
+- `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
+- `/api/flows`는 DB 기반 flow rule 조회를 제공한다.
 - InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
 - `backend/app/scripts/seed_suspicious_hosts.py`는 의심 호스트 테스트 데이터를 넣기 위한 보조 스크립트다.
 

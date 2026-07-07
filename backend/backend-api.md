@@ -371,11 +371,11 @@ POST /api/security/events
 ### Side Effects
 
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 
-### 추가 저장 구조
-
-보안 대응 자동 생성 단계에서는 이벤트의 `recommended_action`과 `mitigation`을 기반으로 PostgreSQL `sdn_controller.security_responses`에 대응 결정/상태를 저장하고, 필요한 경우 `sdn_controller.flow_rules`에 생성된 rule을 연결한다. 현재 엔드포인트는 아직 보안 대응/flow rule 자동 생성을 수행하지 않는다.
+`security_responses`는 `event_fingerprint + response_action`, `flow_rules`는 `event_fingerprint + action` 기준으로 중복 생성을 방지한다.
 
 ### 보안 이벤트 목록 조회
 

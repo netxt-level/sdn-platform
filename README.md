@@ -272,7 +272,8 @@ Alembic migration은 `migrations/`에 있다.
 ## 현재 제한 사항
 
 - `/api/dashboard/summary`는 현재 고정 mock 값을 반환한다.
-- `/api/flows`는 `sdn_controller.flow_rules`를 조회하며, 아직 flow rule 자동 생성 로직은 연결되지 않았다.
+- `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
+- `/api/flows`는 `sdn_controller.flow_rules`를 조회한다.
 - 일부 프론트엔드 화면은 mock/static 데이터 기반 UI를 포함한다.
 - `backend/tests/` 디렉터리는 있으나 실제 백엔드 테스트 코드는 아직 작성되어 있지 않다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
