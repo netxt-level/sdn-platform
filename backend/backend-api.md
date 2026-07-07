@@ -176,7 +176,7 @@ POST /api/analyzer/detection-summary
 GET /api/dashboard/summary
 ```
 
-현재 코드에서는 고정 mock 값을 반환한다.
+InfluxDB `traffic_summary` measurement의 최근 5분 데이터를 기반으로 합계 지표와 최신 pps/bps를 반환한다.
 
 ### Response Body
 

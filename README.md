@@ -272,7 +272,7 @@ Alembic migration은 `migrations/`에 있다.
 
 ## 현재 제한 사항
 
-- `/api/dashboard/summary`는 현재 고정 mock 값을 반환한다.
+- `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
 - `/api/flows`는 `sdn_controller.flow_rules`를 조회한다.
 - 일부 프론트엔드 화면은 mock/static 데이터 기반 UI를 포함한다.

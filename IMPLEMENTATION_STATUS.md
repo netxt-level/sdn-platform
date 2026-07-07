@@ -101,7 +101,7 @@
 | `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
 | `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
 | `POST` | `/api/analyzer/detection-summary` | 탐지 요약 수신 |
-| `GET` | `/api/dashboard/summary` | 대시보드 요약 조회, 현재 mock 값 반환 |
+| `GET` | `/api/dashboard/summary` | 최근 트래픽 기반 대시보드 요약 조회 |
 | `GET` | `/api/dashboard/traffic` | InfluxDB 트래픽 시계열 조회 |
 | `GET` | `/api/dashboard/protocols` | InfluxDB 프로토콜 통계 조회 |
 | `GET` | `/api/dashboard/suspicious-hosts` | InfluxDB 의심 호스트 조회 |
@@ -130,7 +130,7 @@
 
 ### 현재 주의사항
 
-- `/api/dashboard/summary`는 현재 고정 sample/mock 값을 반환한다.
+- `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 총 패킷 수, 총 byte 수, 최신 pps/bps, 네트워크 상태를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
 - `/api/flows`는 DB 기반 flow rule 조회를 제공한다.
 - InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
