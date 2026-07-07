@@ -107,6 +107,7 @@
 | `GET` | `/api/dashboard/suspicious-hosts` | InfluxDB 의심 호스트 조회 |
 | `GET` | `/api/flows` | PostgreSQL flow rule 목록 조회 |
 | `GET` | `/api/security/events` | Elasticsearch 탐지 이벤트 조회 |
+| `GET` | `/api/security/responses` | PostgreSQL 보안 대응 내역 조회 |
 | `WS` | `/ws/analyzer` | 실시간 분석 이벤트 broadcast |
 
 ### 저장소 연동

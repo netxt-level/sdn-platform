@@ -435,6 +435,57 @@ Elasticsearch `sdn-security-events` 인덱스에서 최신 보안 이벤트를 �
 }
 ```
 
+### 보안 대응 목록 조회
+
+```http
+GET /api/security/responses
+```
+
+PostgreSQL `sdn_controller.security_responses`에 저장된 최신 보안 대응 내역을 조회한다.
+
+### Query Parameters
+
+| 이름 | 타입 | 필수 | 기본값 | 제약 | 설명 |
+|---|---|---:|---|---|---|
+| `limit` | `integer` | X | `50` | `1 <= limit <= 500` | 반환할 최대 대응 내역 수 |
+
+### Response Body
+
+```json
+{
+  "limit": 50,
+  "items": [
+    {
+      "id": "resp-uuid-001",
+      "source_event_id": "evt-4c8a9d4d4d5a",
+      "source_event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
+      "analyzer_id": "analyzer-1",
+      "attack_category": "DOS",
+      "attack_type": "ICMP_FLOOD",
+      "severity": "high",
+      "recommended_action": "rate_limit",
+      "response_action": "RATE_LIMIT",
+      "response_level": "L2",
+      "status": "PENDING",
+      "decision_reason": "created from analyzer security event recommendation",
+      "mitigation": {
+        "action": "RATE_LIMIT",
+        "target": "flow"
+      },
+      "response_payload": null,
+      "approved_by": null,
+      "detected_at": "2026-05-24T10:00:00+00:00",
+      "approved_at": null,
+      "requested_at": null,
+      "completed_at": null,
+      "error_message": null,
+      "created_at": "2026-05-24T10:00:00+00:00",
+      "updated_at": "2026-05-24T10:00:00+00:00"
+    }
+  ]
+}
+```
+
 ## 6. WebSocket API
 
 ```http

@@ -132,6 +132,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `GET` | `/api/dashboard/suspicious-hosts` | 의심 호스트 조회 |
 | `GET` | `/api/flows` | Flow 목록 조회 |
 | `GET` | `/api/security/events` | 보안 이벤트 조회 |
+| `GET` | `/api/security/responses` | 보안 대응 내역 조회 |
 
 ### WebSocket
 

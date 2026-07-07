@@ -27,6 +27,12 @@ class SecurityService:
             "items": self.security_event_repository.list_security_events(limit),
         }
 
+    def get_responses(self, limit: int) -> dict[str, Any]:
+        return {
+            "limit": limit,
+            "items": self.security_response_repository.list_responses(limit),
+        }
+
     async def receive_events(self, payload: dict[str, Any]) -> None:
         events = payload.get("events", [])
         self.security_event_repository.save_security_events(events)

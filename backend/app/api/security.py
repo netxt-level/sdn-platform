@@ -14,6 +14,13 @@ def get_security_events(
     return security_service.get_events(limit)
 
 
+@router.get("/responses")
+def get_security_responses(
+    limit: int = Query(50, ge=1, le=500),
+):
+    return security_service.get_responses(limit)
+
+
 @router.post("/events")
 async def receive_security_events(payload: SecurityEventsRequest):
     data = payload.model_dump(mode="json")
