@@ -57,7 +57,7 @@ function getSuspiciousHostTagClass(host: SuspiciousHost): string {
 
 export default function DashboardPage() {
   const state = useRealtime();
-  const { analyzerStatus, packetSummary, detectionSummary } = state;
+  const { analyzerStatus, dashboardSummary, packetSummary, detectionSummary } = state;
   const [trafficMetric, setTrafficMetric] = useState<"packets" | "bps">("packets");
   const [suspiciousHostTypeFilter, setSuspiciousHostTypeFilter] =
     useState(ALL_ATTACK_TYPES);
@@ -95,8 +95,8 @@ export default function DashboardPage() {
         <div className="col-span-3 max-xl:col-span-6 max-sm:col-span-12">
           <MetricCard
             label="전체 패킷"
-            value={formatNumber(packetSummary.total_packets)}
-            foot="최근 1분 합산 기준"
+            value={formatNumber(dashboardSummary.totalPackets)}
+            foot="최근 5분 API 집계 기준"
             icon={Activity}
             tone="blue"
           />
@@ -104,17 +104,17 @@ export default function DashboardPage() {
         <div className="col-span-3 max-xl:col-span-6 max-sm:col-span-12">
           <MetricCard
             label="총 BPS"
-            value={formatBitsPerSecond(detectionSummary.total_bps)}
-            foot="최근 5초 비트 수 기준"
+            value={formatBitsPerSecond(dashboardSummary.currentBps)}
+            foot="최신 summary API 기준"
             icon={RadioTower}
             tone="teal"
           />
         </div>
         <div className="col-span-3 max-xl:col-span-6 max-sm:col-span-12">
           <MetricCard
-            label="활성 호스트"
-            value="4"
-            foot="h1-h4 online"
+            label="활성 플로우"
+            value={formatNumber(detectionSummary.active_flow_count)}
+            foot="최근 탐지 요약 기준"
             icon={AlertTriangle}
             tone="amber"
           />

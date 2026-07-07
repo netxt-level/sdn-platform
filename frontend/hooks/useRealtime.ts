@@ -17,12 +17,21 @@ import type { TopologyState } from "@/types/topology";
 export type RealtimeState = {
   connected: boolean;
   source: "waiting" | "history" | "websocket";
+  dashboardSummary: DashboardSummary;
   analyzerStatus: AnalyzerStatus;
   packetSummary: PacketSummary;
   detectionSummary: DetectionSummary;
   trafficSeries: TrafficSeriesPoint[];
   securityEvents: SecurityEvent[];
   topology: TopologyState;
+};
+
+export type DashboardSummary = {
+  totalPackets: number;
+  totalBytes: number;
+  currentPps: number;
+  currentBps: number;
+  networkStatus: NetworkStatus;
 };
 
 export type TrafficSeriesPoint = {
@@ -54,6 +63,18 @@ type DashboardTrafficResponse = {
   items?: DashboardTrafficItem[];
 };
 
+type DashboardSummaryResponse = {
+  total_packets?: number;
+  total_bytes?: number;
+  current_pps?: number;
+  current_bps?: number;
+  network_status?: string;
+};
+
+type AnalyzerStatusResponse = {
+  items?: Array<AnalyzerStatus & { reported_at?: string | null }>;
+};
+
 type DashboardProtocolItem = {
   protocol: string;
   packet_count: number;
@@ -72,6 +93,7 @@ const FIVE_SECONDS_MS = 5 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
 const SUSPICIOUS_HOST_REFRESH_MS = 5 * 1000;
+const DASHBOARD_SUMMARY_REFRESH_MS = 5 * 1000;
 
 const configuredWebsocketUrl = process.env.NEXT_PUBLIC_WS_URL;
 
@@ -111,6 +133,14 @@ function getWebsocketUrl() {
 }
 
 const initialTimestamp = new Date(0).toISOString();
+
+const initialDashboardSummary: DashboardSummary = {
+  totalPackets: 0,
+  totalBytes: 0,
+  currentPps: 0,
+  currentBps: 0,
+  networkStatus: "normal"
+};
 
 const initialAnalyzerStatus: AnalyzerStatus = {
   timestamp: initialTimestamp,
@@ -157,6 +187,32 @@ function normalizeNetworkStatus(status?: string): NetworkStatus {
   }
 
   return "normal";
+}
+
+function normalizeDashboardSummary(summary: DashboardSummaryResponse): DashboardSummary {
+  return {
+    totalPackets: summary.total_packets ?? 0,
+    totalBytes: summary.total_bytes ?? 0,
+    currentPps: summary.current_pps ?? 0,
+    currentBps: summary.current_bps ?? 0,
+    networkStatus: normalizeNetworkStatus(summary.network_status)
+  };
+}
+
+function normalizeStoredAnalyzerStatus(
+  status: AnalyzerStatus & { reported_at?: string | null }
+): AnalyzerStatus {
+  return {
+    timestamp: status.timestamp ?? status.reported_at ?? initialTimestamp,
+    analyzer_id: status.analyzer_id,
+    status: status.status,
+    interface: status.interface,
+    capture_active: status.capture_active,
+    backend_connected: status.backend_connected,
+    last_packet_at: status.last_packet_at ?? null,
+    last_summary_sent_at: status.last_summary_sent_at ?? null,
+    error_message: status.error_message ?? null
+  };
 }
 
 function normalizePacketSummary(summary: IncomingPacketSummary): PacketSummary {
@@ -278,6 +334,18 @@ async function fetchDashboardSuspiciousHosts(): Promise<SuspiciousHost[]> {
     (await response.json()) as DashboardSuspiciousHostsResponse;
 
   return normalizeSuspiciousHosts(suspiciousHosts.items ?? []);
+}
+
+async function fetchDashboardSummary(): Promise<DashboardSummary | null> {
+  const response = await fetch("/api/dashboard/summary");
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return normalizeDashboardSummary(
+    (await response.json()) as DashboardSummaryResponse
+  );
 }
 
 function removeTrailingPartialBucket(samples: TrafficSample[]): TrafficSample[] {
@@ -526,6 +594,7 @@ function normalizeDetectionSummary(
 export function useRealtime(): RealtimeState {
   const [connected, setConnected] = useState(false);
   const [source, setSource] = useState<"waiting" | "history" | "websocket">("waiting");
+  const [dashboardSummary, setDashboardSummary] = useState(initialDashboardSummary);
   const [analyzerStatus, setAnalyzerStatus] = useState(initialAnalyzerStatus);
   const [packetSummary, setPacketSummary] = useState(initialPacketSummary);
   const [detectionSummary, setDetectionSummary] = useState(initialDetectionSummary);
@@ -541,12 +610,16 @@ export function useRealtime(): RealtimeState {
     const loadDashboardHistory = async () => {
       try {
         const [
+          analyzerStatusResponse,
           trafficResponse,
           protocolsResponse,
+          dashboardSummaryResponse,
           historySuspiciousHosts
         ] = await Promise.all([
+          fetch("/api/analyzer/status"),
           fetch("/api/dashboard/traffic?range=5m&bucket=5s"),
           fetch("/api/dashboard/protocols?range=1m"),
+          fetchDashboardSummary(),
           fetchDashboardSuspiciousHosts()
         ]);
 
@@ -558,9 +631,28 @@ export function useRealtime(): RealtimeState {
           (await trafficResponse.json()) as DashboardTrafficResponse;
         const protocols =
           (await protocolsResponse.json()) as DashboardProtocolsResponse;
+        const summary = dashboardSummaryResponse;
+        const analyzerStatuses = analyzerStatusResponse.ok
+          ? ((await analyzerStatusResponse.json()) as AnalyzerStatusResponse)
+          : null;
 
         if (ignored) {
           return;
+        }
+
+        if (summary) {
+          setDashboardSummary(summary);
+          setDetectionSummary((prev) => ({
+            ...prev,
+            network_status: summary.networkStatus,
+            total_bps: summary.currentBps,
+            total_pps: summary.currentPps
+          }));
+        }
+
+        const latestAnalyzerStatus = analyzerStatuses?.items?.[0];
+        if (latestAnalyzerStatus) {
+          setAnalyzerStatus(normalizeStoredAnalyzerStatus(latestAnalyzerStatus));
         }
 
         const protocolStats = toProtocolStats(protocols.items ?? []);
@@ -592,8 +684,12 @@ export function useRealtime(): RealtimeState {
           setDetectionSummary((prev) => ({
             ...prev,
             timestamp: new Date(lastSample.timestampMs).toISOString(),
-            total_bps: Math.round(lastSample.totalBits / Math.max(lastSample.windowSec, 1)),
-            total_pps: Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1)),
+            total_bps:
+              summary?.currentBps ??
+              Math.round(lastSample.totalBits / Math.max(lastSample.windowSec, 1)),
+            total_pps:
+              summary?.currentPps ??
+              Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1)),
             suspicious_host_count: historySuspiciousHosts.length,
             suspicious_hosts: historySuspiciousHosts
           }));
@@ -626,16 +722,28 @@ export function useRealtime(): RealtimeState {
 
     void loadDashboardHistory();
     refreshTimer = setInterval(() => {
-      void fetchDashboardSuspiciousHosts()
-        .then((historySuspiciousHosts) => {
+      void Promise.all([
+        fetchDashboardSummary(),
+        fetchDashboardSuspiciousHosts()
+      ])
+        .then(([summary, historySuspiciousHosts]) => {
           if (!ignored) {
+            if (summary) {
+              setDashboardSummary(summary);
+              setDetectionSummary((prev) => ({
+                ...prev,
+                network_status: summary.networkStatus,
+                total_bps: summary.currentBps,
+                total_pps: summary.currentPps
+              }));
+            }
             setDbSuspiciousHosts(historySuspiciousHosts);
           }
         })
         .catch(() => {
           // Suspicious host polling is best-effort; live WebSocket data still updates the dashboard.
         });
-    }, SUSPICIOUS_HOST_REFRESH_MS);
+    }, Math.max(SUSPICIOUS_HOST_REFRESH_MS, DASHBOARD_SUMMARY_REFRESH_MS));
 
     return () => {
       ignored = true;
@@ -728,6 +836,12 @@ export function useRealtime(): RealtimeState {
           ) {
             const nextDetectionSummary = normalizeDetectionSummary(message.data);
 
+            setDashboardSummary((prev) => ({
+              ...prev,
+              currentBps: nextDetectionSummary.total_bps,
+              currentPps: nextDetectionSummary.total_pps,
+              networkStatus: nextDetectionSummary.network_status
+            }));
             setDetectionSummary(nextDetectionSummary);
             if (nextDetectionSummary.suspicious_hosts.length > 0) {
               setDbSuspiciousHosts((prev) =>
@@ -799,6 +913,7 @@ export function useRealtime(): RealtimeState {
     () => ({
       connected,
       source,
+      dashboardSummary,
       analyzerStatus,
       packetSummary: aggregatedPacketSummary,
       detectionSummary: visibleDetectionSummary,
@@ -810,6 +925,7 @@ export function useRealtime(): RealtimeState {
       aggregatedPacketSummary,
       analyzerStatus,
       connected,
+      dashboardSummary,
       securityEvents,
       source,
       topology,
