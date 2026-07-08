@@ -1,96 +1,175 @@
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from typing import Any
 
 
-# TCP SYN 패킷이 짧은 시간 안에 여러 목적지 포트로 향하는지 확인해
-# 단순 포트 스캔 의심 호스트를 찾아내는 탐지기
 class PortScanDetector:
-    def __init__(self, window_sec=5, unique_port_threshold=20, alert_cooldown_sec=30):
-        # 최근 window_sec초 안에 관측된 SYN 이벤트만 탐지 기준으로 사용
+    """TCP SYN 패턴을 기준으로 Port Scan 의심 트래픽을 찾는다.
+
+    SYN은 있고 ACK는 없는 패킷을 연결 시도로 보고, 같은 출발지가 짧은 시간 안에
+    여러 목적지 포트로 접근하면 스캔 의심 알림을 만든다. 이 결과는 대시보드의
+    의심 호스트 목록에도 쓰이고, 보안 이벤트 근거로도 사용할 수 있다.
+    """
+
+    def __init__(
+        self,
+        window_sec: int = 5,
+        unique_port_threshold: int = 20,
+        syn_count_threshold: int = 20,
+        multi_target_window_sec: int = 30,
+        multi_target_threshold: int = 3,
+        high_unique_dst_port_threshold: int = 50,
+        alert_cooldown_sec: int = 60,
+    ) -> None:
         self.window_sec = window_sec
-        # 동일 출발지/목적지 조합에서 서로 다른 목적지 포트가 이 값 이상이면 의심으로 판단
         self.unique_port_threshold = unique_port_threshold
-        # 같은 출발지/목적지 조합에 대해 알림이 반복 생성되는 것을 막는 최소 간격
+        self.syn_count_threshold = syn_count_threshold
+        self.multi_target_window_sec = multi_target_window_sec
+        self.multi_target_threshold = multi_target_threshold
+        self.high_unique_dst_port_threshold = high_unique_dst_port_threshold
         self.alert_cooldown_sec = alert_cooldown_sec
 
-        # 최근 SYN 이벤트를 시간 순서대로 보관해 오래된 이벤트를 빠르게 제거
-        self.events = deque()
-        # alert_key(src_ip, dst_ip)별 마지막 탐지 시각
-        self.last_alert_at = {}
+        self.events: deque[dict[str, Any]] = deque()
+        self.last_alert_at: dict[tuple[str, str], datetime] = {}
 
-    def detect(self, packets):
+    def detect(self, packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         now = datetime.now()
-        detected = []
 
         for packet in packets:
-            # 포트 스캔 탐지는 TCP 패킷만 대상으로 한다.
-            if packet.get("protocol") != "TCP":
-                continue
-
-            # SYN은 있고 ACK는 없는 패킷을 연결 시도 패턴으로 본다.
-            flags = packet.get("tcp_flags", "")
-            if "S" not in flags or "A" in flags:
+            if not _is_tcp_syn_probe(packet):
                 continue
 
             src_ip = packet.get("src_ip")
             dst_ip = packet.get("dst_ip")
-            dst_port = packet.get("dst_port")
-
+            dst_port = _coerce_dst_port(packet.get("dst_port"))
             if not src_ip or not dst_ip or dst_port is None:
                 continue
 
-            # 이후 윈도우 집계를 위해 필요한 최소 정보만 저장한다.
-            self.events.append({
-                "timestamp": now,
-                "src_ip": src_ip,
-                "dst_ip": dst_ip,
-                "dst_port": dst_port,
-            })
+            self.events.append(
+                {
+                    "timestamp": now,
+                    "src_ip": src_ip,
+                    "dst_ip": dst_ip,
+                    "dst_port": dst_port,
+                }
+            )
 
-        # 탐지 윈도우 밖의 오래된 이벤트는 제거한다.
         self._expire_old_events(now)
+        return self._build_alerts(now)
 
-        grouped = defaultdict(set)
+    def _build_alerts(self, now: datetime) -> list[dict[str, Any]]:
+        scan_window_cutoff = now - timedelta(seconds=self.window_sec)
+        multi_target_cutoff = now - timedelta(seconds=self.multi_target_window_sec)
+        ports_by_pair: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+            lambda: {"ports": set(), "syn_count": 0}
+        )
+        scan_targets_by_source: dict[str, set[str]] = defaultdict(set)
 
-        # 출발지/목적지 쌍마다 접근한 목적지 포트 종류를 모은다.
         for event in self.events:
             key = (event["src_ip"], event["dst_ip"])
-            grouped[key].add(event["dst_port"])
 
-        for (src_ip, dst_ip), ports in grouped.items():
-            # 고유 목적지 포트 수가 임계값보다 작으면 정상 연결 시도로 간주한다.
+            if event["timestamp"] >= scan_window_cutoff:
+                ports_by_pair[key]["ports"].add(event["dst_port"])
+                ports_by_pair[key]["syn_count"] += 1
+
+            if event["timestamp"] >= multi_target_cutoff:
+                scan_targets_by_source[event["src_ip"]].add(event["dst_ip"])
+
+        alerts: list[dict[str, Any]] = []
+        for (src_ip, dst_ip), stats in ports_by_pair.items():
+            ports = stats["ports"]
+            syn_count = stats["syn_count"]
+
             if len(ports) < self.unique_port_threshold:
                 continue
 
             alert_key = (src_ip, dst_ip)
             last_alert = self.last_alert_at.get(alert_key)
-
-            # 같은 스캔 패턴을 매 윈도우마다 중복 보고하지 않도록 cooldown을 적용한다.
             if last_alert and (now - last_alert).total_seconds() < self.alert_cooldown_sec:
                 continue
 
             self.last_alert_at[alert_key] = now
+            alerts.append(
+                self._build_alert(
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    ports=ports,
+                    syn_count=syn_count,
+                    scanned_target_count=len(scan_targets_by_source[src_ip]),
+                )
+            )
 
-            # TrafficStatsBuilder가 suspicious_hosts에 합칠 수 있는 형태로 반환한다.
-            detected.append({
-                "host": src_ip,
-                "ip": src_ip,
-                "protocol": "TCP",
-                "bps": 0,
-                "pps": 0,
-                "attack_type": "PORT_SCAN",
-                "reasons": [
-                    "Port Scan",
-                ],
-                "target_ip": dst_ip,
-                "unique_dst_port_count": len(ports),
-            })
+        return alerts
 
-        return detected
+    def _build_alert(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        ports: set[int],
+        syn_count: int,
+        scanned_target_count: int,
+    ) -> dict[str, Any]:
+        matched_conditions = [
+            "tcp_syn_without_ack",
+            "same_source_target_pair",
+            "unique_dst_port_threshold_exceeded",
+        ]
+        score = 60
 
-    def _expire_old_events(self, now):
-        cutoff = now - timedelta(seconds=self.window_sec)
+        if syn_count >= self.syn_count_threshold:
+            matched_conditions.append("syn_count_threshold_satisfied")
+            score += 10
 
-        # deque는 시간 순서대로 쌓이므로 앞에서부터 만료된 이벤트를 제거한다.
+        if scanned_target_count >= self.multi_target_threshold:
+            matched_conditions.append("multi_target_scan")
+            score += 15
+
+        if len(ports) >= self.high_unique_dst_port_threshold:
+            matched_conditions.append("high_unique_dst_port_count")
+            score += 15
+
+        score = min(score, 100)
+        response_level = "L2" if score >= 70 else "L1"
+        recommended_action = "alert" if response_level == "L2" else "monitor"
+
+        return {
+            "host": src_ip,
+            "ip": src_ip,
+            "protocol": "TCP",
+            "bps": 0,
+            "pps": 0,
+            "attack_type": "PORT_SCAN",
+            "reasons": ["Port Scan"],
+            "target_ip": dst_ip,
+            "window_seconds": self.window_sec,
+            "unique_dst_port_count": len(ports),
+            "unique_dst_ports": sorted(ports),
+            "syn_count": syn_count,
+            "matched_conditions": matched_conditions,
+            "score": score,
+            "response_level": response_level,
+            "recommended_action": recommended_action,
+        }
+
+    def _expire_old_events(self, now: datetime) -> None:
+        retention_sec = max(self.window_sec, self.multi_target_window_sec)
+        cutoff = now - timedelta(seconds=retention_sec)
+
         while self.events and self.events[0]["timestamp"] < cutoff:
             self.events.popleft()
+
+
+def _is_tcp_syn_probe(packet: dict[str, Any]) -> bool:
+    if packet.get("protocol") != "TCP":
+        return False
+
+    flags = str(packet.get("tcp_flags", "")).upper()
+    return "S" in flags and "A" not in flags
+
+
+def _coerce_dst_port(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

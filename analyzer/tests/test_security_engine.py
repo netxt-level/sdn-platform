@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.detection.port_scan import PortScanDetector
 from app.security import (
     DetectionConfig,
     LinkState,
@@ -13,6 +14,42 @@ from app.security import (
 )
 from app.security.io import load_security_input
 from app.security.ryu_adapter import flow_rules_from_policies, packet_record_from_ryu
+
+
+def test_port_scan_detector_builds_suspicious_host_alert() -> None:
+    detector = PortScanDetector(
+        unique_port_threshold=20,
+        syn_count_threshold=20,
+        alert_cooldown_sec=60,
+    )
+
+    packets = [
+        {
+            "protocol": "TCP",
+            "tcp_flags": "S",
+            "src_ip": "10.0.0.2",
+            "dst_ip": "10.0.0.4",
+            "dst_port": port,
+        }
+        for port in range(1, 21)
+    ]
+    packets.append(
+        {
+            "protocol": "TCP",
+            "tcp_flags": "S",
+            "src_ip": "10.0.0.2",
+            "dst_ip": "10.0.0.4",
+            "dst_port": "invalid",
+        }
+    )
+
+    alerts = detector.detect(packets)
+
+    assert len(alerts) == 1
+    assert alerts[0]["attack_type"] == "PORT_SCAN"
+    assert alerts[0]["unique_dst_port_count"] == 20
+    assert alerts[0]["syn_count"] == 20
+    assert alerts[0]["response_level"] == "L2"
 
 
 def test_final_arp_spoofing_sample_builds_event_and_drop_rule() -> None:

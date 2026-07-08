@@ -58,6 +58,8 @@ class SecurityAnalysisEngine:
         return [packet for packet in packets if packet.timestamp.timestamp() >= cutoff]
 
     def _detect_port_scan(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        # 같은 출발지/목적지 사이에서 접근한 목적지 포트 수를 센다.
+        # 짧은 시간 안에 여러 포트를 훑으면 정찰 행위로 보고 PORT_SCAN 이벤트를 만든다.
         ports_by_pair: dict[tuple[str, str], set[int]] = defaultdict(set)
         protocol_by_pair: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         for packet in packets:
@@ -74,6 +76,9 @@ class SecurityAnalysisEngine:
             port_count = len(ports)
             if port_count < self.config.port_scan_unique_ports:
                 continue
+
+            # Port Scan은 바로 DROP하지 않고 rate limit 후보 정책으로 만든다.
+            # 정상 진단 트래픽과 헷갈릴 수 있어서 차단보다 완화 정책에 가깝게 둔다.
             protocols = sorted(protocol_by_pair[(src_ip, dst_ip)].keys())
             protocol = protocols[0] if len(protocols) == 1 else "MIXED"
             match = {"ipv4_src": src_ip, "ipv4_dst": dst_ip}
@@ -105,6 +110,8 @@ class SecurityAnalysisEngine:
         return events
 
     def _detect_icmp_flood(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        # ICMP 패킷을 출발지/목적지 단위로 묶어 PPS를 계산한다.
+        # 기준값 또는 baseline 대비 급증 기준을 넘으면 ICMP_FLOOD로 판단한다.
         grouped = _group_packets(packets, protocol="ICMP")
         events: list[SecurityEvent] = []
         for (src_ip, dst_ip), stats in grouped.items():
@@ -113,6 +120,8 @@ class SecurityAnalysisEngine:
             threshold = max(self.config.icmp_pps_threshold, baseline * self.config.baseline_multiplier)
             if pps < threshold:
                 continue
+
+            # ICMP Flood는 서비스 가용성에 영향을 주므로 rate limit 정책을 함께 만든다.
             policy = self._policy(
                 MitigationAction.RATE_LIMIT,
                 {"ipv4_src": src_ip, "ipv4_dst": dst_ip, "ip_proto": "ICMP"},
