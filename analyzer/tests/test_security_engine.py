@@ -93,7 +93,7 @@ def test_final_arp_spoofing_sample_builds_event_and_drop_rule() -> None:
     ]
 
 
-def test_security_engine_supports_declared_detection_items() -> None:
+def test_security_engine_keeps_security_scope_focused() -> None:
     now = datetime(2026, 7, 3, tzinfo=timezone.utc)
     config = DetectionConfig(
         window_seconds=10,
@@ -109,6 +109,7 @@ def test_security_engine_supports_declared_detection_items() -> None:
                 dst_ip="10.0.0.4",
                 protocol="TCP",
                 dst_port=port,
+                tcp_flags=("SYN",),
             )
             for port in range(1, 21)
         ],
@@ -164,17 +165,19 @@ def test_security_engine_supports_declared_detection_items() -> None:
     ]
 
     result = SecurityAnalysisEngine(config=config).analyze(packets, links=links, now=now)
+    attack_types = {event.attack_type for event in result.events}
+    events_by_type = {event.attack_type: event for event in result.events}
 
-    assert {
-        "PORT_SCAN",
-        "ICMP_FLOOD",
-        "UDP_FLOOD",
-        "SYN_FLOOD",
-        "ARP_SPOOFING",
-        "ARP_REPLY_STORM",
-        "CONGESTION",
-        "LINK_FAILURE",
-    }.issubset({event.attack_type for event in result.events})
+    assert {"ARP_SPOOFING", "PORT_SCAN", "ICMP_FLOOD"}.issubset(attack_types)
+    assert events_by_type["PORT_SCAN"].evidence["response_level"] == "L2"
+    assert "tcp_syn_without_ack" in events_by_type["PORT_SCAN"].evidence["matched_conditions"]
+    assert events_by_type["ICMP_FLOOD"].evidence["response_level"] == "L2"
+    assert "min_packet_count_satisfied" in events_by_type["ICMP_FLOOD"].evidence["matched_conditions"]
+    assert "UDP_FLOOD" not in attack_types
+    assert "SYN_FLOOD" not in attack_types
+    assert "ARP_REPLY_STORM" not in attack_types
+    assert "CONGESTION" not in attack_types
+    assert "LINK_FAILURE" not in attack_types
 
 
 def test_ryu_adapter_accepts_arp_eth_type() -> None:

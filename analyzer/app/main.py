@@ -41,7 +41,7 @@ traffic_builder = TrafficStatsBuilder(
     analyzer_id=ANALYZER_ID,
 )
 
-# 보안 이벤트 생성 흐름. PORT_SCAN, ICMP_FLOOD, ARP_SPOOFING 등이 여기서 만들어진다.
+# 보안 이벤트 생성 흐름. 현재 범위에서는 ARP_SPOOFING, PORT_SCAN, ICMP_FLOOD만 만든다.
 security_runtime = SecurityRuntime(
     config=DetectionConfig(
         window_seconds=config.security_window_sec,

@@ -25,11 +25,11 @@ class SecurityRuntimeOutput:
 
 
 class SecurityRuntime:
-    """Stateful adapter for Analyzer/Ryu integration.
+    """Analyzer의 짧은 분석 주기를 보완하는 보안 런타임.
 
-    Analyzer windows are usually short, often one second. This runtime keeps a
-    security-sized rolling window so multi-second scans and floods are not lost
-    when the analyzer clears its packet buffer.
+    기본 분석 윈도우는 1초처럼 짧을 수 있다. Port Scan이나 ICMP Flood는 몇 초에
+    걸쳐 쌓인 패턴을 봐야 하므로, 여기서 보안 판단용 rolling window를 따로
+    유지한다.
     """
 
     def __init__(

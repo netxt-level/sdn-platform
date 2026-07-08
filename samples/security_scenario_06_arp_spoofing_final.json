@@ -5,8 +5,7 @@
       "10.0.0.254": "00:00:00:00:ff:ff"
     },
     "gateway_ip": "10.0.0.254",
-    "gateway_mac": "00:00:00:00:ff:ff",
-    "arp_reply_pps_threshold": 20
+    "gateway_mac": "00:00:00:00:ff:ff"
   },
   "baseline_packets": [
     {

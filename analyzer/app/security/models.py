@@ -81,15 +81,7 @@ class DetectionConfig:
     baseline_multiplier: float = 5.0
     min_sample_packets: int = 3
     icmp_pps_threshold: float = 100.0
-    udp_pps_threshold: float = 200.0
-    udp_bps_threshold: float = 1_000_000.0
-    syn_pps_threshold: float = 100.0
-    syn_ratio_threshold: float = 0.80
     port_scan_unique_ports: int = 20
-    arp_reply_pps_threshold: float = 20.0
-    congestion_utilization_threshold: float = 0.70
-    congestion_latency_ms_threshold: float = 100.0
-    congestion_queue_threshold: int = 100
     rate_limit_pps: int = 50
     mitigation_idle_timeout: int = 60
     mitigation_hard_timeout: int = 300

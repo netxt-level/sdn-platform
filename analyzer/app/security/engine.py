@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 import hashlib
 from typing import Iterable
@@ -19,6 +19,13 @@ from .models import (
 
 
 class SecurityAnalysisEngine:
+    """보안 담당 범위에 맞춘 최소 탐지 엔진.
+
+    최종 시나리오는 ARP Spoofing이다. ICMP Flood와 Port Scan은 기존 브랜치의
+    흐름을 참고하되, 발표 흐름을 보조하는 탐지 항목으로만 둔다. 그래서 이
+    엔진은 필요한 세 가지 이벤트만 만든다.
+    """
+
     def __init__(self, config: DetectionConfig | None = None, baseline: BaselineProfile | None = None) -> None:
         self.config = config or DetectionConfig()
         self.baseline = baseline
@@ -32,16 +39,15 @@ class SecurityAnalysisEngine:
         packet_list = list(packets)
         now = now or _analysis_time(packet_list)
         window_packets = self._select_window(packet_list, now)
-        link_list = list(links or [])
-        events: list[SecurityEvent] = []
 
+        # links 인자는 컨트롤러/토폴로지 쪽 확장을 위해 남겨둔다.
+        # 현재 보안 담당 범위에서는 링크 장애나 혼잡 이벤트를 만들지 않는다.
+        _ = links
+
+        events: list[SecurityEvent] = []
+        events.extend(self._detect_arp_spoofing(window_packets, now))
         events.extend(self._detect_port_scan(window_packets, now))
         events.extend(self._detect_icmp_flood(window_packets, now))
-        events.extend(self._detect_udp_flood(window_packets, now))
-        events.extend(self._detect_syn_flood(window_packets, now))
-        events.extend(self._detect_arp_spoofing(window_packets, now))
-        events.extend(self._detect_congestion(link_list, now))
-        events.extend(self._detect_link_failure(link_list, now))
 
         policies = [event.policy for event in events if event.policy is not None]
         return AnalysisResult(
@@ -54,188 +60,13 @@ class SecurityAnalysisEngine:
     def _select_window(self, packets: list[PacketRecord], now: datetime) -> list[PacketRecord]:
         if not packets:
             return []
+
         cutoff = now.timestamp() - self.config.window_seconds
         return [packet for packet in packets if packet.timestamp.timestamp() >= cutoff]
 
-    def _detect_port_scan(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
-        # 같은 출발지/목적지 사이에서 접근한 목적지 포트 수를 센다.
-        # 짧은 시간 안에 여러 포트를 훑으면 정찰 행위로 보고 PORT_SCAN 이벤트를 만든다.
-        ports_by_pair: dict[tuple[str, str], set[int]] = defaultdict(set)
-        protocol_by_pair: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
-        for packet in packets:
-            if packet.protocol_name not in {"TCP", "UDP"} or packet.dst_port is None:
-                continue
-            if not packet.src_ip or not packet.dst_ip:
-                continue
-            key = (packet.src_ip, packet.dst_ip)
-            ports_by_pair[key].add(packet.dst_port)
-            protocol_by_pair[key][packet.protocol_name] += max(packet.packet_count, 1)
-
-        events: list[SecurityEvent] = []
-        for (src_ip, dst_ip), ports in ports_by_pair.items():
-            port_count = len(ports)
-            if port_count < self.config.port_scan_unique_ports:
-                continue
-
-            # Port Scan은 바로 DROP하지 않고 rate limit 후보 정책으로 만든다.
-            # 정상 진단 트래픽과 헷갈릴 수 있어서 차단보다 완화 정책에 가깝게 둔다.
-            protocols = sorted(protocol_by_pair[(src_ip, dst_ip)].keys())
-            protocol = protocols[0] if len(protocols) == 1 else "MIXED"
-            match = {"ipv4_src": src_ip, "ipv4_dst": dst_ip}
-            if len(protocols) == 1:
-                match["ip_proto"] = protocol
-            policy = self._policy(
-                MitigationAction.RATE_LIMIT,
-                match,
-                350,
-                "port scan source rate limit",
-                rate_limit_pps=self.config.rate_limit_pps,
-            )
-            events.append(
-                self._event(
-                    "PORT_SCAN",
-                    "Medium",
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    protocol=protocol,
-                    metric_name="unique_dst_ports",
-                    metric_value=port_count,
-                    threshold=self.config.port_scan_unique_ports,
-                    action=policy.action,
-                    policy=policy,
-                    evidence={"ports": sorted(ports)[:50], "protocols": protocols, "window_seconds": self.config.window_seconds},
-                    now=now,
-                )
-            )
-        return events
-
-    def _detect_icmp_flood(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
-        # ICMP 패킷을 출발지/목적지 단위로 묶어 PPS를 계산한다.
-        # 기준값 또는 baseline 대비 급증 기준을 넘으면 ICMP_FLOOD로 판단한다.
-        grouped = _group_packets(packets, protocol="ICMP")
-        events: list[SecurityEvent] = []
-        for (src_ip, dst_ip), stats in grouped.items():
-            pps = stats["packets"] / self.config.window_seconds
-            baseline = self._baseline_protocol_pps(src_ip, "ICMP")
-            threshold = max(self.config.icmp_pps_threshold, baseline * self.config.baseline_multiplier)
-            if pps < threshold:
-                continue
-
-            # ICMP Flood는 서비스 가용성에 영향을 주므로 rate limit 정책을 함께 만든다.
-            policy = self._policy(
-                MitigationAction.RATE_LIMIT,
-                {"ipv4_src": src_ip, "ipv4_dst": dst_ip, "ip_proto": "ICMP"},
-                500,
-                "icmp flood mitigation",
-                rate_limit_pps=self.config.rate_limit_pps,
-            )
-            events.append(
-                self._event(
-                    "ICMP_FLOOD",
-                    "High",
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    protocol="ICMP",
-                    metric_name="pps",
-                    metric_value=round(pps, 3),
-                    threshold=round(threshold, 3),
-                    action=policy.action,
-                    policy=policy,
-                    evidence={"packet_count": stats["packets"], "baseline_pps": baseline},
-                    now=now,
-                )
-            )
-        return events
-
-    def _detect_udp_flood(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
-        grouped = _group_packets(packets, protocol="UDP")
-        events: list[SecurityEvent] = []
-        for (src_ip, dst_ip), stats in grouped.items():
-            pps = stats["packets"] / self.config.window_seconds
-            bps = stats["bytes"] / self.config.window_seconds
-            baseline_pps = self._baseline_protocol_pps(src_ip, "UDP")
-            threshold_pps = max(self.config.udp_pps_threshold, baseline_pps * self.config.baseline_multiplier)
-            exceeds_pps = pps >= threshold_pps
-            exceeds_bps = bps >= self.config.udp_bps_threshold
-            if not (exceeds_pps or exceeds_bps):
-                continue
-            metric_name = "pps" if exceeds_pps else "bps"
-            metric_value = pps if exceeds_pps else bps
-            threshold = threshold_pps if exceeds_pps else self.config.udp_bps_threshold
-            policy = self._policy(
-                MitigationAction.RATE_LIMIT,
-                {"ipv4_src": src_ip, "ipv4_dst": dst_ip, "ip_proto": "UDP"},
-                500,
-                "udp flood mitigation",
-                rate_limit_pps=self.config.rate_limit_pps,
-            )
-            events.append(
-                self._event(
-                    "UDP_FLOOD",
-                    "High",
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    protocol="UDP",
-                    metric_name=metric_name,
-                    metric_value=round(metric_value, 3),
-                    threshold=round(threshold, 3),
-                    action=policy.action,
-                    policy=policy,
-                    evidence={"packet_count": stats["packets"], "byte_count": stats["bytes"], "baseline_pps": baseline_pps},
-                    now=now,
-                )
-            )
-        return events
-
-    def _detect_syn_flood(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
-        tcp_totals: Counter[tuple[str, str, int | None]] = Counter()
-        syn_totals: Counter[tuple[str, str, int | None]] = Counter()
-        for packet in packets:
-            if packet.protocol_name != "TCP" or not packet.src_ip or not packet.dst_ip:
-                continue
-            key = (packet.src_ip, packet.dst_ip, packet.dst_port)
-            tcp_totals[key] += max(packet.packet_count, 1)
-            if packet.is_syn_only:
-                syn_totals[key] += max(packet.packet_count, 1)
-
-        events: list[SecurityEvent] = []
-        for key, syn_count in syn_totals.items():
-            src_ip, dst_ip, dst_port = key
-            total = tcp_totals[key]
-            syn_pps = syn_count / self.config.window_seconds
-            syn_ratio = syn_count / total if total else 0.0
-            baseline = self._baseline_protocol_pps(src_ip, "TCP")
-            threshold_pps = max(self.config.syn_pps_threshold, baseline * self.config.baseline_multiplier)
-            enough_samples = syn_count >= self.config.min_sample_packets
-            if not enough_samples or (syn_pps < threshold_pps and syn_ratio < self.config.syn_ratio_threshold):
-                continue
-            policy = self._policy(
-                MitigationAction.RATE_LIMIT,
-                {"ipv4_src": src_ip, "ipv4_dst": dst_ip, "ip_proto": "TCP", "tcp_flags": "SYN"},
-                550,
-                "syn flood mitigation",
-                rate_limit_pps=self.config.rate_limit_pps,
-            )
-            events.append(
-                self._event(
-                    "SYN_FLOOD",
-                    "High",
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    dst_port=dst_port,
-                    protocol="TCP",
-                    metric_name="syn_ratio",
-                    metric_value=round(syn_ratio, 3),
-                    threshold=self.config.syn_ratio_threshold,
-                    action=policy.action,
-                    policy=policy,
-                    evidence={"syn_count": syn_count, "tcp_count": total, "syn_pps": round(syn_pps, 3), "threshold_pps": threshold_pps},
-                    now=now,
-                )
-            )
-        return events
-
     def _detect_arp_spoofing(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        # ARP Spoofing의 핵심은 "같은 IP가 원래 알고 있던 MAC과 다르게 보이는가"다.
+        # Gateway IP/MAC은 config에서 우선 받고, 샘플이나 사전 학습값이 있으면 baseline도 참고한다.
         trusted = {ip: mac.lower() for ip, mac in self.config.trusted_ip_mac.items()}
         if self.config.gateway_ip and self.config.gateway_mac:
             trusted[self.config.gateway_ip] = self.config.gateway_mac.lower()
@@ -243,15 +74,21 @@ class SecurityAnalysisEngine:
             trusted = {**self.baseline.ip_mac, **trusted}
 
         observed: dict[str, set[str]] = defaultdict(set)
-        arp_context: dict[str, dict[str, set[str]]] = defaultdict(lambda: {"target_ips": set(), "target_macs": set(), "opcodes": set()})
-        reply_counter: Counter[tuple[str, str]] = Counter()
+        arp_context: dict[str, dict[str, set[str]]] = defaultdict(
+            lambda: {"target_ips": set(), "target_macs": set(), "opcodes": set()}
+        )
+
         for packet in packets:
             if packet.protocol_name != "ARP":
                 continue
+
             sender_ip = packet.arp_sender_ip or packet.src_ip
             sender_mac = (packet.arp_sender_mac or packet.src_mac).lower()
             if not sender_ip or not sender_mac:
                 continue
+
+            # 한 윈도우 안에서 관측된 IP-MAC 매핑을 모아둔다.
+            # 이후 정상 MAC과 다르거나, 하나의 IP에 MAC이 둘 이상 붙으면 위조 가능성으로 본다.
             observed[sender_ip].add(sender_mac)
             if packet.arp_target_ip:
                 arp_context[sender_ip]["target_ips"].add(packet.arp_target_ip)
@@ -259,18 +96,20 @@ class SecurityAnalysisEngine:
                 arp_context[sender_ip]["target_macs"].add(packet.arp_target_mac.lower())
             if packet.arp_opcode:
                 arp_context[sender_ip]["opcodes"].add(packet.arp_opcode.lower())
-            if packet.is_arp_reply:
-                reply_counter[(sender_ip, sender_mac)] += max(packet.packet_count, 1)
 
         events: list[SecurityEvent] = []
         for ip, macs in observed.items():
             trusted_mac = trusted.get(ip)
             duplicate_mapping = len(macs) >= 2
-            gateway_changed = bool(trusted_mac and any(mac != trusted_mac for mac in macs))
-            if not duplicate_mapping and not gateway_changed:
+            trusted_mismatch = bool(trusted_mac and any(mac != trusted_mac for mac in macs))
+            if not trusted_mismatch and not duplicate_mapping:
                 continue
+
             attacker_mac = next((mac for mac in sorted(macs) if mac != trusted_mac), sorted(macs)[0])
-            reason = "trusted_mac_mismatch" if gateway_changed else "duplicate_ip_mac_mapping"
+            reason = "trusted_mac_mismatch" if trusted_mismatch else "duplicate_ip_mac_mapping"
+
+            # ARP Spoofing은 근거가 명확한 편이라 위조 ARP sender만 DROP 후보로 만든다.
+            # 전체 호스트를 막지 않고, 위조된 ARP 응답 조건만 좁게 잡는 것이 발표 설명에도 자연스럽다.
             policy = self._policy(
                 MitigationAction.DROP,
                 {"eth_type": "ARP", "arp_spa": ip, "eth_src": attacker_mac},
@@ -303,95 +142,149 @@ class SecurityAnalysisEngine:
                 )
             )
 
-        for (sender_ip, sender_mac), count in reply_counter.items():
-            pps = count / self.config.window_seconds
-            if pps < self.config.arp_reply_pps_threshold:
+        return events
+
+    def _detect_port_scan(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        # Port Scan은 공격 전 정찰 행위에 가깝다.
+        # 여기서는 ICMP/Port Scan 브랜치의 흐름을 참고하되, TCP SYN만 기준으로 좁혀서 본다.
+        # SYN은 있고 ACK는 없는 패킷이 여러 목적지 포트로 퍼지면 "연결 시도만 던져보는" 패턴이 된다.
+        ports_by_pair: dict[tuple[str, str], set[int]] = defaultdict(set)
+        syn_count_by_pair: dict[tuple[str, str], int] = defaultdict(int)
+
+        for packet in packets:
+            if packet.protocol_name != "TCP" or packet.dst_port is None:
                 continue
+            if not packet.src_ip or not packet.dst_ip or not packet.is_syn_only:
+                continue
+
+            key = (packet.src_ip, packet.dst_ip)
+            ports_by_pair[key].add(packet.dst_port)
+            syn_count_by_pair[key] += max(packet.packet_count, 1)
+
+        events: list[SecurityEvent] = []
+        for (src_ip, dst_ip), ports in ports_by_pair.items():
+            port_count = len(ports)
+            if port_count < self.config.port_scan_unique_ports:
+                continue
+
+            syn_count = syn_count_by_pair[(src_ip, dst_ip)]
+            matched_conditions = [
+                "tcp_syn_without_ack",
+                "same_source_target_pair",
+                "unique_dst_port_threshold_exceeded",
+            ]
+            score = 60
+            if syn_count >= self.config.port_scan_unique_ports:
+                matched_conditions.append("syn_count_threshold_satisfied")
+                score += 10
+
+            # Port Scan은 정상 점검 도구와 겹칠 여지가 있어 바로 DROP하지 않는다.
+            # 대신 같은 출발지/목적지 TCP 흐름을 낮은 속도로 제한하는 후보 정책만 만든다.
             policy = self._policy(
                 MitigationAction.RATE_LIMIT,
-                {"eth_type": "ARP", "arp_spa": sender_ip, "eth_src": sender_mac},
-                600,
-                "arp reply storm mitigation",
+                {"ipv4_src": src_ip, "ipv4_dst": dst_ip, "ip_proto": "TCP"},
+                350,
+                "port scan source rate limit",
                 rate_limit_pps=self.config.rate_limit_pps,
             )
             events.append(
                 self._event(
-                    "ARP_REPLY_STORM",
+                    "PORT_SCAN",
                     "Medium",
-                    src_mac=sender_mac,
-                    protocol="ARP",
-                    metric_name="pps",
-                    metric_value=round(pps, 3),
-                    threshold=self.config.arp_reply_pps_threshold,
-                    action=policy.action,
-                    policy=policy,
-                    evidence={"sender_ip": sender_ip, "reply_count": count},
-                    now=now,
-                )
-            )
-        return events
-
-    def _detect_congestion(self, links: list[LinkState], now: datetime) -> list[SecurityEvent]:
-        events: list[SecurityEvent] = []
-        for link in links:
-            latency_hit = link.latency_ms is not None and link.latency_ms >= self.config.congestion_latency_ms_threshold
-            queue_hit = link.queue_len is not None and link.queue_len >= self.config.congestion_queue_threshold
-            drop_hit = link.packet_drop_delta > 0
-            utilization_hit = link.utilization >= self.config.congestion_utilization_threshold
-            if link.is_down or not (utilization_hit or latency_hit or queue_hit or drop_hit):
-                continue
-            policy = self._policy(
-                MitigationAction.REROUTE,
-                {"avoid_link": link.link_id},
-                300,
-                "congested link reroute",
-                reroute_path="bypass",
-            )
-            events.append(
-                self._event(
-                    "CONGESTION",
-                    "Medium",
-                    metric_name="link_utilization",
-                    metric_value=round(link.utilization, 3),
-                    threshold=self.config.congestion_utilization_threshold,
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    protocol="TCP",
+                    metric_name="unique_dst_ports",
+                    metric_value=port_count,
+                    threshold=self.config.port_scan_unique_ports,
                     action=policy.action,
                     policy=policy,
                     evidence={
-                        "link_id": link.link_id,
-                        "latency_ms": link.latency_ms,
-                        "queue_len": link.queue_len,
-                        "packet_drop_delta": link.packet_drop_delta,
+                        "matched_conditions": matched_conditions,
+                        "ports": sorted(ports)[:50],
+                        "syn_count": syn_count,
+                        "score": min(score, 100),
+                        "response_level": "L2" if score >= 70 else "L1",
+                        "recommended_action": "rate_limit" if score >= 70 else "monitor",
+                        "window_seconds": self.config.window_seconds,
                     },
                     now=now,
                 )
             )
+
         return events
 
-    def _detect_link_failure(self, links: list[LinkState], now: datetime) -> list[SecurityEvent]:
+    def _detect_icmp_flood(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        # ICMP Flood는 "ping이 많다"만으로 단정하면 오탐이 생기기 쉽다.
+        # 그래서 출발지/목적지 단위로 묶고, 절대 PPS 기준과 baseline 급증 기준을 함께 본다.
+        grouped = _group_packets(packets, protocol="ICMP")
         events: list[SecurityEvent] = []
-        for link in links:
-            if not link.is_down:
+
+        for (src_ip, dst_ip), stats in grouped.items():
+            min_required_packets = max(
+                self.config.min_sample_packets,
+                int(self.config.icmp_pps_threshold * self.config.window_seconds),
+            )
+            if stats["packets"] < min_required_packets:
                 continue
+
+            pps = stats["packets"] / self.config.window_seconds
+            baseline = self._baseline_protocol_pps(src_ip, "ICMP")
+            threshold = max(self.config.icmp_pps_threshold, baseline * self.config.baseline_multiplier)
+            if pps < threshold:
+                continue
+
+            matched_conditions = [
+                "icmp_protocol",
+                "same_source_target_pair",
+                "icmp_pps_threshold_exceeded",
+                "min_packet_count_satisfied",
+            ]
+            score = 80
+            high_pps_threshold = threshold * 3
+            if pps >= high_pps_threshold:
+                matched_conditions.append("high_pps_exceeded")
+                score += 15
+            if baseline > 0 and pps >= baseline * self.config.baseline_multiplier:
+                matched_conditions.append("baseline_spike_detected")
+                score += 5
+
+            # ICMP Flood는 최종 ARP 시나리오의 보조 탐지 항목이다.
+            # 여러 공격자 기반 DDoS로 부르지 않고, 단일 호스트의 과도한 ICMP로 보고 RATE_LIMIT만 제안한다.
             policy = self._policy(
-                MitigationAction.REROUTE,
-                {"avoid_link": link.link_id},
-                700,
-                "failed link bypass",
-                reroute_path="bypass",
+                MitigationAction.RATE_LIMIT,
+                {"ipv4_src": src_ip, "ipv4_dst": dst_ip, "ip_proto": "ICMP"},
+                500,
+                "icmp flood mitigation",
+                rate_limit_pps=self.config.rate_limit_pps,
             )
             events.append(
                 self._event(
-                    "LINK_FAILURE",
+                    "ICMP_FLOOD",
                     "High",
-                    metric_name="link_status",
-                    metric_value=link.status,
-                    threshold="up",
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    protocol="ICMP",
+                    metric_name="pps",
+                    metric_value=round(pps, 3),
+                    threshold=round(threshold, 3),
                     action=policy.action,
                     policy=policy,
-                    evidence={"link_id": link.link_id, "src_switch": link.src_switch, "dst_switch": link.dst_switch},
+                    evidence={
+                        "matched_conditions": matched_conditions,
+                        "packet_count": stats["packets"],
+                        "baseline_pps": baseline,
+                        "score": min(score, 100),
+                        "response_level": "L2",
+                        "recommended_action": "rate_limit",
+                        "min_packet_count": min_required_packets,
+                        "high_pps_threshold": round(high_pps_threshold, 3),
+                        "window_seconds": self.config.window_seconds,
+                    },
                     now=now,
                 )
             )
+
         return events
 
     def _baseline_protocol_pps(self, src_ip: str, protocol: str) -> float:
@@ -406,7 +299,6 @@ class SecurityAnalysisEngine:
         priority: int,
         reason: str,
         rate_limit_pps: int | None = None,
-        reroute_path: str | None = None,
     ) -> MitigationPolicy:
         return MitigationPolicy(
             action=action,
@@ -416,7 +308,6 @@ class SecurityAnalysisEngine:
             rate_limit_pps=rate_limit_pps,
             idle_timeout=self.config.mitigation_idle_timeout,
             hard_timeout=self.config.mitigation_hard_timeout,
-            reroute_path=reroute_path,
         )
 
     def _event(
@@ -447,9 +338,7 @@ class SecurityAnalysisEngine:
                 str(dst_port or ""),
                 protocol,
                 metric_name,
-                str(event_evidence.get("link_id") or ""),
-                str(event_evidence.get("ip") or event_evidence.get("spoofed_ip") or ""),
-                str(event_evidence.get("sender_ip") or ""),
+                str(event_evidence.get("spoofed_ip") or ""),
             ),
             attack_type=attack_type,
             severity=severity,
@@ -475,7 +364,10 @@ def analyze_security_window(
     config: DetectionConfig | None = None,
     baseline: BaselineProfile | None = None,
 ) -> AnalysisResult:
-    return SecurityAnalysisEngine(config=config, baseline=baseline).analyze(packets, links=links)
+    return SecurityAnalysisEngine(config=config, baseline=baseline).analyze(
+        packets,
+        links=links,
+    )
 
 
 def _group_packets(packets: list[PacketRecord], protocol: str) -> dict[tuple[str, str], dict[str, int]]:
