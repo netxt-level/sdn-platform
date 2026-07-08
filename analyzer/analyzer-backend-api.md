@@ -351,6 +351,8 @@ POST /api/security/events
 
 - `backend/app/schemas/security.py`의 `SecurityEventPayload` / `SecurityEvent` 스키마로 요청을 검증한다.
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 - 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
 
@@ -441,4 +443,4 @@ POST /api/analyzer/status
 
 백엔드가 분석 서버에 탐지 임계값, 캡처 상태, 정책 버전 같은 설정 변경을 요청하는 기능이 추가되면, 분석 서버가 적용 결과를 백엔드로 보고하는 별도 메시지를 도입할 수 있다.
 
-현재 보안 대응과 flow rule 생성의 입력은 `POST /api/security/events`의 보안 이벤트이며, 별도의 분석 변경 메시지 API는 구현하지 않는다.
+현재 analyzer 기반 보안 대응과 flow rule 후보 생성의 입력은 `POST /api/security/events`의 보안 이벤트다. 백엔드에는 운영자가 수동 flow rule을 추가하는 `POST /api/flows`도 있지만, analyzer는 이 API를 직접 호출하지 않는다. 별도의 분석 변경 메시지 API는 구현하지 않는다.

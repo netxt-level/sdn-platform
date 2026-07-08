@@ -29,7 +29,7 @@
 | 분류 | `severity`, `confidence`, `response_level`, `recommended_action` 산출 |
 | 제안 | 필요한 경우 `mitigation`에 대응 후보 payload 포함 |
 
-실제 대응 적용 여부는 백엔드/컨트롤러 정책에서 결정한다.
+실제 대응 적용 여부는 백엔드/컨트롤러 정책에서 결정한다. 현재 백엔드는 보안 대응 내역과 flow rule 후보를 DB에 저장하지만, SDN 컨트롤러에 실제 rule을 설치하는 단계는 아직 연결되어 있지 않다.
 
 ```text
 탐지 항목별 기본 레벨
@@ -82,17 +82,16 @@
 
 ### 3.3 이벤트 상태
 
-분석 서버가 최초 생성하는 이벤트 상태는 항상 `detected`다. 이후 상태 변경은 백엔드/컨트롤러 대응 흐름에서 관리한다.
+분석 서버가 최초 생성하는 이벤트 상태는 항상 `detected`다. 현재 프론트/백엔드 운영 화면에서 사용하는 보안 이벤트 상태는 아래 네 가지를 기준으로 한다.
 
 | 상태 | 의미 |
 |---|---|
 | `detected` | 탐지됨 |
-| `mitigation_requested` | 대응 요청 생성됨 |
-| `mitigating` | 대응 적용 중 |
-| `mitigated` | 대응 적용 완료 |
-| `failed` | 대응 실패 |
+| `blocked` | 차단 처리됨 |
 | `ignored` | 운영자 또는 정책에 의해 무시 |
 | `resolved` | 정상화 또는 종료 |
+
+보안 대응 내역과 flow rule 후보는 별도 lifecycle을 가진다. 현재 `security_responses`와 `flow_rules`는 생성 시 `PENDING` 상태로 저장되며, 향후 컨트롤러 연동 시 `APPLIED`, `FAILED`, `REMOVED` 같은 적용 상태를 확장할 수 있다.
 
 ## 4. Score 및 대응 레벨
 
@@ -321,7 +320,7 @@
 
 ## 7. Mitigation 후보 명세
 
-`mitigation`은 analyzer가 제안하는 대응 후보 payload다. analyzer는 이 payload를 생성할 수 있지만 직접 적용하지 않는다. 백엔드가 저장, 승인, 정책 확인을 수행하고 컨트롤러가 실제 flow rule 적용 여부를 결정한다.
+`mitigation`은 analyzer가 제안하는 대응 후보 payload다. analyzer는 이 payload를 생성할 수 있지만 직접 적용하지 않는다. 백엔드는 `mitigation`을 기반으로 `security_responses`와 `flow_rules`에 `PENDING` 후보를 저장한다. 컨트롤러가 실제 flow rule 적용 여부를 결정하는 단계는 아직 구현 범위 밖이다.
 
 | 탐지 | 조건 | mitigation |
 |---|---|---|
@@ -364,3 +363,5 @@
 | 항목 | 설명 |
 |---|---|
 | rolling window 적용 | ICMP flood 탐지에도 rolling window 적용 |
+| controller 적용 연동 | `flow_rules`의 `PENDING` 후보를 SDN 컨트롤러에 설치/해제하고 상태를 갱신 |
+| 이벤트 상태 변경 API | `detected`, `blocked`, `ignored`, `resolved` 상태 전환과 처리 이력 저장 |

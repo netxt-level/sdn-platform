@@ -5,7 +5,8 @@
 - FastAPI 앱: `backend/app/main.py`
 - 분석 서버 수신 API: `backend/app/api/analyzer.py`
 - 대시보드 조회 API: `backend/app/api/dashboard.py`
-- 플로우 조회 API: `backend/app/api/flows.py`
+- 플로우 조회/생성 API: `backend/app/api/flows.py`
+- 경로 제어 API: `backend/app/api/path.py`
 - 보안 이벤트 조회 API: `backend/app/api/security.py`
 - WebSocket API: `backend/app/api/ws.py`
 
@@ -299,7 +300,7 @@ Elasticsearch `sdn-security-events` 인덱스의 최신 보안 이벤트에서 �
 
 ## 4. Flows API
 
-### Flow 목록 조회
+### 4.1 Flow 목록 조회
 
 ```http
 GET /api/flows
@@ -354,7 +355,102 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
 }
 ```
 
-## 5. Security API
+### 4.2 Flow Rule 수동 생성
+
+```http
+POST /api/flows
+```
+
+운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL `sdn_controller.flow_rules`에 `PENDING` 상태로 저장한다. 현재 구현은 DB 생성까지이며 SDN 컨트롤러 실제 설치는 수행하지 않는다.
+
+### Request Body
+
+```json
+{
+  "switch_id": "s1",
+  "match": {
+    "ipv4_src": "10.0.0.2",
+    "ipv4_dst": "10.0.0.4",
+    "ip_proto": 1
+  },
+  "action": "RATE_LIMIT",
+  "priority": 500,
+  "rate_limit_pps": 100
+}
+```
+
+### Request Fields
+
+| 이름 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---:|---|---|
+| `switch_id` | `string \| null` | X | `null` | 적용 대상 스위치 ID |
+| `match` | `object` | O | `{}` | flow match 조건 |
+| `action` | `string` | O | 없음 | `RATE_LIMIT`, `DROP`, `output:s2` 등 |
+| `priority` | `integer` | X | `100` | 우선순위. `1 <= priority <= 65535` |
+| `idle_timeout` | `integer \| null` | X | `null` | idle timeout |
+| `hard_timeout` | `integer \| null` | X | `null` | hard timeout |
+| `rate_limit_pps` | `integer \| null` | X | `null` | rate limit pps |
+
+### Response Body
+
+생성된 flow rule 객체를 반환한다. 응답 필드는 `GET /api/flows`의 item과 동일하다.
+
+## 5. Path API
+
+### 경로 제어 상태 조회
+
+```http
+GET /api/path/status
+```
+
+대시보드 요약과 `sdn_controller.flow_rules`를 조합해 경로 제어 화면에서 사용할 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
+
+### Response Body
+
+```json
+{
+  "active_path": "backup",
+  "network_status": "normal",
+  "paths": {
+    "primary": {
+      "name": "primary",
+      "nodes": ["s1", "s2", "s4"],
+      "utilization": 0,
+      "active": false
+    },
+    "backup": {
+      "name": "backup",
+      "nodes": ["s1", "s3", "s4"],
+      "utilization": 0,
+      "active": true
+    }
+  },
+  "links": [
+    {
+      "id": "s1-s2",
+      "source": "s1",
+      "target": "s2",
+      "path": "primary",
+      "active": false,
+      "utilization": 0
+    }
+  ],
+  "history": [
+    {
+      "id": "rule-uuid-001",
+      "time": "2026-05-24T10:00:00+00:00",
+      "from": "primary",
+      "to": "RATE_LIMIT",
+      "reason": "evt-001 대응",
+      "status": "PENDING"
+    }
+  ]
+}
+```
+
+현재 `active_path`는 네트워크 상태와 `PENDING` 대응 flow rule 존재 여부를 기반으로 파생한다. 실제 컨트롤러 경로 전환 상태와 동기화하는 기능은 아직 연결되어 있지 않다.
+
+## 6. Security API
 
 ### 보안 이벤트 수신
 
@@ -486,7 +582,7 @@ PostgreSQL `sdn_controller.security_responses`에 저장된 최신 보안 대응
 }
 ```
 
-## 6. WebSocket API
+## 7. WebSocket API
 
 ```http
 WS /ws/analyzer

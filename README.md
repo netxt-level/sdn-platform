@@ -7,8 +7,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | 영역 | 경로 | 진행 상태 |
 |---|---|---|
 | 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ICMP Flood/Port Scan 탐지, 백엔드 전송 구현 |
-| 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회 API, WebSocket broadcast 구현 |
-| 프론트엔드 | `frontend/` | 실시간 대시보드와 운영 화면 구현 |
+| 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회/생성 API, WebSocket broadcast 구현 |
+| 프론트엔드 | `frontend/` | 실시간 대시보드와 보안 이벤트/경로/Flow Rule 운영 화면 구현 |
 
 ## 전체 구조
 
@@ -88,7 +88,9 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 보안 이벤트 수신 및 Elasticsearch 저장
 - 대시보드 조회 API 제공
 - 보안 이벤트 조회 API 제공
-- Flow 목록 조회 API 제공
+- Flow 목록 조회 및 수동 Flow Rule 생성 API 제공
+- 경로 제어 상태 조회 API 제공
+- 보안 대응 내역과 flow rule 후보를 PostgreSQL에 저장
 - WebSocket으로 분석 이벤트 실시간 broadcast
 
 ### 프론트엔드
@@ -102,16 +104,19 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - WebSocket 실시간 수신
 - 백엔드 히스토리 API 초기 조회
 - DB 의심 호스트 polling 및 실시간 데이터 병합
+- 보안 이벤트 목록/상세 화면을 실제 보안 이벤트 API에 연결
+- 처리 완료/긴급 처리 필터와 미처리 high 이상 이벤트 알림 표시
+- 경로 제어 화면을 백엔드 경로 상태 API에 연결
+- Flow Rule 화면을 실제 조회/수동 생성 API에 연결
 
 ## 화면 구성
 
 | 화면 | 경로 | 상태 |
 |---|---|---|
 | 대시보드 | `/` | 구현됨 |
-| Flow Rules | `/flow-rules` | 구현중 |
-| Path | `/path` | 구현중 |
-| Security Events | `/security/events` | 구현중 |
-| Security Rules | `/security/rules` | 구현중 |
+| Flow Rules | `/flow-rules` | 구현됨 |
+| Path | `/path` | 구현됨 |
+| Security Events | `/security/events` | 구현됨 |
 | Topology | `/topology` | 구현중 |
 | Settings | `/settings` | 구현중 |
 
@@ -131,6 +136,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `GET` | `/api/dashboard/protocols` | 프로토콜 통계 조회 |
 | `GET` | `/api/dashboard/suspicious-hosts` | 의심 호스트 조회 |
 | `GET` | `/api/flows` | Flow 목록 조회 |
+| `POST` | `/api/flows` | 수동 Flow Rule 생성 |
+| `GET` | `/api/path/status` | 경로 제어 상태 조회 |
 | `GET` | `/api/security/events` | 보안 이벤트 조회 |
 | `GET` | `/api/security/responses` | 보안 대응 내역 조회 |
 
@@ -147,6 +154,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `analyzer_status` | 분석 서버 상태 수신 후 |
 | `packet_summary` | 패킷 요약 수신 후 |
 | `detection_summary` | 탐지 요약 수신 후 |
+| `security_events` | 보안 이벤트 수신 후 |
 
 상세 API 명세는 아래 문서를 참고한다.
 
@@ -274,9 +282,9 @@ Alembic migration은 `migrations/`에 있다.
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
-- `/api/flows`는 `sdn_controller.flow_rules`를 조회한다.
-- 일부 프론트엔드 화면은 mock/static 데이터 기반 UI를 포함한다.
-- `backend/tests/` 디렉터리는 있으나 실제 백엔드 테스트 코드는 아직 작성되어 있지 않다.
+- `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다.
+- `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
+- 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
 - 패킷 캡처는 OS/컨테이너 권한과 네트워크 인터페이스 설정에 영향을 받는다.
 
