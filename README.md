@@ -6,7 +6,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 | 영역 | 경로 | 진행 상태 |
 |---|---|---|
-| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, 의심 호스트 탐지, 보안 이벤트 생성 및 백엔드 전송 구현 |
+| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, DoS/Port Scan 의심 탐지, 백엔드 전송 구현 |
 | 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회 API, WebSocket broadcast 구현 |
 | 프론트엔드 | `frontend/` | 실시간 대시보드와 운영 화면 구현 |
 
@@ -74,8 +74,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 전체 패킷 수와 전체 bit 수 계산
 - bps/pps 기반 DoS 의심 호스트 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
-- ARP Spoofing, ICMP Flood 등 보안 이벤트 생성
-- 대응 후보 정책을 `DROP`, `RATE_LIMIT`, `REROUTE` 형태로 payload에 포함
 - 분석 서버 상태 주기적 보고
 - 백엔드 전송 실패, timeout, HTTP 오류 처리
 - 분석 루프/상태 전송 루프 예외 발생 시 오류 상태 기록 후 루프 유지
@@ -85,7 +83,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 분석 서버 상태 수신 및 PostgreSQL upsert
 - 패킷 요약 수신 및 InfluxDB/Elasticsearch 저장
 - 탐지 요약 수신 및 InfluxDB/Elasticsearch 저장
-- 보안 이벤트 수신 및 Elasticsearch 저장
 - 대시보드 조회 API 제공
 - 보안 이벤트 조회 API 제공
 - Flow 목록 조회 API 제공
@@ -98,7 +95,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 최근 5분 트래픽 시계열 차트
 - 최근 1분 프로토콜 통계 표시
 - 의심 호스트 목록 표시
-- DoS/Port Scan 및 보안 이벤트 유형 표시
+- DoS/Port Scan 유형별 필터링
 - WebSocket 실시간 수신
 - 백엔드 히스토리 API 초기 조회
 - DB 의심 호스트 polling 및 실시간 데이터 병합
@@ -126,7 +123,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
 | `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
 | `POST` | `/api/analyzer/detection-summary` | 탐지 요약 수신 |
-| `POST` | `/api/security/events` | 보안 이벤트 수신 |
 | `GET` | `/api/dashboard/summary` | 대시보드 요약 조회 |
 | `GET` | `/api/dashboard/traffic` | 트래픽 시계열 조회 |
 | `GET` | `/api/dashboard/protocols` | 프로토콜 통계 조회 |
@@ -138,7 +134,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 | 경로 | 설명 |
 |---|---|
-| `/ws/analyzer` | 분석 서버 상태, 패킷 요약, 탐지 요약, 보안 이벤트 실시간 broadcast |
+| `/ws/analyzer` | 분석 서버 상태, 패킷 요약, 탐지 요약 실시간 broadcast |
 
 현재 백엔드가 직접 broadcast하는 메시지 타입은 다음과 같다.
 
@@ -147,7 +143,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `analyzer_status` | 분석 서버 상태 수신 후 |
 | `packet_summary` | 패킷 요약 수신 후 |
 | `detection_summary` | 탐지 요약 수신 후 |
-| `security_event` | 보안 이벤트 수신 후 |
 
 상세 API 명세는 아래 문서를 참고한다.
 
@@ -230,19 +225,6 @@ docker compose down -v
 | `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 분석 서버 상태 전송 주기 |
-| `SECURITY_WINDOW_SEC` | `10` | 보안 이벤트 판단용 rolling window |
-| `SECURITY_GATEWAY_IP` | `10.0.0.254` | ARP Spoofing 판단에 사용할 Gateway IP |
-| `SECURITY_GATEWAY_MAC` | `00:00:00:00:ff:ff` | 정상 Gateway MAC |
-| `SECURITY_EVENT_COOLDOWN_SEC` | `30` | 같은 보안 이벤트 중복 전송 억제 시간 |
-| `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
-| `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
-| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
-| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
-| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 의심 호스트 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `100` | ICMP Flood pps 임계값 |
-| `SECURITY_RATE_LIMIT_PPS` | `50` | 보안 이벤트 rate limit 후보 pps |
 | `BACKEND_BASE_URL` | `http://backend:8000` | 분석 서버가 호출할 백엔드 주소 |
 | `FRONTEND_PORT` | `3000` | 프론트엔드 호스트 포트 |
 | `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite가 사용할 내부 백엔드 주소 |
