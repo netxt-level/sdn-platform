@@ -70,6 +70,37 @@ class FlowRepository:
 
         return [_to_dict(flow_rule) for flow_rule in flow_rules]
 
+    def create_manual_flow(
+        self,
+        *,
+        switch_id: str | None,
+        match: dict[str, Any],
+        action: str,
+        priority: int,
+        analyzer_id: str = "manual",
+        target: str = "flow",
+        idle_timeout: int | None = None,
+        hard_timeout: int | None = None,
+        rate_limit_pps: int | None = None,
+    ) -> dict[str, Any]:
+        # 수동 추가는 컨트롤러 설치가 아니라 DB에 PENDING 후보를 생성하는 단계다.
+        with SessionLocal.begin() as session:
+            flow_rule = FlowRule(
+                analyzer_id=analyzer_id,
+                switch_id=switch_id,
+                target=target,
+                action=action.upper(),
+                match=match,
+                priority=priority,
+                idle_timeout=idle_timeout,
+                hard_timeout=hard_timeout,
+                rate_limit_pps=rate_limit_pps,
+            )
+            session.add(flow_rule)
+            session.flush()
+
+            return _to_dict(flow_rule)
+
     def get_or_create_from_mitigation(
         self,
         *,
