@@ -164,6 +164,7 @@ def test_security_engine_supports_declared_detection_items() -> None:
     ]
 
     result = SecurityAnalysisEngine(config=config).analyze(packets, links=links, now=now)
+    payload = result_to_backend_payload(result)
 
     assert {
         "PORT_SCAN",
@@ -175,6 +176,12 @@ def test_security_engine_supports_declared_detection_items() -> None:
         "CONGESTION",
         "LINK_FAILURE",
     }.issubset({event.attack_type for event in result.events})
+    assert validate_backend_payload(payload) == []
+    assert payload["summary"]["event_count"] == len(result.events)
+    assert {
+        request["action"]
+        for request in payload["controller_requests"]
+    }.issuperset({"DROP", "RATE_LIMIT", "REROUTE"})
 
 
 def test_ryu_adapter_accepts_arp_eth_type() -> None:

@@ -338,7 +338,7 @@ GET /api/flows
 GET /api/security/events
 ```
 
-Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 조회한다.
+Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 문서를 조회한다. 이 인덱스에는 `/api/analyzer/detection-summary`로 저장된 탐지 요약과 `/api/security/events`로 저장된 개별 보안 이벤트가 함께 들어갈 수 있다.
 
 ### Query Parameters
 
@@ -354,31 +354,46 @@ Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 
   "items": [
     {
       "id": "elastic-document-id",
-      "@timestamp": "2026-05-24T10:00:00+00:00",
-      "timestamp": "2026-05-24T10:00:00+00:00",
-      "analyzer_id": "analyzer-1",
-      "network_status": "warning",
-      "total_bps": 273960.0,
-      "total_pps": 90.0,
-      "active_flow_count": 15,
-      "suspicious_host_count": 1,
-      "suspicious_hosts": [
-        {
-          "host": "52.182.143.209",
-          "ip": "52.182.143.209",
-          "protocol": "TCP",
-          "bps": 81192.0,
-          "pps": 16.0,
-          "reasons": [
-            "DoS"
-          ],
-          "attack_type": "DOS"
-        }
-      ]
+      "@timestamp": "2026-07-03T00:00:09+00:00",
+      "timestamp": "2026-07-03T00:00:09+00:00",
+      "event_id": "evt-170e39469b66",
+      "occurred_at": "2026-07-03T00:00:09+00:00",
+      "attack_type": "ARP_SPOOFING",
+      "severity": "critical",
+      "status": "detected",
+      "src_ip": "",
+      "src_mac": "00:00:00:00:00:02",
+      "dst_ip": "10.0.0.254",
+      "protocol": "ARP",
+      "pps": 0.0,
+      "bps": 0.0,
+      "action": "block",
+      "mitigation_action": "DROP"
     }
   ]
 }
 ```
+
+### 보안 이벤트 수신
+
+```http
+POST /api/security/events
+```
+
+분석 서버가 생성한 보안 이벤트 묶음을 수신한다. 상세 request body는 `analyzer/analyzer-backend-api.md`의 "보안 이벤트 전달"을 따른다.
+
+### Response Body
+
+```json
+{
+  "ok": true
+}
+```
+
+### Side Effects
+
+- Elasticsearch `sdn-detection-events` 인덱스에 이벤트를 저장한다.
+- WebSocket으로 이벤트별 `{"type":"security_event","data":...}` 메시지를 broadcast한다.
 
 ## 6. WebSocket API
 
@@ -446,4 +461,25 @@ WS /ws/analyzer
 }
 ```
 
-프론트엔드 타입에는 과거 호환용으로 `traffic_analysis`, `security_event`, `topology_update` 메시지도 정의되어 있지만, 현재 백엔드 코드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`다.
+#### Security Event
+
+```json
+{
+  "type": "security_event",
+  "data": {
+    "id": "evt-170e39469b66",
+    "occurred_at": "2026-07-03T00:00:09+00:00",
+    "attack_type": "ARP_SPOOFING",
+    "severity": "critical",
+    "status": "detected",
+    "src_ip": "",
+    "dst_ip": "10.0.0.254",
+    "protocol": "ARP",
+    "pps": 0.0,
+    "bps": 0.0,
+    "action": "block"
+  }
+}
+```
+
+프론트엔드 타입에는 과거 호환용으로 `traffic_analysis`, `topology_update` 메시지도 정의되어 있다. 현재 백엔드 코드가 직접 broadcast하는 주요 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_event`다.
