@@ -1,0 +1,116 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sdn-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - influxdb
+      - elasticsearch
+
+  analyzer:
+    build:
+      context: ./analyzer
+      dockerfile: Dockerfile
+    container_name: sdn-analyzer
+    restart: unless-stopped
+    environment:
+      ANALYZER_ID: ${ANALYZER_ID:-analyzer-1}
+      ANALYZER_INTERFACE: ${ANALYZER_INTERFACE:-eth0}
+      ANALYZER_WINDOW_SEC: ${ANALYZER_WINDOW_SEC:-1}
+      ANALYZER_STATUS_INTERVAL_SEC: ${ANALYZER_STATUS_INTERVAL_SEC:-5}
+      PORT_SCAN_WINDOW_SEC: ${PORT_SCAN_WINDOW_SEC:-5}
+      PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD: ${PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD:-20}
+      PORT_SCAN_SYN_COUNT_THRESHOLD: ${PORT_SCAN_SYN_COUNT_THRESHOLD:-20}
+      PORT_SCAN_MULTI_TARGET_WINDOW_SEC: ${PORT_SCAN_MULTI_TARGET_WINDOW_SEC:-30}
+      PORT_SCAN_MULTI_TARGET_THRESHOLD: ${PORT_SCAN_MULTI_TARGET_THRESHOLD:-3}
+      PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD: ${PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD:-50}
+      PORT_SCAN_ALERT_COOLDOWN_SEC: ${PORT_SCAN_ALERT_COOLDOWN_SEC:-60}
+      ICMP_PPS_THRESHOLD: ${ICMP_PPS_THRESHOLD:-1000}
+      ICMP_MIN_PACKET_COUNT: ${ICMP_MIN_PACKET_COUNT:-1000}
+      ICMP_HIGH_PPS_THRESHOLD: ${ICMP_HIGH_PPS_THRESHOLD:-3000}
+      ICMP_HIGH_PPS_MULTIPLIER: ${ICMP_HIGH_PPS_MULTIPLIER:-3.0}
+      ICMP_BASELINE_SPIKE_MULTIPLIER: ${ICMP_BASELINE_SPIKE_MULTIPLIER:-5.0}
+      ICMP_BASELINE_MIN_PPS: ${ICMP_BASELINE_MIN_PPS:-100}
+      ICMP_ALERT_COOLDOWN_SEC: ${ICMP_ALERT_COOLDOWN_SEC:-60}
+      EVENT_DEDUP_WINDOW_SEC: ${EVENT_DEDUP_WINDOW_SEC:-60}
+      RATE_LIMIT_PRIORITY: ${RATE_LIMIT_PRIORITY:-500}
+      RATE_LIMIT_IDLE_TIMEOUT: ${RATE_LIMIT_IDLE_TIMEOUT:-60}
+      RATE_LIMIT_HARD_TIMEOUT: ${RATE_LIMIT_HARD_TIMEOUT:-300}
+      RATE_LIMIT_PPS: ${RATE_LIMIT_PPS:-100}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://backend:8000}
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    depends_on:
+      - backend
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sdn-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      BACKEND_INTERNAL_URL: ${FRONTEND_BACKEND_INTERNAL_URL:-http://backend:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/ws/analyzer}
+    depends_on:
+      - backend
+
+  postgres:
+    image: postgres:16
+    container_name: sdn-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_HOST_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: sdn-influxdb
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    ports:
+      - "${INFLUXDB_PORT}:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: sdn-elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS}
+    ports:
+      - "${ELASTICSEARCH_HTTP_PORT}:9200"
+      - "${ELASTICSEARCH_TRANSPORT_PORT}:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+volumes:
+  postgres_data:
+  influxdb_data:
+  influxdb_config:
+  elasticsearch_data:
