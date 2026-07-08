@@ -12,7 +12,7 @@ import type {
   SuspiciousHost
 } from "@/types/analyzer";
 import type { RealtimeMessage } from "@/types/realtime";
-import type { SecurityEvent } from "@/types/security";
+import type { RawSecurityEvent, SecurityEvent } from "@/types/security";
 import type { TopologyState } from "@/types/topology";
 export type RealtimeState = {
   connected: boolean;
@@ -87,6 +87,10 @@ type DashboardProtocolsResponse = {
 type DashboardSuspiciousHostsResponse = {
   count?: number;
   items?: SuspiciousHost[];
+};
+
+type SecurityEventsResponse = {
+  items?: RawSecurityEvent[];
 };
 
 const FIVE_SECONDS_MS = 5 * 1000;
@@ -301,6 +305,153 @@ function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
   }));
 }
 
+function normalizeSecuritySeverity(value?: string): SecurityEvent["severity"] {
+  if (
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "critical"
+  ) {
+    return value;
+  }
+
+  return "medium";
+}
+
+function normalizeSecurityStatus(value?: string): SecurityEvent["status"] {
+  if (
+    value === "detected" ||
+    value === "blocked" ||
+    value === "ignored" ||
+    value === "resolved"
+  ) {
+    return value;
+  }
+
+  return "detected";
+}
+
+function numberFromEvidence(
+  evidence: Record<string, unknown> | undefined,
+  key: string
+): number {
+  const value = evidence?.[key];
+
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function actionFromSecurityEvent(event: RawSecurityEvent): SecurityEvent["action"] {
+  const mitigationAction = event.mitigation?.action;
+  const action = String(
+    typeof mitigationAction === "string"
+      ? mitigationAction
+      : event.recommended_action ?? "none"
+  ).toLowerCase();
+
+  if (action.includes("block") || action.includes("limit")) {
+    return "block";
+  }
+
+  if (action.includes("reroute")) {
+    return "reroute";
+  }
+
+  return "none";
+}
+
+function numericPort(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+
+  return null;
+}
+
+function portSummaryFromSecurityEvent(event: RawSecurityEvent): string {
+  const srcPort = numericPort(event.src_port);
+  const dstPort = numericPort(event.dst_port);
+
+  if (srcPort !== null && dstPort !== null) {
+    return `${srcPort} -> ${dstPort}`;
+  }
+
+  if (dstPort !== null) {
+    return String(dstPort);
+  }
+
+  const uniqueDstPorts = event.evidence?.unique_dst_ports;
+
+  if (Array.isArray(uniqueDstPorts)) {
+    const ports = uniqueDstPorts
+      .filter((port): port is number => typeof port === "number")
+      .sort((left, right) => left - right);
+    const visiblePorts = ports.slice(0, 4);
+
+    if (ports.length > visiblePorts.length) {
+      return `${visiblePorts.join(", ")} 외 ${ports.length - visiblePorts.length}`;
+    }
+
+    if (visiblePorts.length > 0) {
+      return visiblePorts.join(", ");
+    }
+  }
+
+  return "-";
+}
+
+function normalizeSecurityEvent(event: RawSecurityEvent): SecurityEvent {
+  const evidence = event.evidence ?? {};
+  const eventId = event.event_id ?? event.id ?? "unknown-event";
+
+  return {
+    id: event.id ?? eventId,
+    event_id: event.event_id,
+    event_fingerprint: event.event_fingerprint,
+    analyzer_id: event.analyzer_id,
+    occurred_at: event.timestamp ?? event["@timestamp"] ?? initialTimestamp,
+    attack_type: event.attack_type ?? "UNKNOWN",
+    severity: normalizeSecuritySeverity(event.severity),
+    status: normalizeSecurityStatus(event.status),
+    src_ip: event.src_ip ?? "-",
+    dst_ip: event.dst_ip ?? "-",
+    src_port: numericPort(event.src_port),
+    dst_port: numericPort(event.dst_port),
+    port_summary: portSummaryFromSecurityEvent(event),
+    protocol: event.protocol ?? "UNKNOWN",
+    detection_rule: event.detection_rule,
+    recommended_action: event.recommended_action,
+    response_level: event.response_level,
+    confidence: event.confidence,
+    evidence,
+    mitigation: event.mitigation ?? null,
+    pps:
+      numberFromEvidence(evidence, "pps") ||
+      numberFromEvidence(evidence, "syn_count") ||
+      numberFromEvidence(evidence, "packet_count"),
+    bps: numberFromEvidence(evidence, "bps"),
+    action: actionFromSecurityEvent(event)
+  };
+}
+
+function mergeSecurityEvents(
+  currentEvents: SecurityEvent[],
+  incomingEvents: SecurityEvent[]
+): SecurityEvent[] {
+  const events = new Map<string, SecurityEvent>();
+
+  [...currentEvents, ...incomingEvents].forEach((event) => {
+    const key = event.event_fingerprint ?? event.event_id ?? event.id;
+    events.set(key, event);
+  });
+
+  return Array.from(events.values())
+    .sort(
+      (left, right) =>
+        toTimestampMs(right.occurred_at) - toTimestampMs(left.occurred_at)
+    )
+    .slice(0, 100);
+}
+
 function mergeSuspiciousHosts(
   historyHosts: SuspiciousHost[],
   liveHosts: SuspiciousHost[]
@@ -346,6 +497,18 @@ async function fetchDashboardSummary(): Promise<DashboardSummary | null> {
   return normalizeDashboardSummary(
     (await response.json()) as DashboardSummaryResponse
   );
+}
+
+async function fetchSecurityEvents(): Promise<SecurityEvent[]> {
+  const response = await fetch("/api/security/events?limit=100");
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const securityEvents = (await response.json()) as SecurityEventsResponse;
+
+  return (securityEvents.items ?? []).map(normalizeSecurityEvent);
 }
 
 function removeTrailingPartialBucket(samples: TrafficSample[]): TrafficSample[] {
@@ -614,12 +777,14 @@ export function useRealtime(): RealtimeState {
           trafficResponse,
           protocolsResponse,
           dashboardSummaryResponse,
+          historySecurityEvents,
           historySuspiciousHosts
         ] = await Promise.all([
           fetch("/api/analyzer/status"),
           fetch("/api/dashboard/traffic?range=5m&bucket=5s"),
           fetch("/api/dashboard/protocols?range=1m"),
           fetchDashboardSummary(),
+          fetchSecurityEvents(),
           fetchDashboardSuspiciousHosts()
         ]);
 
@@ -656,6 +821,7 @@ export function useRealtime(): RealtimeState {
         }
 
         const protocolStats = toProtocolStats(protocols.items ?? []);
+        setSecurityEvents(mergeSecurityEvents([], historySecurityEvents));
         setDbSuspiciousHosts(historySuspiciousHosts);
         const historySamples = (traffic.items ?? [])
           .map(toHistoryTrafficSample)
@@ -863,7 +1029,21 @@ export function useRealtime(): RealtimeState {
           }
 
           if (message.type === "security_event") {
-            setSecurityEvents((prev) => [message.data, ...prev].slice(0, 100));
+            setSecurityEvents((prev) =>
+              mergeSecurityEvents(prev, [
+                normalizeSecurityEvent(message.data as RawSecurityEvent)
+              ])
+            );
+          }
+
+          if (message.type === "security_events") {
+            const nextSecurityEvents = (message.data.events ?? []).map(
+              normalizeSecurityEvent
+            );
+
+            setSecurityEvents((prev) =>
+              mergeSecurityEvents(prev, nextSecurityEvents)
+            );
           }
 
           if (message.type === "topology_update") {
