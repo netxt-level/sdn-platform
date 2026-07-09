@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -9,35 +9,90 @@ import {
   LayoutDashboard,
   Network,
   Route,
-  Shield,
 } from "lucide-react";
 
 const navItems = [
   { section: "Overview", href: "/", label: "대시보드", icon: LayoutDashboard },
   { section: "Overview", href: "/topology", label: "토폴로지", icon: Network },
-  { section: "Monitoring", href: "/security/events", label: "보안 이벤트", icon: Bell, badge: "7" },
-  { section: "Monitoring", href: "/security/rules", label: "규칙 관리", icon: Shield },
-  { section: "Network", href: "/path", label: "경로 제어", icon: Route },
-  { section: "Network", href: "/flow-rules", label: "Flow Rule", icon: GitBranch }
+  { section: "Monitoring", href: "/security/events", label: "보안 이벤트", icon: Bell },
+  { section: "Monitoring", href: "/path", label: "경로 제어", icon: Route },
+  { section: "Monitoring", href: "/flow-rules", label: "Flow Rule", icon: GitBranch }
 ];
 
 const titles: Record<string, string> = {
   "/": "대시보드",
   "/topology": "토폴로지 시각화",
   "/security/events": "보안 이벤트 관리",
-  "/security/rules": "규칙 관리",
   "/path": "경로 제어",
   "/flow-rules": "Flow Rule 관리",
   "/settings": "설정"
 };
 
+type SecurityEventsResponse = {
+  items?: Array<{
+    severity?: string;
+    status?: string;
+  }>;
+};
+
+function isUnhandledHighRiskEvent(event: NonNullable<SecurityEventsResponse["items"]>[number]) {
+  const severity = event.severity?.toLowerCase();
+  const status = event.status?.toLowerCase();
+  const isHighRisk = severity === "high" || severity === "critical";
+  const isHandled =
+    status === "blocked" ||
+    status === "resolved" ||
+    status === "ignored";
+
+  return isHighRisk && !isHandled;
+}
+
+function hasUnhandledHighRiskEvent(events: SecurityEventsResponse["items"] = []) {
+  return events.some((event) => {
+    return isUnhandledHighRiskEvent(event);
+  });
+}
+
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const [hasSecurityAlert, setHasSecurityAlert] = useState(false);
   const currentTitle =
     titles[pathname] ??
     Object.entries(titles).find(([href]) => href !== "/" && pathname.startsWith(href))?.[1] ??
     "대시보드";
   let section = "";
+
+  useEffect(() => {
+    let ignored = false;
+
+    async function loadSecurityAlert() {
+      try {
+        const response = await fetch("/api/security/events?limit=100", {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as SecurityEventsResponse;
+
+        if (!ignored) {
+          setHasSecurityAlert(hasUnhandledHighRiskEvent(data.items));
+        }
+      } catch {
+        // Keep the previous alert state when the sidebar refresh fails briefly.
+      }
+    }
+
+    loadSecurityAlert();
+    const intervalId = window.setInterval(loadSecurityAlert, 15000);
+
+    return () => {
+      ignored = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-surface text-ink">
@@ -79,10 +134,11 @@ export function Shell({ children }: { children: ReactNode }) {
                 >
                   <Icon className="h-4 w-4 shrink-0 opacity-80" />
                   <span className="whitespace-nowrap">{item.label}</span>
-                  {item.badge && (
-                    <span className="font-mono-ui ml-auto rounded-full bg-red px-1.5 py-0.5 text-[10px] text-white max-md:ml-1">
-                      {item.badge}
-                    </span>
+                  {item.href === "/security/events" && hasSecurityAlert && (
+                    <span
+                      className="ml-auto h-2 w-2 rounded-full bg-red max-md:ml-1"
+                      aria-label="처리되지 않은 High 이상 보안 이벤트 있음"
+                    />
                   )}
                 </Link>
               </div>

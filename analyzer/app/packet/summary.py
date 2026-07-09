@@ -55,8 +55,10 @@ class PacketSummaryBuilder:
         host_map = defaultdict(lambda: {
             "src_host": None,
             "src_ip": None,
+            "src_port": None,
             "dst_host": None,
             "dst_ip": None,
+            "dst_port": None,
             "protocol": None,
             "packet_count": 0,
             "bit_count": 0,
@@ -65,6 +67,8 @@ class PacketSummaryBuilder:
         for packet in packets:
             src_ip = packet.get("src_ip")
             dst_ip = packet.get("dst_ip")
+            src_port = packet.get("src_port")
+            dst_port = packet.get("dst_port")
             protocol = packet.get("protocol", "UNKNOWN")
 
             # 출발지 IP 또는 목적지 IP가 없으면 호스트 통계에서 제외
@@ -74,8 +78,10 @@ class PacketSummaryBuilder:
             key = (
                 packet.get("src_host"),
                 src_ip,
+                src_port,
                 packet.get("dst_host"),
                 dst_ip,
+                dst_port,
                 protocol,
             )
 
@@ -83,8 +89,10 @@ class PacketSummaryBuilder:
 
             host_map[key]["src_host"] = packet.get("src_host")
             host_map[key]["src_ip"] = src_ip
+            host_map[key]["src_port"] = src_port
             host_map[key]["dst_host"] = packet.get("dst_host")
             host_map[key]["dst_ip"] = dst_ip
+            host_map[key]["dst_port"] = dst_port
             host_map[key]["protocol"] = protocol
             host_map[key]["packet_count"] += 1
             host_map[key]["bit_count"] += packet_bits

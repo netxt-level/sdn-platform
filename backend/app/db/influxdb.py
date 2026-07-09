@@ -118,73 +118,6 @@ from(bucket: "{settings.influxdb_bucket}")
         client.close()
 
 
-def infer_suspicious_host_attack_type(
-    suspicious_host: dict[str, Any],
-) -> str:
-    attack_type = suspicious_host.get("attack_type")
-
-    if attack_type:
-        return str(attack_type).upper()
-
-    reasons = " ".join(suspicious_host.get("reasons", [])).lower()
-
-    if "port scan" in reasons or "scan" in reasons:
-        return "PORT_SCAN"
-
-    return "DOS"
-
-
-def query_suspicious_hosts(range_value: str) -> list[dict[str, Any]]:
-    range_value = validate_duration(range_value)
-
-    query = f'''
-from(bucket: "{settings.influxdb_bucket}")
-  |> range(start: -{range_value})
-  |> filter(fn: (r) => r["_measurement"] == "suspicious_host_traffic")
-  |> filter(fn: (r) => r["_field"] == "bps" or r["_field"] == "pps" or r["_field"] == "reason")
-  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
-  |> group(columns: ["analyzer_id", "ip", "protocol", "attack_type"])
-  |> sort(columns: ["_time"], desc: true)
-  |> limit(n: 1)
-'''
-
-    client = get_influx_client()
-    try:
-        tables = client.query_api().query(query, org=settings.influxdb_org)
-
-        items = []
-        for table in tables:
-            for record in table.records:
-                values = record.values
-                ip = values.get("ip")
-
-                if not ip:
-                    continue
-
-                reason = values.get("reason")
-                item = {
-                    "timestamp": values["_time"],
-                    "analyzer_id": values.get("analyzer_id"),
-                    "host": values.get("host"),
-                    "ip": ip,
-                    "protocol": values.get("protocol", "UNKNOWN"),
-                    "bps": float(values.get("bps") or 0),
-                    "pps": float(values.get("pps") or 0),
-                    "reasons": [reason] if reason else ["stored suspicious host"],
-                    "attack_type": values.get("attack_type"),
-                }
-                item["attack_type"] = infer_suspicious_host_attack_type(item)
-                items.append(item)
-
-        items.sort(
-            key=lambda item: (item["bps"], item["pps"], item["ip"]),
-            reverse=True,
-        )
-
-        return items
-    finally:
-        client.close()
-
 # packet_summary 수신 패킷 데이터 저장
 def write_packet_summary(summary: dict[str, Any]) -> None:
 
@@ -223,7 +156,7 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
         )
 
     # measurement: host_traffic
-    # src_ip -> dst_ip 단위의 트래픽 수치를 저장
+    # src_ip:src_port -> dst_ip:dst_port 단위의 트래픽 수치를 저장
     for host_stat in summary.get("host_stats", []):
         point = (
             Point("host_traffic")
@@ -234,13 +167,19 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
             .time(timestamp, WritePrecision.NS)
         )
 
-        # src_ip, dst_ip는 필터링에 자주 쓸 수 있어서 tag로 둔다.
+        # src_ip, dst_ip, port는 필터링에 자주 쓸 수 있어서 tag로 둔다.
         # 값이 null이면 tag로 넣지 않는다.
         if host_stat.get("src_ip"):
             point = point.tag("src_ip", host_stat["src_ip"])
 
+        if host_stat.get("src_port") is not None:
+            point = point.tag("src_port", str(host_stat["src_port"]))
+
         if host_stat.get("dst_ip"):
             point = point.tag("dst_ip", host_stat["dst_ip"])
+
+        if host_stat.get("dst_port") is not None:
+            point = point.tag("dst_port", str(host_stat["dst_port"]))
 
         points.append(point)
 
@@ -267,9 +206,7 @@ def write_detection_summary(detection: dict[str, Any]) -> None:
     #   "network_status": "warning",
     #   "total_bps": 273960.0,
     #   "total_pps": 90.0,
-    #   "active_flow_count": 15,
-    #   "suspicious_host_count": 1,
-    #   "suspicious_hosts": [...]
+    #   "active_flow_count": 15
     # }
 
     timestamp = parse_timestamp(detection["timestamp"])
@@ -284,39 +221,14 @@ def write_detection_summary(detection: dict[str, Any]) -> None:
         .field("total_bps", float(detection["total_bps"]))
         .field("total_pps", float(detection["total_pps"]))
         .field("active_flow_count", int(detection["active_flow_count"]))
-        .field("suspicious_host_count", int(detection["suspicious_host_count"]))
         .time(timestamp, WritePrecision.NS)
     ]
-
-    # measurement: suspicious_host_traffic
-    # 의심 호스트별 bps/pps를 저장
-    for suspicious_host in detection.get("suspicious_hosts", []):
-        reasons = suspicious_host.get("reasons", [])
-        reason = "; ".join(reasons) if reasons else "suspicious host detected"
-        attack_type = infer_suspicious_host_attack_type(suspicious_host)
-        point = (
-            Point("suspicious_host_traffic")
-            .tag("analyzer_id", analyzer_id)
-            .tag("ip", suspicious_host["ip"])
-            .tag("protocol", suspicious_host["protocol"])
-            .tag("attack_type", attack_type)
-            .field("bps", float(suspicious_host["bps"]))
-            .field("pps", float(suspicious_host["pps"]))
-            .field("reason", reason)
-            .time(timestamp, WritePrecision.NS)
-        )
-
-        # host 이름이 있으면 tag로 추가
-        if suspicious_host.get("host"):
-            point = point.tag("host", suspicious_host["host"])
-
-        points.append(point)
 
     client = get_influx_client()
     try:
         write_api = client.write_api(write_options=SYNCHRONOUS)
 
-        # network_status와 suspicious_host_traffic point들을 저장
+        # network_status point를 저장
         write_api.write(
             bucket=settings.influxdb_bucket,
             org=settings.influxdb_org,

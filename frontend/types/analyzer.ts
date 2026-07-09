@@ -15,8 +15,10 @@ export type AnalyzerStatus = {
 export type HostStat = {
   src_host?: string | null;
   src_ip?: string | null;
+  src_port?: number | null;
   dst_host?: string | null;
   dst_ip?: string | null;
+  dst_port?: number | null;
   protocol: string;
   packet_count: number;
   bit_count: number;

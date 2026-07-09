@@ -5,7 +5,8 @@ from scapy.layers.l2 import ARP, Ether
 def parse_packet(packet):
     # 모든 종류의 패킷에서 추출할 기본 정보 저장
     metadata = {
-        "timestamp": packet.time,   # 패킷이 캡처된 시간
+        # Scapy의 EDecimal도 JSON으로 보낼 수 있도록 기본 float로 정규화한다.
+        "timestamp": float(packet.time),
         "packet_size": len(packet), # 전체 패킷 크기
         "payload_size": 0,          # 실제 데이터(payload) 크기
     }

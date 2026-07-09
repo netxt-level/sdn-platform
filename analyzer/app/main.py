@@ -6,11 +6,11 @@ from app.analyzer_status import AnalyzerStatus
 from app.backend_client import BackendClient
 from app.config import load_config
 from app.detection.port_scan import PortScanDetector
+from app.detection.security_events import SecurityEventBuilder
 from app.detection.traffic_stats import TrafficStatsBuilder
 from app.packet.capture import PacketCaptureError, start_capture
 from app.packet.parser import parse_packet
 from app.packet.summary import PacketSummaryBuilder
-from app.security import DetectionConfig, SecurityRuntime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,23 +41,25 @@ traffic_builder = TrafficStatsBuilder(
     analyzer_id=ANALYZER_ID,
 )
 
-# 보안 이벤트 생성 흐름. 현재 범위에서는 ARP_SPOOFING, PORT_SCAN, ICMP_FLOOD만 만든다.
-security_runtime = SecurityRuntime(
-    config=DetectionConfig(
-        window_seconds=config.security_window_sec,
-        icmp_pps_threshold=config.icmp_pps_threshold,
-        port_scan_unique_ports=config.port_scan_unique_dst_port_threshold,
-        rate_limit_pps=config.rate_limit_pps,
-        gateway_ip=config.security_gateway_ip,
-        gateway_mac=config.security_gateway_mac,
-        trusted_ip_mac={
-            config.security_gateway_ip: config.security_gateway_mac,
-        },
-    ),
-    datapath_id="s1",
-    event_cooldown_seconds=config.security_event_cooldown_sec,
+security_event_builder = SecurityEventBuilder(
+    analyzer_id=ANALYZER_ID,
+    gateway_ip=config.security_gateway_ip,
+    gateway_mac=config.security_gateway_mac,
+    arp_drop_priority=config.arp_drop_priority,
+    arp_drop_idle_timeout=config.arp_drop_idle_timeout,
+    arp_drop_hard_timeout=config.arp_drop_hard_timeout,
+    icmp_pps_threshold=config.icmp_pps_threshold,
+    icmp_min_packet_count=config.icmp_min_packet_count,
+    icmp_high_pps_threshold=config.icmp_high_pps_threshold,
+    icmp_high_pps_multiplier=config.icmp_high_pps_multiplier,
+    event_dedup_window_sec=config.event_dedup_window_sec,
+    rate_limit_priority=config.rate_limit_priority,
+    rate_limit_idle_timeout=config.rate_limit_idle_timeout,
+    rate_limit_hard_timeout=config.rate_limit_hard_timeout,
+    rate_limit_pps=config.rate_limit_pps,
 )
 
+# 백엔드 API 호출을 담당하는 클라이언트
 backend_client = BackendClient(
     base_url=BACKEND_BASE_URL,
     timeout_sec=3.0,
@@ -102,23 +104,24 @@ def analysis_loop():
                 packets_snapshot = list(packets)
                 packets.clear()
 
-            # Port Scan은 TCP SYN 패턴을 별도로 보관해 대시보드 의심 호스트에도 반영한다.
-            port_scan_hosts = port_scan_detector.detect(packets_snapshot)
+            # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
+            port_scan_alerts = port_scan_detector.detect(packets_snapshot)
 
             packet_summary = summary_builder.build_packet_summary(
                 packets_snapshot,
             )
 
+            # traffic stats는 네트워크 전체 트래픽 상태만 포함한다.
             traffic_stats = traffic_builder.build_traffic_stats(
                 packet_summary=packet_summary,
                 packets=packets_snapshot,
-                extra_suspicious_hosts=port_scan_hosts,
             )
 
-            # 보안 이벤트는 짧은 analyzer window를 보완하기 위해 SecurityRuntime의 rolling window에서 판단한다.
-            security_output = security_runtime.analyze_snapshot(
-                packets_snapshot,
-                datapath_id="s1",
+            # 보안 탐지 결과는 traffic stats와 분리해 공통 SecurityEvent 형식으로 전송한다.
+            security_events = security_event_builder.build_security_events(
+                packet_summary=packet_summary,
+                packets=packets_snapshot,
+                port_scan_alerts=port_scan_alerts,
             )
 
             packet_summary_sent = backend_client.send_packet_summary(
@@ -129,11 +132,12 @@ def analysis_loop():
             )
 
             security_events_sent = True
-            if security_output.backend_payload["events"]:
+            if security_events["events"]:
                 security_events_sent = backend_client.send_security_events(
-                    security_output.backend_payload
+                    security_events
                 )
 
+            # 보안 이벤트가 있을 때는 해당 전송까지 성공해야 연결 상태를 정상으로 본다.
             if packet_summary_sent and traffic_stats_sent and security_events_sent:
                 analyzer_status.mark_summary_sent()
             else:

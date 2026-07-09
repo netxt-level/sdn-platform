@@ -1,438 +1,177 @@
-# Analyzer -> Backend API 명세서
+# Analyzer → Backend API
 
-이 문서는 현재 코드 기준으로 분석 서버가 백엔드 서버에 전송하는 API를 정리한다.
+## 공통 정보
 
-- 분석 서버 호출 구현: `analyzer/app/backend_client.py`
-- 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/security/backend_contract.py`, `analyzer/app/analyzer_status.py`
-- 백엔드 수신 스키마: `backend/app/schemas/analyzer.py`
-- 백엔드 수신 라우터: `backend/app/api/analyzer.py`, `backend/app/api/security.py`
+- 기본 주소: `BACKEND_BASE_URL`
+- 기본 Docker 주소: `http://backend:8000`
+- Content-Type: `application/json`
+- 요청 timeout: 3초
 
-## 기본 정보
-
-| 항목 | 값 |
-|---|---|
-| 기본 Backend URL | `BACKEND_BASE_URL`, 기본값 `http://127.0.0.1:8000` |
-| Content-Type | `application/json` |
-| Timestamp 형식 | ISO 8601 문자열, 예: `2026-05-24T10:00:00+00:00` |
-| 공통 성공 응답 | `{"ok": true}` |
-| 유효성 검증 실패 | FastAPI 기본 `422 Unprocessable Entity` |
-
-분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약, 탐지 요약, 보안 이벤트를 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
-
-| 환경변수 | 기본값 | 설명 |
-|---|---:|---|
-| `ANALYZER_ID` | `analyzer-1` | 분석 서버 식별자 |
-| `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
-| `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
-| `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
-| `SECURITY_WINDOW_SEC` | `10` | 보안 이벤트 판단용 rolling window |
-| `SECURITY_GATEWAY_IP` | `10.0.0.254` | ARP Spoofing 판단에 사용할 Gateway IP |
-| `SECURITY_GATEWAY_MAC` | `00:00:00:00:ff:ff` | 정상 Gateway MAC |
-| `SECURITY_EVENT_COOLDOWN_SEC` | `30` | 같은 보안 이벤트 중복 전송 억제 시간 |
-| `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
-| `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
-| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
-| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
-| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 의심 호스트 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `100` | ICMP Flood pps 임계값 |
-| `SECURITY_RATE_LIMIT_PPS` | `50` | 보안 이벤트 rate limit 후보 pps |
-| `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
-
-## 1. 패킷 요약 전달
+## 1. 패킷 요약
 
 ```http
 POST /api/analyzer/packet-summary
 ```
 
-분석 서버가 집계 윈도우 동안 수집한 패킷을 프로토콜, 호스트 쌍 단위로 요약해 전송한다. 원본 패킷 payload는 포함하지 않는다.
-
-### Request Body
-
 ```json
 {
-  "timestamp": "2026-05-24T10:00:00+00:00",
+  "timestamp": "2026-07-09T00:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "window_sec": 1,
-  "total_packets": 90,
-  "total_bits": 273960,
+  "total_packets": 120,
+  "total_bits": 98304,
   "protocol_stats": {
-    "TCP": 87,
-    "UDP": 2,
-    "UNKNOWN": 1
+    "TCP": 80,
+    "UDP": 20,
+    "ICMP": 19,
+    "ARP": 1
   },
-  "host_stats": [
-    {
-      "src_host": null,
-      "src_ip": "52.182.143.209",
-      "dst_host": null,
-      "dst_ip": "172.30.1.3",
-      "protocol": "TCP",
-      "packet_count": 16,
-      "bit_count": 81192
-    }
-  ]
+  "host_stats": []
 }
 ```
 
-### 필드
+Backend는 InfluxDB에 저장하고 `packet_summary` WebSocket 메시지를 보낸다.
 
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `timestamp` | `datetime` | O | 패킷 요약 생성 시각 |
-| `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `window_sec` | `integer` | O | 집계 시간, 초 단위 |
-| `total_packets` | `integer` | O | 윈도우 내 전체 패킷 수 |
-| `total_bits` | `integer` | O | 윈도우 내 전체 비트 수 |
-| `protocol_stats` | `object<string, integer>` | O | 프로토콜별 패킷 수 |
-| `host_stats` | `HostStat[]` | O | 출발지/목적지/프로토콜별 통계 |
-
-### HostStat
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `src_host` | `string \| null` | X | 출발지 호스트명 |
-| `src_ip` | `string \| null` | X | 출발지 IP |
-| `dst_host` | `string \| null` | X | 목적지 호스트명 |
-| `dst_ip` | `string \| null` | X | 목적지 IP |
-| `protocol` | `string` | O | 프로토콜 이름 |
-| `packet_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 패킷 수 |
-| `bit_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 비트 수 |
-
-### Response Body
-
-```json
-{
-  "ok": true
-}
-```
-
-### 백엔드 처리
-
-- InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다.
-- Elasticsearch `sdn-traffic-summary` 인덱스에 저장한다.
-- WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
-
-```json
-{
-  "type": "packet_summary",
-  "data": {
-    "timestamp": "2026-05-24T10:00:00+00:00",
-    "analyzer_id": "analyzer-1",
-    "window_sec": 1,
-    "total_packets": 90,
-    "total_bits": 273960,
-    "protocol_stats": {
-      "TCP": 87
-    },
-    "host_stats": []
-  }
-}
-```
-
-## 2. 탐지 요약 전달
+## 2. 탐지 요약
 
 ```http
 POST /api/analyzer/detection-summary
 ```
 
-분석 서버가 패킷 요약과 탐지기 결과를 기반으로 네트워크 상태 및 의심 호스트 목록을 전송한다.
-
-코드상 분석 서버 메서드명은 `send_traffic_stats`지만, 실제 호출 경로는 `/api/analyzer/detection-summary`다.
-
-### Request Body
-
 ```json
 {
-  "timestamp": "2026-05-24T10:00:00+00:00",
+  "timestamp": "2026-07-09T00:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "network_status": "warning",
-  "total_bps": 273960.0,
-  "total_pps": 90.0,
-  "active_flow_count": 15,
+  "total_bps": 1000000,
+  "total_pps": 1500,
+  "active_flow_count": 5,
   "suspicious_host_count": 1,
-  "suspicious_hosts": [
-    {
-      "host": "52.182.143.209",
-      "ip": "52.182.143.209",
-      "protocol": "TCP",
-      "bps": 81192.0,
-      "pps": 16.0,
-      "reasons": [
-        "DoS"
-      ],
-      "attack_type": "DOS"
-    }
-  ]
+  "suspicious_hosts": []
 }
 ```
 
-### 필드
+이 payload는 대시보드 상태용이다. 개별 보안 사건과 대응 근거는 다음 Security Events API로 분리한다.
 
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `timestamp` | `datetime` | O | 탐지 요약 생성 시각 |
-| `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `network_status` | `string` | O | 네트워크 상태. 현재 생성값은 `normal`, `warning`, `critical` |
-| `total_bps` | `number` | O | 전체 초당 비트 수 |
-| `total_pps` | `number` | O | 전체 초당 패킷 수 |
-| `active_flow_count` | `integer` | O | 현재 윈도우에서 관측한 flow 개수 |
-| `suspicious_host_count` | `integer` | O | 의심 호스트 수 |
-| `suspicious_hosts` | `SuspiciousHost[]` | O | 의심 호스트 목록 |
-
-`TrafficStatsBuilder`는 윈도우 내 누적 패킷 수와 비트 수를 `window_sec`로 나누어 `total_pps`, `total_bps`를 초당 값으로 생성한다.
-
-### SuspiciousHost
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `host` | `string \| null` | X | 호스트명 또는 IP |
-| `ip` | `string` | O | 의심 호스트 IP |
-| `protocol` | `string` | O | 의심 트래픽 프로토콜 |
-| `bps` | `number` | O | 해당 호스트 초당 비트 수 |
-| `pps` | `number` | O | 해당 호스트 초당 패킷 수 |
-| `reasons` | `string[]` | O | 의심 판단 사유 |
-| `attack_type` | `string \| null` | X | 공격/이상 트래픽 유형. 현재 생성값은 `DOS`, `PORT_SCAN` |
-
-현재 백엔드의 탐지 요약 스키마는 위 필드만 모델에 포함한다. Port Scan의 상세 근거(`target_ip`, `unique_dst_port_count`, `matched_conditions` 등)는 보안 이벤트 payload에 포함한다.
-
-### Response Body
-
-```json
-{
-  "ok": true
-}
-```
-
-### 백엔드 처리
-
-- InfluxDB에 `network_status`, `suspicious_host_traffic` measurement로 저장한다.
-- Elasticsearch `sdn-detection-events` 인덱스에 저장한다.
-- WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
-
-```json
-{
-  "type": "detection_summary",
-  "data": {
-    "timestamp": "2026-05-24T10:00:00+00:00",
-    "analyzer_id": "analyzer-1",
-    "network_status": "warning",
-    "total_bps": 273960.0,
-    "total_pps": 90.0,
-    "active_flow_count": 15,
-    "suspicious_host_count": 1,
-    "suspicious_hosts": []
-  }
-}
-```
-
-## 3. 보안 이벤트 전달
+## 3. 보안 이벤트
 
 ```http
 POST /api/security/events
 ```
 
-분석 서버가 보안 엔진에서 만든 이벤트 묶음을 전송한다. 현재 보안 이벤트 범위는 최종 시나리오인 `ARP_SPOOFING`과 보조 탐지인 `PORT_SCAN`, `ICMP_FLOOD`다. DDoS, UDP Flood, SYN Flood, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위에 포함하지 않는다.
+현재 이벤트 유형:
 
-### Request Body
+- `ARP_SPOOFING`
+- `PORT_SCAN`
+- `ICMP_FLOOD`
+
+### 요청 구조
 
 ```json
 {
-  "summary": {
-    "window_seconds": 10,
-    "packet_count": 25,
-    "event_count": 1
-  },
-  "events": [
-    {
-      "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
-      "event_id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
-      "occurred_at": "2026-05-24T10:00:00+00:00",
-      "created_at": "2026-05-24T10:00:00+00:00",
-      "attack_type": "ARP_SPOOFING",
-      "severity": "critical",
-      "status": "blocked",
-      "src_ip": "10.0.0.254",
-      "src_mac": "00:00:00:00:00:02",
-      "dst_ip": "10.0.0.1",
-      "dst_port": null,
-      "protocol": "ARP",
-      "pps": 0,
-      "bps": 0,
-      "action": "block",
-      "mitigation_action": "DROP",
-      "metric_name": "arp_sender_mac",
-      "metric_value": "00:00:00:00:00:02",
-      "threshold": "00:00:00:00:ff:ff",
-      "evidence": {
-        "arp_sender_ip": "10.0.0.254",
-        "trusted_mac": "00:00:00:00:ff:ff",
-        "observed_mac": "00:00:00:00:00:02",
-        "matched_conditions": [
-          "gateway_ip_claimed",
-          "gateway_mac_mismatch"
-        ]
-      },
-      "flow_rule": {
-        "action": "DROP",
-        "match": {
-          "eth_type": 2054,
-          "arp_spa": "10.0.0.254",
-          "eth_src": "00:00:00:00:00:02"
-        },
-        "priority": 650,
-        "idle_timeout": 60,
-        "hard_timeout": 300,
-        "reason": "ARP spoofing attempt for gateway IP"
-      }
-    }
-  ],
-  "controller_requests": [
-    {
-      "action": "DROP",
-      "match": {
-        "eth_type": 2054,
-        "arp_spa": "10.0.0.254",
-        "eth_src": "00:00:00:00:00:02"
-      },
-      "priority": 650,
-      "idle_timeout": 60,
-      "hard_timeout": 300,
-      "rate_limit_pps": null,
-      "reroute_path": null,
-      "reason": "ARP spoofing attempt for gateway IP"
-    }
-  ]
+  "timestamp": "2026-07-09T00:00:00+00:00",
+  "analyzer_id": "analyzer-1",
+  "events": []
 }
 ```
 
-### 주요 필드
+### SecurityEvent 공통 필드
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `summary.window_seconds` | `number` | 보안 엔진이 판단에 사용한 window 길이 |
-| `summary.packet_count` | `integer` | 해당 window에서 보안 엔진이 본 패킷 수 |
-| `summary.event_count` | `integer` | 생성된 보안 이벤트 수 |
-| `events[].attack_type` | `string` | `ARP_SPOOFING`, `PORT_SCAN`, `ICMP_FLOOD` 중 하나 |
-| `events[].severity` | `string` | 프론트 표시용 위험도. `low`, `medium`, `high`, `critical` |
-| `events[].status` | `string` | 프론트 표시용 상태. `detected`, `blocked`, `ignored`, `resolved` |
-| `events[].action` | `string` | 프론트 표시용 대응 상태. 현재 보안 범위에서는 `none` 또는 `block` |
-| `events[].mitigation_action` | `string` | 컨트롤러 대응 후보. 현재 보안 범위에서는 `DROP`, `RATE_LIMIT`, `MONITOR_ONLY` |
-| `events[].evidence` | `object` | 탐지 근거. `matched_conditions`, `score`, `response_level` 같은 설명용 값을 포함할 수 있음 |
-| `events[].flow_rule` | `object \| null` | 컨트롤러가 적용할 수 있는 Flow Rule 후보 |
-| `controller_requests` | `object[]` | 이벤트에서 만들어진 컨트롤러 대응 후보 목록 |
+| `event_id` | string | 시간 창을 포함한 개별 사건 ID |
+| `event_fingerprint` | string | 같은 공격 흐름의 안정적인 ID |
+| `dedup_key` | string | 중복 억제 기준 |
+| `timestamp` | datetime | 이벤트 시각 |
+| `analyzer_id` | string | Analyzer ID |
+| `attack_category` | string | `L2_SPOOFING`, `RECON`, `FLOOD` |
+| `attack_type` | string | 탐지 유형 |
+| `severity` | string | `medium`, `high`, `critical` |
+| `confidence` | string | `medium`, `high` |
+| `status` | string | 최초 값 `detected` |
+| `src_ip` | string/null | 신뢰 가능한 공격 출발지 IP |
+| `src_mac` | string/null | ARP 공격자 MAC |
+| `dst_ip` | string | 공격 대상 IP |
+| `protocol` | string | `ARP`, `TCP`, `ICMP` |
+| `detection_rule` | string | 탐지 규칙 이름 |
+| `recommended_action` | string | 권장 대응 |
+| `response_level` | string | `L1`, `L2`, `L3` |
+| `evidence` | object | 판단 근거 |
+| `mitigation` | object/null | Flow Rule 후보 |
 
-### Response Body
-
-```json
-{
-  "ok": true
-}
-```
-
-### 백엔드 처리
-
-- Elasticsearch `sdn-detection-events` 인덱스에 이벤트별로 저장한다.
-- WebSocket `/ws/analyzer` 구독자에게 이벤트마다 아래 메시지를 broadcast한다.
+### ARP Spoofing 예시
 
 ```json
 {
-  "type": "security_event",
-  "data": {
-    "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
-    "occurred_at": "2026-05-24T10:00:00+00:00",
-    "attack_type": "ARP_SPOOFING",
-    "severity": "critical",
-    "status": "blocked",
-    "src_ip": "10.0.0.254",
-    "src_mac": "00:00:00:00:00:02",
-    "dst_ip": "10.0.0.1",
-    "protocol": "ARP",
-    "pps": 0,
-    "bps": 0,
-    "action": "block"
+  "event_id": "evt-example",
+  "event_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "dedup_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "timestamp": "2026-07-09T00:00:00+00:00",
+  "analyzer_id": "analyzer-1",
+  "attack_category": "L2_SPOOFING",
+  "attack_type": "ARP_SPOOFING",
+  "severity": "critical",
+  "confidence": "high",
+  "status": "detected",
+  "src_ip": null,
+  "src_mac": "00:00:00:00:00:02",
+  "dst_ip": "10.0.0.1",
+  "protocol": "ARP",
+  "detection_rule": "trusted_gateway_mac_mismatch",
+  "recommended_action": "block",
+  "response_level": "L3",
+  "evidence": {
+    "spoofed_ip": "10.0.0.254",
+    "trusted_mac": "00:00:00:00:ff:ff",
+    "claimed_mac": "00:00:00:00:00:02",
+    "score": 100
+  },
+  "mitigation": {
+    "action": "DROP",
+    "target": "flow",
+    "match": {
+      "eth_type": 2054,
+      "eth_src": "00:00:00:00:00:02",
+      "arp_spa": "10.0.0.254"
+    },
+    "priority": 650,
+    "idle_timeout": 60,
+    "hard_timeout": 300
   }
 }
 ```
 
-## 4. 분석 서버 상태 전달
+### Backend 처리
+
+1. `SecurityEventsRequest` Pydantic schema로 요청을 검증한다.
+2. Elasticsearch `sdn-security-events`에 이벤트를 저장한다.
+3. PostgreSQL `security_responses`에 대응 내역을 만든다.
+4. mitigation이 있으면 PostgreSQL `flow_rules`에 PENDING 후보를 만든다.
+5. `security_events` WebSocket 메시지를 방송한다.
+
+## 4. Analyzer 상태
 
 ```http
 POST /api/analyzer/status
 ```
 
-분석 서버의 실행 상태, 캡처 상태, 백엔드 전송 상태를 전송한다.
-
-### Request Body
-
 ```json
 {
-  "timestamp": "2026-05-24T10:00:05+00:00",
+  "timestamp": "2026-07-09T00:00:00+00:00",
   "analyzer_id": "analyzer-1",
   "status": "running",
-  "interface": "en0",
+  "interface": "eth0",
   "capture_active": true,
   "backend_connected": true,
-  "last_packet_at": "2026-05-24T10:00:04+00:00",
-  "last_summary_sent_at": "2026-05-24T10:00:05+00:00",
+  "last_packet_at": "2026-07-09T00:00:00+00:00",
+  "last_summary_sent_at": "2026-07-09T00:00:00+00:00",
   "error_message": null
 }
 ```
 
-### 필드
+## 실패 처리
 
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| `timestamp` | `datetime` | O | 상태 정보 생성 시각 |
-| `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `status` | `string` | O | 분석 서버 상태. 현재 생성값은 `running`, `error` |
-| `interface` | `string` | O | 캡처 중인 네트워크 인터페이스 |
-| `capture_active` | `boolean` | O | 패킷 캡처 활성 여부 |
-| `backend_connected` | `boolean` | O | 최근 백엔드 전송 성공 여부 |
-| `last_packet_at` | `datetime \| null` | X | 마지막 패킷 수신 시각 |
-| `last_summary_sent_at` | `datetime \| null` | X | 마지막 요약 전송 성공 시각 |
-| `error_message` | `string \| null` | X | 오류 메시지 |
-
-### Response Body
-
-```json
-{
-  "ok": true
-}
-```
-
-### 백엔드 처리
-
-- PostgreSQL `sdn_controller.analyzer` 테이블에 `analyzer_id` 기준 upsert한다.
-- WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
-
-```json
-{
-  "type": "analyzer_status",
-  "data": {
-    "timestamp": "2026-05-24T10:00:05+00:00",
-    "analyzer_id": "analyzer-1",
-    "status": "running",
-    "interface": "en0",
-    "capture_active": true,
-    "backend_connected": true,
-    "last_packet_at": "2026-05-24T10:00:04+00:00",
-    "last_summary_sent_at": "2026-05-24T10:00:05+00:00",
-    "error_message": null
-  }
-}
-```
-
-## 전송 실패 처리
-
-분석 서버의 `BackendClient`는 각 POST 요청에 `timeout_sec=3.0`을 사용한다.
-
-| 실패 유형 | 분석 서버 동작 |
-|---|---|
-| 연결 실패 | 콘솔에 전송 실패 로그 출력, `False` 반환 |
-| Timeout | 콘솔에 timeout 로그 출력, `False` 반환 |
-| HTTP 오류 응답 | 콘솔에 HTTP status 로그 출력, `False` 반환 |
-| 기타 요청 오류 | 콘솔에 일반 요청 오류 로그 출력, `False` 반환 |
-
-패킷 요약, 탐지 요약, 보안 이벤트 전송이 모두 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
+- 연결 실패, timeout, HTTP 오류는 `False`로 반환한다.
+- 분석 루프는 중단하지 않고 Analyzer 상태에 오류를 기록한다.
+- 보안 이벤트가 존재할 때 해당 전송까지 성공해야 summary 전송 성공으로 처리한다.
+- 현재 로컬 재시도 큐는 구현되어 있지 않다.

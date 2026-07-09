@@ -12,17 +12,26 @@ import type {
   SuspiciousHost
 } from "@/types/analyzer";
 import type { RealtimeMessage } from "@/types/realtime";
-import type { AttackType, SecurityEvent } from "@/types/security";
+import type { RawSecurityEvent, SecurityEvent } from "@/types/security";
 import type { TopologyState } from "@/types/topology";
 export type RealtimeState = {
   connected: boolean;
   source: "waiting" | "history" | "websocket";
+  dashboardSummary: DashboardSummary;
   analyzerStatus: AnalyzerStatus;
   packetSummary: PacketSummary;
   detectionSummary: DetectionSummary;
   trafficSeries: TrafficSeriesPoint[];
   securityEvents: SecurityEvent[];
   topology: TopologyState;
+};
+
+export type DashboardSummary = {
+  totalPackets: number;
+  totalBytes: number;
+  currentPps: number;
+  currentBps: number;
+  networkStatus: NetworkStatus;
 };
 
 export type TrafficSeriesPoint = {
@@ -54,6 +63,18 @@ type DashboardTrafficResponse = {
   items?: DashboardTrafficItem[];
 };
 
+type DashboardSummaryResponse = {
+  total_packets?: number;
+  total_bytes?: number;
+  current_pps?: number;
+  current_bps?: number;
+  network_status?: string;
+};
+
+type AnalyzerStatusResponse = {
+  items?: Array<AnalyzerStatus & { reported_at?: string | null }>;
+};
+
 type DashboardProtocolItem = {
   protocol: string;
   packet_count: number;
@@ -69,20 +90,14 @@ type DashboardSuspiciousHostsResponse = {
 };
 
 type SecurityEventsResponse = {
-  items?: unknown[];
+  items?: RawSecurityEvent[];
 };
 
 const FIVE_SECONDS_MS = 5 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
 const SUSPICIOUS_HOST_REFRESH_MS = 5 * 1000;
-// 공용 Elasticsearch 조회 결과에는 다른 형식의 문서도 섞일 수 있다.
-// 현재 보안 화면은 담당 범위의 세 공격 유형만 허용한다.
-const SUPPORTED_SECURITY_ATTACK_TYPES = new Set<AttackType>([
-  "ARP_SPOOFING",
-  "ICMP_FLOOD",
-  "PORT_SCAN"
-]);
+const DASHBOARD_SUMMARY_REFRESH_MS = 5 * 1000;
 
 const configuredWebsocketUrl = process.env.NEXT_PUBLIC_WS_URL;
 
@@ -122,6 +137,14 @@ function getWebsocketUrl() {
 }
 
 const initialTimestamp = new Date(0).toISOString();
+
+const initialDashboardSummary: DashboardSummary = {
+  totalPackets: 0,
+  totalBytes: 0,
+  currentPps: 0,
+  currentBps: 0,
+  networkStatus: "normal"
+};
 
 const initialAnalyzerStatus: AnalyzerStatus = {
   timestamp: initialTimestamp,
@@ -168,6 +191,32 @@ function normalizeNetworkStatus(status?: string): NetworkStatus {
   }
 
   return "normal";
+}
+
+function normalizeDashboardSummary(summary: DashboardSummaryResponse): DashboardSummary {
+  return {
+    totalPackets: summary.total_packets ?? 0,
+    totalBytes: summary.total_bytes ?? 0,
+    currentPps: summary.current_pps ?? 0,
+    currentBps: summary.current_bps ?? 0,
+    networkStatus: normalizeNetworkStatus(summary.network_status)
+  };
+}
+
+function normalizeStoredAnalyzerStatus(
+  status: AnalyzerStatus & { reported_at?: string | null }
+): AnalyzerStatus {
+  return {
+    timestamp: status.timestamp ?? status.reported_at ?? initialTimestamp,
+    analyzer_id: status.analyzer_id,
+    status: status.status,
+    interface: status.interface,
+    capture_active: status.capture_active,
+    backend_connected: status.backend_connected,
+    last_packet_at: status.last_packet_at ?? null,
+    last_summary_sent_at: status.last_summary_sent_at ?? null,
+    error_message: status.error_message ?? null
+  };
 }
 
 function normalizePacketSummary(summary: IncomingPacketSummary): PacketSummary {
@@ -241,37 +290,6 @@ function normalizeAttackType(attackType?: string | null): string {
   return normalizedAttackType || "DOS";
 }
 
-function isSupportedSecurityAttackType(value: unknown): value is AttackType {
-  return (
-    typeof value === "string" &&
-    SUPPORTED_SECURITY_ATTACK_TYPES.has(value as AttackType)
-  );
-}
-
-function isSecurityEvent(item: unknown): item is SecurityEvent {
-  // 백엔드 이력과 WebSocket 입력은 모두 외부 데이터이므로 같은 경계에서
-  // 필수 필드와 허용 값을 확인한다. 잘못된 한 건이 전체 화면을 깨지 않게 한다.
-  if (!item || typeof item !== "object") {
-    return false;
-  }
-
-  const event = item as Partial<SecurityEvent>;
-
-  return Boolean(
-    typeof event.id === "string" &&
-      typeof event.occurred_at === "string" &&
-      isSupportedSecurityAttackType(event.attack_type) &&
-      ["low", "medium", "high", "critical"].includes(event.severity ?? "") &&
-      ["detected", "blocked", "ignored", "resolved"].includes(event.status ?? "") &&
-      typeof event.src_ip === "string" &&
-      typeof event.dst_ip === "string" &&
-      typeof event.protocol === "string" &&
-      typeof event.pps === "number" &&
-      typeof event.bps === "number" &&
-      ["none", "block", "reroute"].includes(event.action ?? "")
-  );
-}
-
 function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
   return items.map((host) => ({
     host: host.host ?? null,
@@ -285,6 +303,170 @@ function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
         ? host.reasons
         : ["stored suspicious host"]
   }));
+}
+
+function normalizeSecuritySeverity(value?: string): SecurityEvent["severity"] {
+  if (
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "critical"
+  ) {
+    return value;
+  }
+
+  return "medium";
+}
+
+function normalizeSecurityStatus(value?: string): SecurityEvent["status"] {
+  if (
+    value === "detected" ||
+    value === "blocked" ||
+    value === "ignored" ||
+    value === "resolved"
+  ) {
+    return value;
+  }
+
+  return "detected";
+}
+
+function normalizeSecurityAttackType(
+  value?: string
+): SecurityEvent["attack_type"] {
+  if (
+    value === "ARP_SPOOFING" ||
+    value === "ICMP_FLOOD" ||
+    value === "PORT_SCAN"
+  ) {
+    return value;
+  }
+
+  return "UNKNOWN";
+}
+
+function numberFromEvidence(
+  evidence: Record<string, unknown> | undefined,
+  key: string
+): number {
+  const value = evidence?.[key];
+
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function actionFromSecurityEvent(event: RawSecurityEvent): SecurityEvent["action"] {
+  const mitigationAction = event.mitigation?.action;
+  const action = String(
+    typeof mitigationAction === "string"
+      ? mitigationAction
+      : event.recommended_action ?? "none"
+  ).toLowerCase();
+
+  if (action.includes("block") || action.includes("limit")) {
+    return "block";
+  }
+
+  if (action.includes("reroute")) {
+    return "reroute";
+  }
+
+  return "none";
+}
+
+function numericPort(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+
+  return null;
+}
+
+function portSummaryFromSecurityEvent(event: RawSecurityEvent): string {
+  const srcPort = numericPort(event.src_port);
+  const dstPort = numericPort(event.dst_port);
+
+  if (srcPort !== null && dstPort !== null) {
+    return `${srcPort} -> ${dstPort}`;
+  }
+
+  if (dstPort !== null) {
+    return String(dstPort);
+  }
+
+  const uniqueDstPorts = event.evidence?.unique_dst_ports;
+
+  if (Array.isArray(uniqueDstPorts)) {
+    const ports = uniqueDstPorts
+      .filter((port): port is number => typeof port === "number")
+      .sort((left, right) => left - right);
+    const visiblePorts = ports.slice(0, 4);
+
+    if (ports.length > visiblePorts.length) {
+      return `${visiblePorts.join(", ")} 외 ${ports.length - visiblePorts.length}`;
+    }
+
+    if (visiblePorts.length > 0) {
+      return visiblePorts.join(", ");
+    }
+  }
+
+  return "-";
+}
+
+function normalizeSecurityEvent(event: RawSecurityEvent): SecurityEvent {
+  const evidence = event.evidence ?? {};
+  const eventId = event.event_id ?? event.id ?? "unknown-event";
+
+  return {
+    id: event.id ?? eventId,
+    event_id: event.event_id,
+    event_fingerprint: event.event_fingerprint,
+    analyzer_id: event.analyzer_id,
+    occurred_at: event.timestamp ?? event["@timestamp"] ?? initialTimestamp,
+    attack_type: normalizeSecurityAttackType(event.attack_type),
+    severity: normalizeSecuritySeverity(event.severity),
+    status: normalizeSecurityStatus(event.status),
+    src_ip: event.src_ip ?? "",
+    src_mac: event.src_mac,
+    dst_ip: event.dst_ip ?? "-",
+    src_port: numericPort(event.src_port),
+    dst_port: numericPort(event.dst_port),
+    port_summary: portSummaryFromSecurityEvent(event),
+    protocol: event.protocol ?? "UNKNOWN",
+    detection_rule: event.detection_rule,
+    recommended_action: event.recommended_action,
+    response_level: event.response_level,
+    confidence: event.confidence,
+    evidence,
+    mitigation: event.mitigation ?? null,
+    pps:
+      numberFromEvidence(evidence, "pps") ||
+      numberFromEvidence(evidence, "syn_count") ||
+      numberFromEvidence(evidence, "packet_count"),
+    bps: numberFromEvidence(evidence, "bps"),
+    action: actionFromSecurityEvent(event)
+  };
+}
+
+function mergeSecurityEvents(
+  currentEvents: SecurityEvent[],
+  incomingEvents: SecurityEvent[]
+): SecurityEvent[] {
+  const events = new Map<string, SecurityEvent>();
+
+  [...currentEvents, ...incomingEvents].forEach((event) => {
+    // fingerprint는 같은 공격 흐름을 뜻하고 event_id는 개별 발생 건을 뜻한다.
+    // 중복 억제 시간이 지난 재발 사건이 이전 이력을 덮어쓰지 않게 event_id를 쓴다.
+    const key = event.event_id ?? event.id;
+    events.set(key, event);
+  });
+
+  return Array.from(events.values())
+    .sort(
+      (left, right) =>
+        toTimestampMs(right.occurred_at) - toTimestampMs(left.occurred_at)
+    )
+    .slice(0, 100);
 }
 
 function mergeSuspiciousHosts(
@@ -320,6 +502,30 @@ async function fetchDashboardSuspiciousHosts(): Promise<SuspiciousHost[]> {
     (await response.json()) as DashboardSuspiciousHostsResponse;
 
   return normalizeSuspiciousHosts(suspiciousHosts.items ?? []);
+}
+
+async function fetchDashboardSummary(): Promise<DashboardSummary | null> {
+  const response = await fetch("/api/dashboard/summary");
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return normalizeDashboardSummary(
+    (await response.json()) as DashboardSummaryResponse
+  );
+}
+
+async function fetchSecurityEvents(): Promise<SecurityEvent[]> {
+  const response = await fetch("/api/security/events?limit=100");
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const securityEvents = (await response.json()) as SecurityEventsResponse;
+
+  return (securityEvents.items ?? []).map(normalizeSecurityEvent);
 }
 
 function removeTrailingPartialBucket(samples: TrafficSample[]): TrafficSample[] {
@@ -568,6 +774,7 @@ function normalizeDetectionSummary(
 export function useRealtime(): RealtimeState {
   const [connected, setConnected] = useState(false);
   const [source, setSource] = useState<"waiting" | "history" | "websocket">("waiting");
+  const [dashboardSummary, setDashboardSummary] = useState(initialDashboardSummary);
   const [analyzerStatus, setAnalyzerStatus] = useState(initialAnalyzerStatus);
   const [packetSummary, setPacketSummary] = useState(initialPacketSummary);
   const [detectionSummary, setDetectionSummary] = useState(initialDetectionSummary);
@@ -583,15 +790,19 @@ export function useRealtime(): RealtimeState {
     const loadDashboardHistory = async () => {
       try {
         const [
+          analyzerStatusResponse,
           trafficResponse,
           protocolsResponse,
-          historySuspiciousHosts,
-          securityEventsResponse
+          dashboardSummaryResponse,
+          historySecurityEvents,
+          historySuspiciousHosts
         ] = await Promise.all([
+          fetch("/api/analyzer/status"),
           fetch("/api/dashboard/traffic?range=5m&bucket=5s"),
           fetch("/api/dashboard/protocols?range=1m"),
-          fetchDashboardSuspiciousHosts(),
-          fetch("/api/security/events?limit=100")
+          fetchDashboardSummary(),
+          fetchSecurityEvents(),
+          fetchDashboardSuspiciousHosts()
         ]);
 
         if (!trafficResponse.ok || !protocolsResponse.ok) {
@@ -602,25 +813,33 @@ export function useRealtime(): RealtimeState {
           (await trafficResponse.json()) as DashboardTrafficResponse;
         const protocols =
           (await protocolsResponse.json()) as DashboardProtocolsResponse;
-        const storedSecurityEvents =
-          securityEventsResponse.ok
-            ? ((await securityEventsResponse.json()) as SecurityEventsResponse)
-            : { items: [] };
+        const summary = dashboardSummaryResponse;
+        const analyzerStatuses = analyzerStatusResponse.ok
+          ? ((await analyzerStatusResponse.json()) as AnalyzerStatusResponse)
+          : null;
 
         if (ignored) {
           return;
         }
 
-        const protocolStats = toProtocolStats(protocols.items ?? []);
-        const historySecurityEvents = (storedSecurityEvents.items ?? [])
-          // 기존 detection summary 문서는 보안 이벤트 필수 필드가 없어 제외된다.
-          .filter(isSecurityEvent)
-          .filter((event) =>
-            SUPPORTED_SECURITY_ATTACK_TYPES.has(event.attack_type)
-          );
+        if (summary) {
+          setDashboardSummary(summary);
+          setDetectionSummary((prev) => ({
+            ...prev,
+            network_status: summary.networkStatus,
+            total_bps: summary.currentBps,
+            total_pps: summary.currentPps
+          }));
+        }
 
+        const latestAnalyzerStatus = analyzerStatuses?.items?.[0];
+        if (latestAnalyzerStatus) {
+          setAnalyzerStatus(normalizeStoredAnalyzerStatus(latestAnalyzerStatus));
+        }
+
+        const protocolStats = toProtocolStats(protocols.items ?? []);
+        setSecurityEvents(mergeSecurityEvents([], historySecurityEvents));
         setDbSuspiciousHosts(historySuspiciousHosts);
-        setSecurityEvents(historySecurityEvents);
         const historySamples = (traffic.items ?? [])
           .map(toHistoryTrafficSample)
           .sort((left, right) => left.timestampMs - right.timestampMs);
@@ -648,8 +867,12 @@ export function useRealtime(): RealtimeState {
           setDetectionSummary((prev) => ({
             ...prev,
             timestamp: new Date(lastSample.timestampMs).toISOString(),
-            total_bps: Math.round(lastSample.totalBits / Math.max(lastSample.windowSec, 1)),
-            total_pps: Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1)),
+            total_bps:
+              summary?.currentBps ??
+              Math.round(lastSample.totalBits / Math.max(lastSample.windowSec, 1)),
+            total_pps:
+              summary?.currentPps ??
+              Math.round(lastSample.totalPackets / Math.max(lastSample.windowSec, 1)),
             suspicious_host_count: historySuspiciousHosts.length,
             suspicious_hosts: historySuspiciousHosts
           }));
@@ -683,16 +906,28 @@ export function useRealtime(): RealtimeState {
 
     void loadDashboardHistory();
     refreshTimer = setInterval(() => {
-      void fetchDashboardSuspiciousHosts()
-        .then((historySuspiciousHosts) => {
+      void Promise.all([
+        fetchDashboardSummary(),
+        fetchDashboardSuspiciousHosts()
+      ])
+        .then(([summary, historySuspiciousHosts]) => {
           if (!ignored) {
+            if (summary) {
+              setDashboardSummary(summary);
+              setDetectionSummary((prev) => ({
+                ...prev,
+                network_status: summary.networkStatus,
+                total_bps: summary.currentBps,
+                total_pps: summary.currentPps
+              }));
+            }
             setDbSuspiciousHosts(historySuspiciousHosts);
           }
         })
         .catch(() => {
           // Suspicious host polling is best-effort; live WebSocket data still updates the dashboard.
         });
-    }, SUSPICIOUS_HOST_REFRESH_MS);
+    }, Math.max(SUSPICIOUS_HOST_REFRESH_MS, DASHBOARD_SUMMARY_REFRESH_MS));
 
     return () => {
       ignored = true;
@@ -785,6 +1020,12 @@ export function useRealtime(): RealtimeState {
           ) {
             const nextDetectionSummary = normalizeDetectionSummary(message.data);
 
+            setDashboardSummary((prev) => ({
+              ...prev,
+              currentBps: nextDetectionSummary.total_bps,
+              currentPps: nextDetectionSummary.total_pps,
+              networkStatus: nextDetectionSummary.network_status
+            }));
             setDetectionSummary(nextDetectionSummary);
             if (nextDetectionSummary.suspicious_hosts.length > 0) {
               setDbSuspiciousHosts((prev) =>
@@ -806,10 +1047,21 @@ export function useRealtime(): RealtimeState {
           }
 
           if (message.type === "security_event") {
-            // 실시간 이벤트도 이력과 같은 검증을 통과한 경우에만 앞에 추가한다.
-            if (isSecurityEvent(message.data)) {
-              setSecurityEvents((prev) => [message.data, ...prev].slice(0, 100));
-            }
+            setSecurityEvents((prev) =>
+              mergeSecurityEvents(prev, [
+                normalizeSecurityEvent(message.data as RawSecurityEvent)
+              ])
+            );
+          }
+
+          if (message.type === "security_events") {
+            const nextSecurityEvents = (message.data.events ?? []).map(
+              normalizeSecurityEvent
+            );
+
+            setSecurityEvents((prev) =>
+              mergeSecurityEvents(prev, nextSecurityEvents)
+            );
           }
 
           if (message.type === "topology_update") {
@@ -859,6 +1111,7 @@ export function useRealtime(): RealtimeState {
     () => ({
       connected,
       source,
+      dashboardSummary,
       analyzerStatus,
       packetSummary: aggregatedPacketSummary,
       detectionSummary: visibleDetectionSummary,
@@ -870,6 +1123,7 @@ export function useRealtime(): RealtimeState {
       aggregatedPacketSummary,
       analyzerStatus,
       connected,
+      dashboardSummary,
       securityEvents,
       source,
       topology,

@@ -1,3 +1,4 @@
+from fastapi.encoders import jsonable_encoder
 from fastapi import WebSocket
 
 
@@ -18,7 +19,7 @@ class WebSocketManager:
 
         for websocket in self.active_connections:
             try:
-                await websocket.send_json(message)
+                await websocket.send_json(jsonable_encoder(message))
             except RuntimeError:
                 disconnected_connections.append(websocket)
 

@@ -5,7 +5,7 @@ import type {
   IncomingPacketSummary,
   PacketSummary
 } from "@/types/analyzer";
-import type { SecurityEvent } from "@/types/security";
+import type { RawSecurityEvent, SecurityEvent } from "@/types/security";
 import type { TopologyState } from "@/types/topology";
 
 export type RealtimeMessage =
@@ -14,4 +14,5 @@ export type RealtimeMessage =
   | { type: "detection_summary"; data: DetectionSummary | IncomingDetectionSummary }
   | { type: "traffic_analysis"; data: IncomingDetectionSummary }
   | { type: "security_event"; data: SecurityEvent }
+  | { type: "security_events"; data: { events?: RawSecurityEvent[] } }
   | { type: "topology_update"; data: TopologyState };

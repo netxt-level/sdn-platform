@@ -1,70 +1,113 @@
-# SDN 보안 담당 구현 정리
-
-이 문서는 전체 SDN 플랫폼 설명서가 아니라, 보안 담당 파트에서 추가한 탐지 로직과 연동 지점만 정리한다.
-Analyzer, Backend, Frontend, Controller 전체 구조를 다시 설명하기보다는 보안 이벤트가 어디서 만들어지고 어떻게 전달되는지만 다룬다.
+# 보안 탐지 구현 정리
 
 ## 범위
 
-보안 파트는 Analyzer가 넘겨주는 패킷 메타데이터를 보고 보안 이벤트를 만든다. 이벤트는 Backend에 저장되고, Frontend에는 `security_event` WebSocket 메시지로 전달된다. Controller 쪽에서는 이벤트에 포함된 `flow_rule` 또는 `controller_requests`를 참고해 차단이나 제한 정책으로 바꿀 수 있다.
+최종 시나리오는 `ARP_SPOOFING`이다. `PORT_SCAN`과 `ICMP_FLOOD`는 서로 다른 탐지 기준을 보여 주는 보조 항목이다.
 
-최종 시나리오는 ARP Spoofing이다. DDoS는 이번 범위에서 제외했다. 현재 토폴로지는 공격자가 h2 한 대라서 DDoS라고 부르기보다는 단일 공격자 기반 Flood/DoS에 가깝기 때문이다.
+| 이벤트 | 판단 기준 | 대응 |
+|---|---|---|
+| `ARP_SPOOFING` | Gateway IP를 신뢰 MAC이 아닌 값으로 주장하는 ARP Reply | `DROP` 후보 |
+| `PORT_SCAN` | 같은 출발지·목적지에서 여러 TCP 포트로 향하는 SYN | 관찰 또는 알림 |
+| `ICMP_FLOOD` | 같은 출발지·목적지의 ICMP pps가 기준 이상 | 조건 충족 시 `RATE_LIMIT` 후보 |
 
-## 탐지 항목
+DDoS, UDP Flood, SYN Flood, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위에 포함하지 않는다.
 
-| 항목 | 구분 | 판단 기준 | 대응 |
-| --- | --- | --- | --- |
-| `ARP_SPOOFING` | 최종 시나리오 | Gateway IP의 정상 MAC과 ARP Reply에서 주장하는 MAC이 다름 | `DROP` |
-| `PORT_SCAN` | 보조 탐지 | 같은 출발지에서 짧은 시간 동안 여러 TCP 목적지 포트로 SYN 시도 | `RATE_LIMIT` |
-| `ICMP_FLOOD` | 보조 탐지 | ICMP PPS가 임계값 이상 | `RATE_LIMIT` |
+## ARP Spoofing 시나리오
 
-`PORT_SCAN`과 `ICMP_FLOOD`는 최종 발표 시나리오가 아니라 보조 탐지 항목이다. 기존 흐름을 참고해 구현하되, 이번 보안 담당 범위에서는 ARP Spoofing 설명을 돕는 수준으로만 둔다. DDoS, UDP Flood, SYN Flood, 링크 혼잡, 링크 장애는 이번 최종 범위에 포함하지 않는다.
+정상 기준:
 
-보조 탐지는 단순히 이벤트명만 만들지 않고, `matched_conditions`, `score`, `response_level` 같은 근거 값을 함께 남긴다. 발표나 점검에서 “왜 탐지됐는지”를 설명하기 쉽게 하기 위한 값이며, 실제 대응은 `DROP` 또는 `RATE_LIMIT` 후보 정책으로만 제안한다.
+```text
+Gateway IP  : 10.0.0.254
+Gateway MAC : 00:00:00:00:ff:ff
+```
 
-## ARP Spoofing 흐름
+공격 입력:
 
-1. 정상 Gateway 정보는 `10.0.0.254 -> 00:00:00:00:ff:ff`로 둔다.
-2. 공격자 h2가 `10.0.0.254 is-at 00:00:00:00:00:02` ARP Reply를 보낸다.
-3. Analyzer가 ARP 필드를 보안 엔진으로 넘긴다.
-4. 보안 엔진은 정상 Gateway MAC과 관측 MAC을 비교한다.
-5. 값이 다르면 `ARP_SPOOFING` 이벤트를 만든다.
-6. 대응 정책은 위조 ARP Reply를 막는 `DROP` rule로 만든다.
+```text
+ARP Reply
+10.0.0.254 is-at 00:00:00:00:00:02
+target: 10.0.0.1
+```
 
-예상 Flow Rule은 아래와 같다.
+처리 순서:
+
+1. `packet/parser.py`가 ARP opcode, sender IP/MAC, target IP/MAC을 추출한다.
+2. `SecurityEventBuilder`가 ARP Reply만 확인한다.
+3. sender IP가 보호 대상 Gateway IP인지 확인한다.
+4. sender MAC을 신뢰 Gateway MAC과 비교한다.
+5. 값이 다르면 `ARP_SPOOFING` Critical 이벤트를 만든다.
+6. 공격자의 Ethernet source MAC과 위조 Gateway IP에만 일치하는 DROP 후보를 만든다.
+7. Backend가 이벤트, 대응 내역, PENDING Flow Rule을 저장한다.
+8. Frontend는 공격자 IP 대신 MAC을 출발지로 표시한다.
+
+신뢰 정보가 없는 일반 IP에서 두 MAC이 관찰되더라도 어느 쪽이 공격자인지 판단할 수 없으므로 자동 DROP하지 않는다.
+
+## ARP 이벤트 예시
 
 ```json
 {
-  "instruction": "DROP",
-  "priority": 650,
-  "match": {
-    "eth_type": 2054,
-    "arp_spa": "10.0.0.254",
-    "eth_src": "00:00:00:00:00:02"
+  "attack_category": "L2_SPOOFING",
+  "attack_type": "ARP_SPOOFING",
+  "severity": "critical",
+  "confidence": "high",
+  "status": "detected",
+  "src_ip": null,
+  "src_mac": "00:00:00:00:00:02",
+  "dst_ip": "10.0.0.1",
+  "protocol": "ARP",
+  "detection_rule": "trusted_gateway_mac_mismatch",
+  "recommended_action": "block",
+  "response_level": "L3",
+  "evidence": {
+    "spoofed_ip": "10.0.0.254",
+    "trusted_mac": "00:00:00:00:ff:ff",
+    "claimed_mac": "00:00:00:00:00:02",
+    "matched_conditions": [
+      "arp_reply",
+      "gateway_ip_claimed",
+      "gateway_mac_mismatch"
+    ]
+  },
+  "mitigation": {
+    "action": "DROP",
+    "target": "flow",
+    "match": {
+      "eth_type": 2054,
+      "eth_src": "00:00:00:00:00:02",
+      "arp_spa": "10.0.0.254"
+    },
+    "priority": 650,
+    "idle_timeout": 60,
+    "hard_timeout": 300
   }
 }
 ```
 
-## 연동 포인트
+`mitigation`은 Controller 적용 후보이며 자동 적용 완료를 의미하지 않는다.
 
-Analyzer는 ARP 패킷에서 아래 필드를 넘겨야 한다.
+## 저장과 화면 전달
 
-| 필드 | 의미 |
-| --- | --- |
-| `protocol` 또는 `eth_type` | ARP 여부 |
-| `arp_opcode` | request/reply |
-| `arp_sender_ip` | ARP Reply가 주장하는 IP |
-| `arp_sender_mac` | ARP Reply를 보낸 MAC |
-| `arp_target_ip` | ARP 대상 IP |
-| `arp_target_mac` | ARP 대상 MAC |
+```text
+Analyzer SecurityEventBuilder
+  -> POST /api/security/events
+  -> Pydantic SecurityEventsRequest 검증
+  -> Elasticsearch sdn-security-events
+  -> PostgreSQL security_responses / flow_rules
+  -> WebSocket security_events
+  -> Frontend Security Events / Flow Rules
+```
 
-Backend는 `POST /api/security/events`로 이벤트 묶음을 받는다. 이벤트가 들어오면 저장하고, Frontend에는 `security_event` 메시지로 broadcast한다.
-
-Frontend는 현재 보안 담당 payload에서 `ARP_SPOOFING`, `PORT_SCAN`, `ICMP_FLOOD`를 표시할 수 있으면 된다.
+이벤트의 `event_fingerprint`는 같은 공격 흐름을 묶고, `event_id`는 발생 시간 창을 포함해 재발 사건을 구분한다. Analyzer는 중복 억제 시간 안의 동일 흐름을 다시 전송하지 않는다.
 
 ## 확인 방법
 
-```powershell
-$env:PYTHONPATH="analyzer"
-python -m app.security.demo --input samples/security_scenario_06_arp_spoofing_final.json --backend-out reports/security_arp_backend.json --flow-out reports/security_arp_flows.json
-python -m pytest analyzer/tests/test_security_engine.py
+```bash
+python -m pytest analyzer/tests backend/tests -q
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm run build
 ```

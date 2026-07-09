@@ -7,4 +7,6 @@
 | --- | --- | --- |
 | `security_scenario_06_arp_spoofing_final.json` | 최종 ARP Spoofing 시나리오. h2가 Gateway IP를 자신의 MAC으로 속이는 상황이다. | `ARP_SPOOFING` |
 
-DDoS는 이번 최종 보안 범위에 포함하지 않는다.
+샘플은 현재 `SecurityEventBuilder` 입력 구조인 `security_config`, `packet_summary`, `packets`로 구성하며 Analyzer 테스트에서 직접 읽어 검증한다.
+
+DDoS는 이번 최종 보안 범위에 포함하지 않는다. ICMP 보조 항목은 `ICMP_FLOOD`로 구분한다.

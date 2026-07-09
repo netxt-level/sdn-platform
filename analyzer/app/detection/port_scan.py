@@ -4,12 +4,7 @@ from typing import Any
 
 
 class PortScanDetector:
-    """TCP SYN 패턴을 기준으로 Port Scan 의심 트래픽을 찾는다.
-
-    SYN은 있고 ACK는 없는 패킷을 연결 시도로 보고, 같은 출발지가 짧은 시간 안에
-    여러 목적지 포트로 접근하면 스캔 의심 알림을 만든다. 이 결과는 대시보드의
-    의심 호스트 목록에도 쓰이고, 보안 이벤트 근거로도 사용할 수 있다.
-    """
+    """Detect TCP SYN attempts directed at many ports in a short period."""
 
     def __init__(
         self,
@@ -29,6 +24,7 @@ class PortScanDetector:
         self.high_unique_dst_port_threshold = high_unique_dst_port_threshold
         self.alert_cooldown_sec = alert_cooldown_sec
 
+        # Keep SYN events in time order for both scan windows.
         self.events: deque[dict[str, Any]] = deque()
         self.last_alert_at: dict[tuple[str, str], datetime] = {}
 
@@ -54,11 +50,11 @@ class PortScanDetector:
                 }
             )
 
-        self._expire_old_events(now)
+        self._expire_old_state(now)
         return self._build_alerts(now)
 
     def _build_alerts(self, now: datetime) -> list[dict[str, Any]]:
-        scan_window_cutoff = now - timedelta(seconds=self.window_sec)
+        scan_cutoff = now - timedelta(seconds=self.window_sec)
         multi_target_cutoff = now - timedelta(seconds=self.multi_target_window_sec)
         ports_by_pair: dict[tuple[str, str], dict[str, Any]] = defaultdict(
             lambda: {"ports": set(), "syn_count": 0}
@@ -66,26 +62,26 @@ class PortScanDetector:
         scan_targets_by_source: dict[str, set[str]] = defaultdict(set)
 
         for event in self.events:
-            key = (event["src_ip"], event["dst_ip"])
-
-            if event["timestamp"] >= scan_window_cutoff:
-                ports_by_pair[key]["ports"].add(event["dst_port"])
-                ports_by_pair[key]["syn_count"] += 1
-
+            pair = (event["src_ip"], event["dst_ip"])
+            if event["timestamp"] >= scan_cutoff:
+                ports_by_pair[pair]["ports"].add(event["dst_port"])
+                ports_by_pair[pair]["syn_count"] += 1
             if event["timestamp"] >= multi_target_cutoff:
                 scan_targets_by_source[event["src_ip"]].add(event["dst_ip"])
 
-        alerts: list[dict[str, Any]] = []
+        alerts = []
         for (src_ip, dst_ip), stats in ports_by_pair.items():
             ports = stats["ports"]
             syn_count = stats["syn_count"]
-
             if len(ports) < self.unique_port_threshold:
                 continue
 
             alert_key = (src_ip, dst_ip)
             last_alert = self.last_alert_at.get(alert_key)
-            if last_alert and (now - last_alert).total_seconds() < self.alert_cooldown_sec:
+            if (
+                last_alert is not None
+                and (now - last_alert).total_seconds() < self.alert_cooldown_sec
+            ):
                 continue
 
             self.last_alert_at[alert_key] = now
@@ -120,18 +116,17 @@ class PortScanDetector:
         if syn_count >= self.syn_count_threshold:
             matched_conditions.append("syn_count_threshold_satisfied")
             score += 10
-
         if scanned_target_count >= self.multi_target_threshold:
             matched_conditions.append("multi_target_scan")
             score += 15
-
         if len(ports) >= self.high_unique_dst_port_threshold:
             matched_conditions.append("high_unique_dst_port_count")
             score += 15
 
         score = min(score, 100)
-        response_level = "L2" if score >= 70 else "L1"
-        recommended_action = "alert" if response_level == "L2" else "monitor"
+        has_auxiliary_condition = len(matched_conditions) > 3
+        response_level = "L2" if has_auxiliary_condition else "L1"
+        recommended_action = "alert" if has_auxiliary_condition else "monitor"
 
         return {
             "host": src_ip,
@@ -152,19 +147,28 @@ class PortScanDetector:
             "recommended_action": recommended_action,
         }
 
-    def _expire_old_events(self, now: datetime) -> None:
+    def _expire_old_state(self, now: datetime) -> None:
         retention_sec = max(self.window_sec, self.multi_target_window_sec)
-        cutoff = now - timedelta(seconds=retention_sec)
+        event_cutoff = now - timedelta(seconds=retention_sec)
+        alert_cutoff = now - timedelta(seconds=self.alert_cooldown_sec)
 
-        while self.events and self.events[0]["timestamp"] < cutoff:
+        while self.events and self.events[0]["timestamp"] < event_cutoff:
             self.events.popleft()
+
+        expired_alerts = [
+            key
+            for key, alerted_at in self.last_alert_at.items()
+            if alerted_at < alert_cutoff
+        ]
+        for key in expired_alerts:
+            self.last_alert_at.pop(key, None)
 
 
 def _is_tcp_syn_probe(packet: dict[str, Any]) -> bool:
     if packet.get("protocol") != "TCP":
         return False
 
-    flags = str(packet.get("tcp_flags", "")).upper()
+    flags = str(packet.get("tcp_flags") or "").upper()
     return "S" in flags and "A" not in flags
 
 

@@ -6,9 +6,9 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 | 영역 | 경로 | 진행 상태 |
 |---|---|---|
-| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ARP Spoofing 중심 보안 이벤트, Port Scan/ICMP Flood 보조 탐지 구현 |
-| 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회 API, WebSocket broadcast 구현 |
-| 프론트엔드 | `frontend/` | 실시간 대시보드와 운영 화면 구현 |
+| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ARP Spoofing/ICMP Flood/Port Scan 탐지, 백엔드 전송 구현 |
+| 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회/생성 API, WebSocket broadcast 구현 |
+| 프론트엔드 | `frontend/` | 실시간 대시보드와 보안 이벤트/경로/Flow Rule 운영 화면 구현 |
 
 ## 전체 구조
 
@@ -29,7 +29,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | Backend | `8000` | FastAPI API 서버 |
 | PostgreSQL | `5433` -> `5432` | 분석 서버 상태 저장 |
 | InfluxDB | `8086` | 트래픽 시계열/탐지 지표 저장 |
-| Elasticsearch | `9200`, `9300` | 트래픽 요약 및 보안 이벤트 저장 |
+| Elasticsearch | `9200`, `9300` | 보안 이벤트 저장 |
 
 ## 기술 스택
 
@@ -64,6 +64,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 ## 구현된 기능
 
+보안 탐지 항목과 대응 레벨 정책은 `SECURITY_DETECTION_POLICY.md`를 기준으로 한다.
+
 ### 분석 서버
 
 - 지정 네트워크 인터페이스에서 패킷 캡처
@@ -72,7 +74,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 프로토콜별 패킷 수 집계
 - 출발지/목적지/프로토콜별 host traffic 집계
 - 전체 패킷 수와 전체 bit 수 계산
-- bps/pps 기반 DoS 의심 호스트 탐지
+- ICMP pps 기반 ICMP Flood 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
 - ARP Spoofing, Port Scan, ICMP Flood 보안 이벤트 생성
 - 보안 이벤트별 탐지 근거, 점수, 대응 후보 payload 생성
@@ -83,12 +85,14 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 ### 백엔드 서버
 
 - 분석 서버 상태 수신 및 PostgreSQL upsert
-- 패킷 요약 수신 및 InfluxDB/Elasticsearch 저장
-- 탐지 요약 수신 및 InfluxDB/Elasticsearch 저장
+- 패킷 요약 수신 및 InfluxDB 저장
+- 트래픽 상태 요약 수신 및 InfluxDB 저장
 - 보안 이벤트 수신 및 Elasticsearch 저장
 - 대시보드 조회 API 제공
 - 보안 이벤트 조회 API 제공
-- Flow 목록 조회 API 제공
+- Flow 목록 조회 및 수동 Flow Rule 생성 API 제공
+- 경로 제어 상태 조회 API 제공
+- 보안 대응 내역과 flow rule 후보를 PostgreSQL에 저장
 - WebSocket으로 분석 이벤트 실시간 broadcast
 
 ### 프론트엔드
@@ -98,20 +102,23 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 최근 5분 트래픽 시계열 차트
 - 최근 1분 프로토콜 통계 표시
 - 의심 호스트 목록 표시
-- ARP Spoofing, Port Scan, ICMP Flood 보안 이벤트 표시
+- ARP Spoofing/ICMP Flood/Port Scan 유형별 필터링
 - WebSocket 실시간 수신
 - 트래픽/의심 호스트/보안 이벤트 히스토리 API 초기 조회
 - DB 의심 호스트 polling 및 실시간 데이터 병합
+- 보안 이벤트 목록/상세 화면을 실제 보안 이벤트 API에 연결
+- 처리 완료/긴급 처리 필터와 미처리 high 이상 이벤트 알림 표시
+- 경로 제어 화면을 백엔드 경로 상태 API에 연결
+- Flow Rule 화면을 실제 조회/수동 생성 API에 연결
 
 ## 화면 구성
 
 | 화면 | 경로 | 상태 |
 |---|---|---|
 | 대시보드 | `/` | 구현됨 |
-| Flow Rules | `/flow-rules` | 구현중 |
-| Path | `/path` | 구현중 |
-| Security Events | `/security/events` | 구현중 |
-| Security Rules | `/security/rules` | 구현중 |
+| Flow Rules | `/flow-rules` | 구현됨 |
+| Path | `/path` | 구현됨 |
+| Security Events | `/security/events` | 구현됨 |
 | Topology | `/topology` | 구현중 |
 | Settings | `/settings` | 구현중 |
 
@@ -125,14 +132,16 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `GET` | `/api/analyzer/status` | 분석 서버 상태 조회 |
 | `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
 | `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
-| `POST` | `/api/analyzer/detection-summary` | 탐지 요약 수신 |
-| `POST` | `/api/security/events` | 보안 이벤트 수신 |
+| `POST` | `/api/analyzer/detection-summary` | 트래픽 상태 요약 수신 |
 | `GET` | `/api/dashboard/summary` | 대시보드 요약 조회 |
 | `GET` | `/api/dashboard/traffic` | 트래픽 시계열 조회 |
 | `GET` | `/api/dashboard/protocols` | 프로토콜 통계 조회 |
 | `GET` | `/api/dashboard/suspicious-hosts` | 의심 호스트 조회 |
 | `GET` | `/api/flows` | Flow 목록 조회 |
+| `POST` | `/api/flows` | 수동 Flow Rule 생성 |
+| `GET` | `/api/path/status` | 경로 제어 상태 조회 |
 | `GET` | `/api/security/events` | 보안 이벤트 조회 |
+| `GET` | `/api/security/responses` | 보안 대응 내역 조회 |
 
 ### WebSocket
 
@@ -147,7 +156,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `analyzer_status` | 분석 서버 상태 수신 후 |
 | `packet_summary` | 패킷 요약 수신 후 |
 | `detection_summary` | 탐지 요약 수신 후 |
-| `security_event` | 보안 이벤트 수신 후 |
+| `security_events` | 보안 이벤트 수신 후 |
 
 상세 API 명세는 아래 문서를 참고한다.
 
@@ -230,19 +239,27 @@ docker compose down -v
 | `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 분석 서버 상태 전송 주기 |
-| `SECURITY_WINDOW_SEC` | `10` | 보안 이벤트 판단용 rolling window |
-| `SECURITY_GATEWAY_IP` | `10.0.0.254` | ARP Spoofing 판단에 사용할 Gateway IP |
-| `SECURITY_GATEWAY_MAC` | `00:00:00:00:ff:ff` | 정상 Gateway MAC |
-| `SECURITY_EVENT_COOLDOWN_SEC` | `30` | 같은 보안 이벤트 중복 전송 억제 시간 |
+| `SECURITY_GATEWAY_IP` | `10.0.0.254` | ARP Spoofing 비교 대상 Gateway IP |
+| `SECURITY_GATEWAY_MAC` | `00:00:00:00:ff:ff` | 신뢰하는 Gateway MAC |
+| `ARP_DROP_PRIORITY` | `650` | ARP DROP 후보 Flow Rule 우선순위 |
+| `ARP_DROP_IDLE_TIMEOUT` | `60` | ARP DROP 후보 idle timeout |
+| `ARP_DROP_HARD_TIMEOUT` | `300` | ARP DROP 후보 hard timeout |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
 | `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
 | `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
 | `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
-| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 의심 호스트 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `100` | ICMP Flood pps 임계값 |
-| `SECURITY_RATE_LIMIT_PPS` | `50` | 보안 이벤트 rate limit 후보 pps |
+| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
+| `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
+| `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
+| `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
+| `ICMP_HIGH_PPS_MULTIPLIER` | `3.0` | ICMP Flood high pps 배수 기준 |
+| `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
+| `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
+| `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
+| `RATE_LIMIT_HARD_TIMEOUT` | `300` | Rate limit 후보 hard timeout |
+| `RATE_LIMIT_PPS` | `100` | Rate limit 후보 제한 pps |
 | `BACKEND_BASE_URL` | `http://backend:8000` | 분석 서버가 호출할 백엔드 주소 |
 | `FRONTEND_PORT` | `3000` | 프론트엔드 호스트 포트 |
 | `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite가 사용할 내부 백엔드 주소 |
@@ -252,9 +269,9 @@ docker compose down -v
 
 | 저장소 | 저장 내용 |
 |---|---|
-| PostgreSQL | 분석 서버 최신 상태, `sdn_controller.analyzer` |
-| InfluxDB | 트래픽 시계열, 프로토콜 통계, host traffic, 네트워크 상태, 의심 호스트 |
-| Elasticsearch | 트래픽 요약 문서, 탐지 요약 문서, 보안 이벤트 문서 |
+| PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
+| InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태 |
+| Elasticsearch | 보안 이벤트 문서, `sdn-security-events` |
 
 Alembic migration은 `migrations/`에 있다.
 
@@ -262,15 +279,28 @@ Alembic migration은 `migrations/`에 있다.
 |---|---|
 | `migrations/versions/001_init_schema.py` | `sdn_controller` schema 및 `updated_at` trigger 함수 생성 |
 | `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
+| `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
+| `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
 
 ## 현재 제한 사항
 
-- `/api/dashboard/summary`는 현재 고정 mock 값을 반환한다.
-- `/api/flows`는 현재 sample 값을 반환하며 `src_ip` query parameter를 실제 필터링에 사용하지 않는다.
-- 일부 프론트엔드 화면은 mock/static 데이터 기반 UI를 포함한다.
-- `backend/tests/` 디렉터리는 있으나 실제 테스트 코드는 아직 작성되어 있지 않다.
-- 프론트엔드는 현재 `analyzer_status`, `packet_summary`, `detection_summary`, `security_event` 메시지를 처리한다.
+- `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
+- `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
+- `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다.
+- ARP Spoofing의 최종 시나리오는 신뢰 Gateway IP-MAC과 다른 ARP Reply를 탐지하는 방식이다. 신뢰 기준이 없는 일반 IP-MAC 중복은 자동 DROP하지 않는다.
+- DDoS, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위가 아니다. ICMP 항목은 단일 출발지 기반 `ICMP_FLOOD`로 기록한다.
+- `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
+- 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
+- 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
 - 패킷 캡처는 OS/컨테이너 권한과 네트워크 인터페이스 설정에 영향을 받는다.
+
+## 테스트
+
+Analyzer 보안 탐지 명세 단위 테스트는 표준 라이브러리 `unittest`로 실행한다.
+
+```bash
+PYTHONPYCACHEPREFIX=/private/tmp/sdn-platform-pycache python3 -m unittest discover -s analyzer/tests -v
+```
 
 ## 성능 확인 및 테스트 다음 단계
 

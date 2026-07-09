@@ -1,42 +1,122 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
 import { Route } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { mockTopology } from "@/lib/mockData";
+import { formatDateTime } from "@/lib/format";
 
-const pathHistory = [
-  {
-    time: "12:41:35",
-    from: "primary",
-    to: "backup",
-    reason: "ICMP Flood 대응",
-    status: "manual"
-  },
-  {
-    time: "12:38:10",
-    from: "backup",
-    to: "primary",
-    reason: "혼잡 해소",
-    status: "auto"
-  },
-  {
-    time: "12:31:02",
-    from: "primary",
-    to: "backup",
-    reason: "링크 사용률 70% 초과",
-    status: "auto"
-  }
-];
+type PathLink = {
+  id: string;
+  source: string;
+  target: string;
+  path: "primary" | "backup";
+  active: boolean;
+  utilization: number;
+};
 
-const linkStats = mockTopology.links.filter((link) => link.path !== "access");
+type PathInfo = {
+  name: "primary" | "backup";
+  nodes: string[];
+  utilization: number;
+  active: boolean;
+};
+
+type PathHistoryItem = {
+  id: string;
+  time?: string | null;
+  from: string;
+  to: string;
+  reason: string;
+  status: string;
+};
+
+type PathStatus = {
+  active_path: "primary" | "backup";
+  network_status: "normal" | "warning" | "critical";
+  paths: {
+    primary: PathInfo;
+    backup: PathInfo;
+  };
+  links: PathLink[];
+  history: PathHistoryItem[];
+};
+
+const initialPathStatus: PathStatus = {
+  active_path: "primary",
+  network_status: "normal",
+  paths: {
+    primary: {
+      name: "primary",
+      nodes: ["-"],
+      utilization: 0,
+      active: true
+    },
+    backup: {
+      name: "backup",
+      nodes: ["-"],
+      utilization: 0,
+      active: false
+    }
+  },
+  links: [],
+  history: []
+};
 
 export default function PathPage() {
+  const [pathStatus, setPathStatus] = useState<PathStatus>(initialPathStatus);
+  const [pathLoading, setPathLoading] = useState(true);
+  const linkStats = useMemo(
+    () => pathStatus.links,
+    [pathStatus.links]
+  );
+  const primaryPath = pathStatus.paths.primary;
+  const backupPath = pathStatus.paths.backup;
+  const congestionState =
+    pathStatus.network_status === "normal" ? "NORMAL" : "WARNING";
+  const pathHistory = pathStatus.history;
+
+  useEffect(() => {
+    let ignored = false;
+
+    async function loadPathStatus() {
+      try {
+        const response = await fetch("/api/path/status", { cache: "no-store" });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as PathStatus;
+
+        if (!ignored) {
+          setPathStatus(data);
+        }
+      } finally {
+        if (!ignored) {
+          setPathLoading(false);
+        }
+      }
+    }
+
+    loadPathStatus();
+    const intervalId = window.setInterval(loadPathStatus, 15000);
+
+    return () => {
+      ignored = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   return (
     <>
       <PageHeader
         title="경로 제어"
         description="기본 경로와 우회 경로의 사용률, 전환 상태, 경로 변경 이력을 확인합니다."
+        connected={!pathLoading}
+        source={pathLoading ? "waiting" : "history"}
       />
 
       <div className="grid grid-cols-3 gap-4 max-xl:grid-cols-1">
@@ -46,17 +126,23 @@ export default function PathPage() {
             기본 경로
           </p>
           <div className="font-mono-ui mb-3 flex items-center gap-2 text-sm font-bold">
-            <span className="rounded border border-line2 bg-panel2 px-2 py-1">s1</span>
-            <span className="text-faint">→</span>
-            <span className="rounded border border-line2 bg-panel2 px-2 py-1 text-yellow">s2</span>
-            <span className="text-faint">→</span>
-            <span className="rounded border border-line2 bg-panel2 px-2 py-1">s4</span>
+            {primaryPath.nodes.map((node, index) => (
+              <span key={`${node}-${index}`} className="contents">
+                {index > 0 && <span className="text-faint">→</span>}
+                <span className="rounded border border-line2 bg-panel2 px-2 py-1">
+                  {node}
+                </span>
+              </span>
+            ))}
           </div>
           <p className="font-mono-ui text-[11px] text-muted">
-            링크 사용률 <b className="text-yellow">72%</b>
+            링크 사용률 <b className={primaryPath.utilization >= 70 ? "text-yellow" : "text-accent"}>{primaryPath.utilization}%</b>
           </p>
           <div className="mt-3 h-1 rounded bg-sidebar">
-            <div className="h-full w-[72%] rounded bg-yellow" />
+            <div
+              className={`h-full rounded ${primaryPath.utilization >= 70 ? "bg-yellow" : "bg-accent"}`}
+              style={{ width: `${primaryPath.utilization}%` }}
+            />
           </div>
         </section>
 
@@ -66,17 +152,23 @@ export default function PathPage() {
             우회 경로
           </p>
           <div className="font-mono-ui mb-3 flex items-center gap-2 text-sm font-bold">
-            <span className="rounded border border-line2 bg-panel2 px-2 py-1">s1</span>
-            <span className="text-faint">→</span>
-            <span className="rounded border border-line2 bg-panel2 px-2 py-1 text-yellow">s3</span>
-            <span className="text-faint">→</span>
-            <span className="rounded border border-line2 bg-panel2 px-2 py-1">s4</span>
+            {backupPath.nodes.map((node, index) => (
+              <span key={`${node}-${index}`} className="contents">
+                {index > 0 && <span className="text-faint">→</span>}
+                <span className="rounded border border-line2 bg-panel2 px-2 py-1">
+                  {node}
+                </span>
+              </span>
+            ))}
           </div>
           <p className="font-mono-ui text-[11px] text-muted">
-            링크 사용률 <b className="text-green">38%</b>
+            링크 사용률 <b className={backupPath.utilization >= 70 ? "text-yellow" : "text-green"}>{backupPath.utilization}%</b>
           </p>
           <div className="mt-3 h-1 rounded bg-sidebar">
-            <div className="h-full w-[38%] rounded bg-green" />
+            <div
+              className={`h-full rounded ${backupPath.utilization >= 70 ? "bg-yellow" : "bg-green"}`}
+              style={{ width: `${backupPath.utilization}%` }}
+            />
           </div>
         </section>
 
@@ -85,9 +177,15 @@ export default function PathPage() {
           <p className="font-mono-ui mb-3 text-[9px] font-bold uppercase tracking-[0.2em] text-red">
             혼잡 상태
           </p>
-          <p className="font-mono-ui text-2xl font-black text-red">WARNING</p>
+          <p className={`font-mono-ui text-2xl font-black ${congestionState === "WARNING" ? "text-red" : "text-green"}`}>
+            {congestionState}
+          </p>
           <p className="font-mono-ui mt-2 text-[11px] text-muted">
-            기본 경로 임계값 근접, 자동 우회 대기
+            {pathStatus.active_path === "backup"
+              ? "우회 경로 사용 중"
+              : primaryPath.utilization >= 70
+                ? "기본 경로 임계값 근접, 자동 우회 대기"
+                : "기본 경로 정상 사용 중"}
           </p>
         </section>
       </div>
@@ -107,16 +205,23 @@ export default function PathPage() {
               </thead>
               <tbody>
                 {pathHistory.map((item) => (
-                  <tr key={`${item.time}-${item.reason}`} className="border-b border-line last:border-0">
-                    <td className="px-3 py-3">{item.time}</td>
+                  <tr key={item.id} className="border-b border-line last:border-0">
+                    <td className="px-3 py-3">{formatDateTime(item.time)}</td>
                     <td className="px-3 py-3">{item.from}</td>
                     <td className="px-3 py-3">{item.to}</td>
                     <td className="px-3 py-3">{item.reason}</td>
                     <td className="px-3 py-3">
-                      <StatusBadge value={item.status} tone={item.status === "auto" ? "normal" : "muted"} />
+                      <StatusBadge value={item.status} tone={item.status === "applied" || item.status === "installed" ? "normal" : "muted"} />
                     </td>
                   </tr>
                 ))}
+                {!pathHistory.length && (
+                  <tr>
+                    <td className="px-3 py-6 text-center text-muted" colSpan={5}>
+                      {pathLoading ? "경로 상태 조회 중" : "경로 변경 이력이 없습니다."}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

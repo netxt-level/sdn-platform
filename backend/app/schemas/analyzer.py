@@ -16,8 +16,10 @@ class AnalyzerStatusRequest(BaseModel):                 # 분석 서버 상태 �
 class HostStat(BaseModel):                              # 호스트/프로토콜별 통계 모델
     src_host: Optional[str] = None                      # 출발지 호스트명
     src_ip: Optional[str] = None                        # 출발지 IP
+    src_port: Optional[int] = None                      # 출발지 포트
     dst_host: Optional[str] = None                      # 목적지 호스트명
     dst_ip: Optional[str] = None                        # 목적지 IP
+    dst_port: Optional[int] = None                      # 목적지 포트
     protocol: str                                       # 프로토콜
     packet_count: int                                   # 패킷 수
     bit_count: int                                      # 비트 수
@@ -31,21 +33,10 @@ class PacketSummaryRequest(BaseModel):                  # 패킷 요약 요청 �
     protocol_stats: dict[str, int]                      # 프로토콜별 패킷 수
     host_stats: list[HostStat]                          # 호스트별 통계 목록
 
-class SuspiciousHost(BaseModel):                        # 의심 호스트 모델
-    host: Optional[str] = None                          # 호스트명
-    ip: str                                             # IP 주소
-    protocol: str                                       # 프로토콜
-    bps: float                                          # 초당 비트 수
-    pps: float                                          # 초당 패킷 수
-    reasons: list[str]                                  # 의심 판단 이유
-    attack_type: Optional[str] = None                   # 공격/이상 트래픽 유형
-
-class DetectionSummaryRequest(BaseModel):               # 탐지 요약 요청 모델
-    timestamp: datetime                                 # 탐지 요약 생성 시각
+class DetectionSummaryRequest(BaseModel):               # 트래픽 상태 요약 요청 모델
+    timestamp: datetime                                 # 트래픽 상태 요약 생성 시각
     analyzer_id: str                                    # 분석 서버 ID
     network_status: str                                 # 네트워크 상태
     total_bps: float                                    # 전체 초당 비트 수
     total_pps: float                                    # 전체 초당 패킷 수
     active_flow_count: int                              # 활성 flow 수
-    suspicious_host_count: int                          # 의심 호스트 수
-    suspicious_hosts: list[SuspiciousHost]              # 의심 호스트 목록

@@ -107,20 +107,37 @@ export const mockSecurityEvents: SecurityEvent[] = [
     occurred_at: now,
     attack_type: "ARP_SPOOFING",
     severity: "critical",
-    status: "blocked",
-    src_ip: "10.0.0.254",
+    status: "detected",
+    src_ip: "",
     src_mac: "00:00:00:00:00:02",
-    dst_ip: "10.0.0.1",
+    dst_ip: "10.0.0.11",
+    port_summary: "-",
     protocol: "ARP",
     pps: 0,
     bps: 0,
     action: "block",
-    mitigation_action: "DROP",
+    mitigation: {
+      action: "DROP",
+      target: "flow",
+      match: {
+        eth_type: 2054,
+        eth_src: "00:00:00:00:00:02",
+        arp_spa: "10.0.0.1"
+      },
+      priority: 650,
+      idle_timeout: 60,
+      hard_timeout: 300
+    },
     evidence: {
-      arp_sender_ip: "10.0.0.254",
-      trusted_mac: "00:00:00:00:ff:ff",
-      observed_mac: "00:00:00:00:00:02",
-      matched_conditions: ["gateway_ip_claimed", "gateway_mac_mismatch"]
+      gateway_ip: "10.0.0.1",
+      trusted_gateway_mac: "00:00:00:00:00:01",
+      observed_sender_mac: "00:00:00:00:00:02",
+      matched_conditions: [
+        "arp_reply",
+        "sender_ip_matches_gateway",
+        "sender_mac_mismatch"
+      ],
+      score: 100
     }
   },
   {
@@ -131,11 +148,25 @@ export const mockSecurityEvents: SecurityEvent[] = [
     status: "detected",
     src_ip: "10.0.0.2",
     dst_ip: "10.0.0.4",
+    port_summary: "-",
     protocol: "ICMP",
     pps: 96,
     bps: 614400,
     action: "block",
-    mitigation_action: "RATE_LIMIT",
+    mitigation: {
+      action: "RATE_LIMIT",
+      target: "flow",
+      match: {
+        eth_type: 2048,
+        ipv4_src: "10.0.0.2",
+        ipv4_dst: "10.0.0.4",
+        ip_proto: 1
+      },
+      priority: 500,
+      idle_timeout: 60,
+      hard_timeout: 300,
+      rate_limit_pps: 100
+    },
     evidence: {
       matched_conditions: ["icmp_pps_threshold"],
       score: 60,
@@ -150,17 +181,11 @@ export const mockSecurityEvents: SecurityEvent[] = [
     status: "detected",
     src_ip: "10.0.0.2",
     dst_ip: "10.0.0.4",
+    port_summary: "22, 80, 443",
     protocol: "TCP",
     pps: 42,
     bps: 172000,
-    action: "block",
-    mitigation_action: "RATE_LIMIT",
-    evidence: {
-      unique_dst_port_count: 42,
-      matched_conditions: ["unique_dst_port_threshold", "syn_count_threshold"],
-      score: 70,
-      response_level: "rate_limit_candidate"
-    }
+    action: "block"
   }
 ];
 
