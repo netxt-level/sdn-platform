@@ -1,13 +1,7 @@
 export type AttackType =
   | "ICMP_FLOOD"
-  | "SYN_FLOOD"
-  | "UDP_FLOOD"
   | "PORT_SCAN"
-  | "ARP_SPOOFING"
-  | "ARP_REPLY_STORM"
-  | "CONGESTION"
-  | "LINK_FAILURE"
-  | "UNKNOWN";
+  | "ARP_SPOOFING";
 
 export type SecuritySeverity = "low" | "medium" | "high" | "critical";
 

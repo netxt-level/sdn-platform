@@ -12,7 +12,7 @@ import type {
   SuspiciousHost
 } from "@/types/analyzer";
 import type { RealtimeMessage } from "@/types/realtime";
-import type { SecurityEvent } from "@/types/security";
+import type { AttackType, SecurityEvent } from "@/types/security";
 import type { TopologyState } from "@/types/topology";
 export type RealtimeState = {
   connected: boolean;
@@ -68,10 +68,19 @@ type DashboardSuspiciousHostsResponse = {
   items?: SuspiciousHost[];
 };
 
+type SecurityEventsResponse = {
+  items?: unknown[];
+};
+
 const FIVE_SECONDS_MS = 5 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
 const SUSPICIOUS_HOST_REFRESH_MS = 5 * 1000;
+const SUPPORTED_SECURITY_ATTACK_TYPES = new Set<AttackType>([
+  "ARP_SPOOFING",
+  "ICMP_FLOOD",
+  "PORT_SCAN"
+]);
 
 const configuredWebsocketUrl = process.env.NEXT_PUBLIC_WS_URL;
 
@@ -228,6 +237,35 @@ function normalizeAttackType(attackType?: string | null): string {
   const normalizedAttackType = attackType?.trim().toUpperCase();
 
   return normalizedAttackType || "DOS";
+}
+
+function isSupportedSecurityAttackType(value: unknown): value is AttackType {
+  return (
+    typeof value === "string" &&
+    SUPPORTED_SECURITY_ATTACK_TYPES.has(value as AttackType)
+  );
+}
+
+function isSecurityEvent(item: unknown): item is SecurityEvent {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+
+  const event = item as Partial<SecurityEvent>;
+
+  return Boolean(
+    typeof event.id === "string" &&
+      typeof event.occurred_at === "string" &&
+      isSupportedSecurityAttackType(event.attack_type) &&
+      ["low", "medium", "high", "critical"].includes(event.severity ?? "") &&
+      ["detected", "blocked", "ignored", "resolved"].includes(event.status ?? "") &&
+      typeof event.src_ip === "string" &&
+      typeof event.dst_ip === "string" &&
+      typeof event.protocol === "string" &&
+      typeof event.pps === "number" &&
+      typeof event.bps === "number" &&
+      ["none", "block", "reroute"].includes(event.action ?? "")
+  );
 }
 
 function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
@@ -543,11 +581,13 @@ export function useRealtime(): RealtimeState {
         const [
           trafficResponse,
           protocolsResponse,
-          historySuspiciousHosts
+          historySuspiciousHosts,
+          securityEventsResponse
         ] = await Promise.all([
           fetch("/api/dashboard/traffic?range=5m&bucket=5s"),
           fetch("/api/dashboard/protocols?range=1m"),
-          fetchDashboardSuspiciousHosts()
+          fetchDashboardSuspiciousHosts(),
+          fetch("/api/security/events?limit=100")
         ]);
 
         if (!trafficResponse.ok || !protocolsResponse.ok) {
@@ -558,13 +598,24 @@ export function useRealtime(): RealtimeState {
           (await trafficResponse.json()) as DashboardTrafficResponse;
         const protocols =
           (await protocolsResponse.json()) as DashboardProtocolsResponse;
+        const storedSecurityEvents =
+          securityEventsResponse.ok
+            ? ((await securityEventsResponse.json()) as SecurityEventsResponse)
+            : { items: [] };
 
         if (ignored) {
           return;
         }
 
         const protocolStats = toProtocolStats(protocols.items ?? []);
+        const historySecurityEvents = (storedSecurityEvents.items ?? [])
+          .filter(isSecurityEvent)
+          .filter((event) =>
+            SUPPORTED_SECURITY_ATTACK_TYPES.has(event.attack_type)
+          );
+
         setDbSuspiciousHosts(historySuspiciousHosts);
+        setSecurityEvents(historySecurityEvents);
         const historySamples = (traffic.items ?? [])
           .map(toHistoryTrafficSample)
           .sort((left, right) => left.timestampMs - right.timestampMs);
@@ -615,7 +666,8 @@ export function useRealtime(): RealtimeState {
         if (
           completedHistorySamples.length > 0 ||
           Object.keys(protocolStats).length > 0 ||
-          historySuspiciousHosts.length > 0
+          historySuspiciousHosts.length > 0 ||
+          historySecurityEvents.length > 0
         ) {
           setSource("history");
         }
@@ -749,7 +801,9 @@ export function useRealtime(): RealtimeState {
           }
 
           if (message.type === "security_event") {
-            setSecurityEvents((prev) => [message.data, ...prev].slice(0, 100));
+            if (isSecurityEvent(message.data)) {
+              setSecurityEvents((prev) => [message.data, ...prev].slice(0, 100));
+            }
           }
 
           if (message.type === "topology_update") {

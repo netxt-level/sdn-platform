@@ -6,7 +6,7 @@
 - 분석 서버 수신 API: `backend/app/api/analyzer.py`
 - 대시보드 조회 API: `backend/app/api/dashboard.py`
 - 플로우 조회 API: `backend/app/api/flows.py`
-- 보안 이벤트 조회 API: `backend/app/api/security.py`
+- 보안 이벤트 수신/조회 API: `backend/app/api/security.py`
 - WebSocket API: `backend/app/api/ws.py`
 
 ## 기본 정보
@@ -332,13 +332,73 @@ GET /api/flows
 
 ## 5. Security API
 
+### 보안 이벤트 수신
+
+```http
+POST /api/security/events
+```
+
+분석 서버가 생성한 보안 이벤트 묶음을 수신한다. 현재 보안 담당 범위의 이벤트 타입은 `ARP_SPOOFING`, `PORT_SCAN`, `ICMP_FLOOD`다.
+
+### Request Body
+
+```json
+{
+  "summary": {
+    "window_seconds": 10,
+    "packet_count": 25,
+    "event_count": 1
+  },
+  "events": [
+    {
+      "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
+      "occurred_at": "2026-05-24T10:00:00+00:00",
+      "attack_type": "ARP_SPOOFING",
+      "severity": "critical",
+      "status": "blocked",
+      "src_ip": "10.0.0.254",
+      "src_mac": "00:00:00:00:00:02",
+      "dst_ip": "10.0.0.1",
+      "protocol": "ARP",
+      "pps": 0,
+      "bps": 0,
+      "action": "block",
+      "mitigation_action": "DROP",
+      "evidence": {
+        "arp_sender_ip": "10.0.0.254",
+        "trusted_mac": "00:00:00:00:ff:ff",
+        "observed_mac": "00:00:00:00:00:02",
+        "matched_conditions": [
+          "gateway_ip_claimed",
+          "gateway_mac_mismatch"
+        ]
+      }
+    }
+  ],
+  "controller_requests": []
+}
+```
+
+### Response Body
+
+```json
+{
+  "ok": true
+}
+```
+
+### Side Effects
+
+- `events` 배열의 각 이벤트를 Elasticsearch `sdn-detection-events` 인덱스에 저장한다.
+- WebSocket으로 이벤트마다 `{"type":"security_event","data":...}` 메시지를 broadcast한다.
+
 ### 보안 이벤트 목록 조회
 
 ```http
 GET /api/security/events
 ```
 
-Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 조회한다.
+Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 조회한다. 같은 인덱스에 탐지 요약도 저장될 수 있으므로, 프론트엔드는 `attack_type`과 `occurred_at`이 있는 보안 이벤트만 화면에 사용한다.
 
 ### Query Parameters
 
@@ -353,28 +413,26 @@ Elasticsearch `sdn-detection-events` 인덱스에서 최신 탐지 이벤트를 
   "limit": 50,
   "items": [
     {
-      "id": "elastic-document-id",
+      "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
       "@timestamp": "2026-05-24T10:00:00+00:00",
       "timestamp": "2026-05-24T10:00:00+00:00",
-      "analyzer_id": "analyzer-1",
-      "network_status": "warning",
-      "total_bps": 273960.0,
-      "total_pps": 90.0,
-      "active_flow_count": 15,
-      "suspicious_host_count": 1,
-      "suspicious_hosts": [
-        {
-          "host": "52.182.143.209",
-          "ip": "52.182.143.209",
-          "protocol": "TCP",
-          "bps": 81192.0,
-          "pps": 16.0,
-          "reasons": [
-            "DoS"
-          ],
-          "attack_type": "DOS"
-        }
-      ]
+      "occurred_at": "2026-05-24T10:00:00+00:00",
+      "attack_type": "ARP_SPOOFING",
+      "severity": "critical",
+      "status": "blocked",
+      "src_ip": "10.0.0.254",
+      "src_mac": "00:00:00:00:00:02",
+      "dst_ip": "10.0.0.1",
+      "protocol": "ARP",
+      "pps": 0,
+      "bps": 0,
+      "action": "block",
+      "mitigation_action": "DROP",
+      "evidence": {
+        "arp_sender_ip": "10.0.0.254",
+        "trusted_mac": "00:00:00:00:ff:ff",
+        "observed_mac": "00:00:00:00:00:02"
+      }
     }
   ]
 }
@@ -446,4 +504,26 @@ WS /ws/analyzer
 }
 ```
 
-프론트엔드 타입에는 과거 호환용으로 `traffic_analysis`, `security_event`, `topology_update` 메시지도 정의되어 있지만, 현재 백엔드 코드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`다.
+#### Security Event
+
+```json
+{
+  "type": "security_event",
+  "data": {
+    "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
+    "occurred_at": "2026-05-24T10:00:00+00:00",
+    "attack_type": "ARP_SPOOFING",
+    "severity": "critical",
+    "status": "blocked",
+    "src_ip": "10.0.0.254",
+    "src_mac": "00:00:00:00:00:02",
+    "dst_ip": "10.0.0.1",
+    "protocol": "ARP",
+    "pps": 0,
+    "bps": 0,
+    "action": "block"
+  }
+}
+```
+
+프론트엔드 타입에는 과거 호환용으로 `traffic_analysis`, `topology_update` 메시지도 정의되어 있다. 현재 백엔드 코드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_event`다.

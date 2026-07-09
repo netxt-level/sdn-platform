@@ -105,6 +105,27 @@ export const mockSecurityEvents: SecurityEvent[] = [
   {
     id: "evt-1042",
     occurred_at: now,
+    attack_type: "ARP_SPOOFING",
+    severity: "critical",
+    status: "blocked",
+    src_ip: "10.0.0.254",
+    src_mac: "00:00:00:00:00:02",
+    dst_ip: "10.0.0.1",
+    protocol: "ARP",
+    pps: 0,
+    bps: 0,
+    action: "block",
+    mitigation_action: "DROP",
+    evidence: {
+      arp_sender_ip: "10.0.0.254",
+      trusted_mac: "00:00:00:00:ff:ff",
+      observed_mac: "00:00:00:00:00:02",
+      matched_conditions: ["gateway_ip_claimed", "gateway_mac_mismatch"]
+    }
+  },
+  {
+    id: "evt-1041",
+    occurred_at: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
     attack_type: "ICMP_FLOOD",
     severity: "high",
     status: "detected",
@@ -113,59 +134,33 @@ export const mockSecurityEvents: SecurityEvent[] = [
     protocol: "ICMP",
     pps: 96,
     bps: 614400,
-    action: "none"
+    action: "block",
+    mitigation_action: "RATE_LIMIT",
+    evidence: {
+      matched_conditions: ["icmp_pps_threshold"],
+      score: 60,
+      response_level: "rate_limit_candidate"
+    }
   },
   {
-    id: "evt-1041",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
+    id: "evt-1040",
+    occurred_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
     attack_type: "PORT_SCAN",
     severity: "medium",
-    status: "blocked",
+    status: "detected",
     src_ip: "10.0.0.2",
     dst_ip: "10.0.0.4",
     protocol: "TCP",
     pps: 42,
     bps: 172000,
-    action: "block"
-  },
-  {
-    id: "evt-1040",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-    attack_type: "SYN_FLOOD",
-    severity: "high",
-    status: "blocked",
-    src_ip: "10.0.0.2",
-    dst_ip: "10.0.0.4",
-    protocol: "TCP",
-    pps: 438,
-    bps: 904000,
-    action: "block"
-  },
-  {
-    id: "evt-1039",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    attack_type: "UDP_FLOOD",
-    severity: "medium",
-    status: "detected",
-    src_ip: "10.0.0.3",
-    dst_ip: "10.0.0.4",
-    protocol: "UDP",
-    pps: 164,
-    bps: 382000,
-    action: "reroute"
-  },
-  {
-    id: "evt-1038",
-    occurred_at: new Date(Date.now() - 1000 * 60 * 32).toISOString(),
-    attack_type: "UNKNOWN",
-    severity: "low",
-    status: "resolved",
-    src_ip: "10.0.0.1",
-    dst_ip: "10.0.0.4",
-    protocol: "TCP",
-    pps: 24,
-    bps: 76000,
-    action: "none"
+    action: "block",
+    mitigation_action: "RATE_LIMIT",
+    evidence: {
+      unique_dst_port_count: 42,
+      matched_conditions: ["unique_dst_port_threshold", "syn_count_threshold"],
+      score: 70,
+      response_level: "rate_limit_candidate"
+    }
   }
 ];
 

@@ -28,7 +28,7 @@ export default function SecurityEventsPage() {
     <>
       <PageHeader
         title="보안 이벤트"
-        description="ICMP Flood, SYN Flood, UDP Flood, Port Scan 같은 탐지 이벤트와 대응 상태를 관리합니다."
+        description="ARP Spoofing, ICMP Flood, Port Scan 탐지 이벤트와 대응 상태를 관리합니다."
         connected={state.connected}
         source={state.source}
       />
@@ -46,7 +46,7 @@ export default function SecurityEventsPage() {
           title="보안 이벤트 목록"
           action={
             <div className="flex flex-wrap items-center gap-2">
-              {["전체", "ICMP Flood", "SYN Flood", "UDP Flood", "Port Scan"].map((label, index) => (
+              {["전체", "ARP Spoofing", "ICMP Flood", "Port Scan"].map((label, index) => (
                 <button
                   key={label}
                   className={[
@@ -102,7 +102,7 @@ export default function SecurityEventsPage() {
                   <span className="text-faint">{formatDateTime(selectedEvent.occurred_at)}</span> <span className="text-accent">{selectedEvent.src_ip}</span> → <span className="text-yellow">{selectedEvent.dst_ip}</span> {selectedEvent.protocol} pkt={selectedEvent.pps} <span className="text-red">[{selectedEvent.status.toUpperCase()}]</span>
                 </div>
                 <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-left text-red">공격 호스트 차단</button>
-                <button className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-left text-yellow">우회 경로 전환</button>
+                <button className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-left text-yellow">속도 제한 후보 확인</button>
                 <button className="rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-left text-green">해결 처리</button>
               </div>
             ) : (

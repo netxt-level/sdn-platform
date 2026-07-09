@@ -3,9 +3,9 @@
 이 문서는 현재 코드 기준으로 분석 서버가 백엔드 서버에 전송하는 API를 정리한다.
 
 - 분석 서버 호출 구현: `analyzer/app/backend_client.py`
-- 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/analyzer_status.py`
+- 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/security/backend_contract.py`, `analyzer/app/analyzer_status.py`
 - 백엔드 수신 스키마: `backend/app/schemas/analyzer.py`
-- 백엔드 수신 라우터: `backend/app/api/analyzer.py`
+- 백엔드 수신 라우터: `backend/app/api/analyzer.py`, `backend/app/api/security.py`
 
 ## 기본 정보
 
@@ -17,7 +17,7 @@
 | 공통 성공 응답 | `{"ok": true}` |
 | 유효성 검증 실패 | FastAPI 기본 `422 Unprocessable Entity` |
 
-분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약과 탐지 요약을 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
+분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약, 탐지 요약, 보안 이벤트를 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
 
 | 환경변수 | 기본값 | 설명 |
 |---|---:|---|
@@ -25,6 +25,19 @@
 | `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
+| `SECURITY_WINDOW_SEC` | `10` | 보안 이벤트 판단용 rolling window |
+| `SECURITY_GATEWAY_IP` | `10.0.0.254` | ARP Spoofing 판단에 사용할 Gateway IP |
+| `SECURITY_GATEWAY_MAC` | `00:00:00:00:ff:ff` | 정상 Gateway MAC |
+| `SECURITY_EVENT_COOLDOWN_SEC` | `30` | 같은 보안 이벤트 중복 전송 억제 시간 |
+| `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
+| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
+| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
+| `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
+| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
+| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
+| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 의심 호스트 중복 알림 억제 시간 |
+| `ICMP_PPS_THRESHOLD` | `100` | ICMP Flood pps 임계값 |
+| `SECURITY_RATE_LIMIT_PPS` | `50` | 보안 이벤트 rate limit 후보 pps |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
 
 ## 1. 패킷 요약 전달
@@ -182,7 +195,7 @@ POST /api/analyzer/detection-summary
 | `reasons` | `string[]` | O | 의심 판단 사유 |
 | `attack_type` | `string \| null` | X | 공격/이상 트래픽 유형. 현재 생성값은 `DOS`, `PORT_SCAN` |
 
-현재 백엔드 스키마는 위 필드만 모델에 포함한다. 포트 스캔 탐지기가 내부적으로 만드는 `target_ip`, `unique_dst_port_count` 같은 추가 필드는 FastAPI/Pydantic 모델 변환 후 응답 broadcast 및 저장 payload에 포함되지 않는다.
+현재 백엔드의 탐지 요약 스키마는 위 필드만 모델에 포함한다. Port Scan의 상세 근거(`target_ip`, `unique_dst_port_count`, `matched_conditions` 등)는 보안 이벤트 payload에 포함한다.
 
 ### Response Body
 
@@ -214,7 +227,136 @@ POST /api/analyzer/detection-summary
 }
 ```
 
-## 3. 분석 서버 상태 전달
+## 3. 보안 이벤트 전달
+
+```http
+POST /api/security/events
+```
+
+분석 서버가 보안 엔진에서 만든 이벤트 묶음을 전송한다. 현재 보안 이벤트 범위는 최종 시나리오인 `ARP_SPOOFING`과 보조 탐지인 `PORT_SCAN`, `ICMP_FLOOD`다. DDoS, UDP Flood, SYN Flood, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위에 포함하지 않는다.
+
+### Request Body
+
+```json
+{
+  "summary": {
+    "window_seconds": 10,
+    "packet_count": 25,
+    "event_count": 1
+  },
+  "events": [
+    {
+      "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
+      "event_id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
+      "occurred_at": "2026-05-24T10:00:00+00:00",
+      "created_at": "2026-05-24T10:00:00+00:00",
+      "attack_type": "ARP_SPOOFING",
+      "severity": "critical",
+      "status": "blocked",
+      "src_ip": "10.0.0.254",
+      "src_mac": "00:00:00:00:00:02",
+      "dst_ip": "10.0.0.1",
+      "dst_port": null,
+      "protocol": "ARP",
+      "pps": 0,
+      "bps": 0,
+      "action": "block",
+      "mitigation_action": "DROP",
+      "metric_name": "arp_sender_mac",
+      "metric_value": "00:00:00:00:00:02",
+      "threshold": "00:00:00:00:ff:ff",
+      "evidence": {
+        "arp_sender_ip": "10.0.0.254",
+        "trusted_mac": "00:00:00:00:ff:ff",
+        "observed_mac": "00:00:00:00:00:02",
+        "matched_conditions": [
+          "gateway_ip_claimed",
+          "gateway_mac_mismatch"
+        ]
+      },
+      "flow_rule": {
+        "action": "DROP",
+        "match": {
+          "eth_type": 2054,
+          "arp_spa": "10.0.0.254",
+          "eth_src": "00:00:00:00:00:02"
+        },
+        "priority": 650,
+        "idle_timeout": 60,
+        "hard_timeout": 300,
+        "reason": "ARP spoofing attempt for gateway IP"
+      }
+    }
+  ],
+  "controller_requests": [
+    {
+      "action": "DROP",
+      "match": {
+        "eth_type": 2054,
+        "arp_spa": "10.0.0.254",
+        "eth_src": "00:00:00:00:00:02"
+      },
+      "priority": 650,
+      "idle_timeout": 60,
+      "hard_timeout": 300,
+      "rate_limit_pps": null,
+      "reroute_path": null,
+      "reason": "ARP spoofing attempt for gateway IP"
+    }
+  ]
+}
+```
+
+### 주요 필드
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `summary.window_seconds` | `number` | 보안 엔진이 판단에 사용한 window 길이 |
+| `summary.packet_count` | `integer` | 해당 window에서 보안 엔진이 본 패킷 수 |
+| `summary.event_count` | `integer` | 생성된 보안 이벤트 수 |
+| `events[].attack_type` | `string` | `ARP_SPOOFING`, `PORT_SCAN`, `ICMP_FLOOD` 중 하나 |
+| `events[].severity` | `string` | 프론트 표시용 위험도. `low`, `medium`, `high`, `critical` |
+| `events[].status` | `string` | 프론트 표시용 상태. `detected`, `blocked`, `ignored`, `resolved` |
+| `events[].action` | `string` | 프론트 표시용 대응 상태. 현재 보안 범위에서는 `none` 또는 `block` |
+| `events[].mitigation_action` | `string` | 컨트롤러 대응 후보. 현재 보안 범위에서는 `DROP`, `RATE_LIMIT`, `MONITOR_ONLY` |
+| `events[].evidence` | `object` | 탐지 근거. `matched_conditions`, `score`, `response_level` 같은 설명용 값을 포함할 수 있음 |
+| `events[].flow_rule` | `object \| null` | 컨트롤러가 적용할 수 있는 Flow Rule 후보 |
+| `controller_requests` | `object[]` | 이벤트에서 만들어진 컨트롤러 대응 후보 목록 |
+
+### Response Body
+
+```json
+{
+  "ok": true
+}
+```
+
+### 백엔드 처리
+
+- Elasticsearch `sdn-detection-events` 인덱스에 이벤트별로 저장한다.
+- WebSocket `/ws/analyzer` 구독자에게 이벤트마다 아래 메시지를 broadcast한다.
+
+```json
+{
+  "type": "security_event",
+  "data": {
+    "id": "ARP_SPOOFING-10.0.0.254-00:00:00:00:00:02",
+    "occurred_at": "2026-05-24T10:00:00+00:00",
+    "attack_type": "ARP_SPOOFING",
+    "severity": "critical",
+    "status": "blocked",
+    "src_ip": "10.0.0.254",
+    "src_mac": "00:00:00:00:00:02",
+    "dst_ip": "10.0.0.1",
+    "protocol": "ARP",
+    "pps": 0,
+    "bps": 0,
+    "action": "block"
+  }
+}
+```
+
+## 4. 분석 서버 상태 전달
 
 ```http
 POST /api/analyzer/status
@@ -293,4 +435,4 @@ POST /api/analyzer/status
 | HTTP 오류 응답 | 콘솔에 HTTP status 로그 출력, `False` 반환 |
 | 기타 요청 오류 | 콘솔에 일반 요청 오류 로그 출력, `False` 반환 |
 
-패킷 요약과 탐지 요약 둘 다 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 둘 중 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
+패킷 요약, 탐지 요약, 보안 이벤트 전송이 모두 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
