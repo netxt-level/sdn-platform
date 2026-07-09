@@ -1,4 +1,4 @@
-// Only attack types implemented by the current analyzer are listed here.
+// 현재 Analyzer가 실제로 만드는 공격 유형만 둔다.
 export type AttackType =
   | "ICMP_FLOOD"
   | "PORT_SCAN"
@@ -10,7 +10,7 @@ export type SecuritySeverity = "low" | "medium" | "high" | "critical";
 export type SecurityEventStatus = "detected" | "blocked" | "ignored" | "resolved";
 
 export type SecurityEvent = {
-  // id is used by the UI; event_id is the identifier created by the analyzer.
+  // id는 화면 표시용이고, event_id는 Analyzer가 만든 사건 ID다.
   id: string;
   event_id?: string;
   event_fingerprint?: string;

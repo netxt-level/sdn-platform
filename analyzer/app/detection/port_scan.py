@@ -1,43 +1,77 @@
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
-from typing import Any
+
+
+# 일반적으로 스캔 대상이 되기 쉬운 관리/서비스 포트다.
+# 이 포트들이 함께 나타나면 단순 접속보다 점검 또는 스캔 가능성이 높다고 본다.
+COMMON_SCAN_PORTS = {
+    21,
+    22,
+    23,
+    25,
+    53,
+    80,
+    110,
+    139,
+    143,
+    443,
+    445,
+    3306,
+    3389,
+    5432,
+    6379,
+    8080,
+}
 
 
 class PortScanDetector:
-    """Detect TCP SYN attempts directed at many ports in a short period."""
+    """TCP SYN 패턴을 모아 포트 스캔 의심 흐름을 찾는다."""
 
     def __init__(
         self,
-        window_sec: int = 5,
-        unique_port_threshold: int = 20,
-        syn_count_threshold: int = 20,
-        multi_target_window_sec: int = 30,
-        multi_target_threshold: int = 3,
-        high_unique_dst_port_threshold: int = 50,
-        alert_cooldown_sec: int = 60,
-    ) -> None:
+        window_sec=5,
+        unique_port_threshold=10,
+        syn_count_threshold=10,
+        multi_target_window_sec=30,
+        multi_target_threshold=2,
+        high_unique_dst_port_threshold=25,
+        common_port_hit_threshold=3,
+        alert_cooldown_sec=30,
+    ):
+        # 짧은 시간 안에 여러 포트로 연결을 시도하는지를 보기 위한 기본 창이다.
         self.window_sec = window_sec
+        # 같은 출발지와 목적지 사이에서 서로 다른 목적지 포트가 이 값 이상이면 탐지한다.
         self.unique_port_threshold = unique_port_threshold
+        # 포트 종류뿐 아니라 SYN 시도 자체가 반복됐는지도 같이 본다.
         self.syn_count_threshold = syn_count_threshold
+        # 한 호스트가 여러 대상 IP를 스캔하는지 확인하기 위한 보조 창이다.
         self.multi_target_window_sec = multi_target_window_sec
         self.multi_target_threshold = multi_target_threshold
+        # 이 값 이상이면 포트 수가 매우 많은 스캔으로 보고 점수를 더한다.
         self.high_unique_dst_port_threshold = high_unique_dst_port_threshold
+        # 자주 노리는 포트가 여러 개 포함되면 보조 근거로 사용한다.
+        self.common_port_hit_threshold = common_port_hit_threshold
+        # 같은 흐름이 매 창마다 반복 보고되지 않도록 잠깐 묶어 둔다.
         self.alert_cooldown_sec = alert_cooldown_sec
 
-        # Keep SYN events in time order for both scan windows.
-        self.events: deque[dict[str, Any]] = deque()
-        self.last_alert_at: dict[tuple[str, str], datetime] = {}
+        self.events = deque()
+        self.last_alert_at = {}
 
-    def detect(self, packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def detect(self, packets):
         now = datetime.now()
 
         for packet in packets:
-            if not _is_tcp_syn_probe(packet):
+            if packet.get("protocol") != "TCP":
+                continue
+
+            # SYN만 있고 ACK가 없는 패킷을 연결 시도 패턴으로 본다.
+            flags = str(packet.get("tcp_flags", "")).upper()
+            if "S" not in flags or "A" in flags:
                 continue
 
             src_ip = packet.get("src_ip")
             dst_ip = packet.get("dst_ip")
-            dst_port = _coerce_dst_port(packet.get("dst_port"))
+            dst_port = self._to_int(packet.get("dst_port"))
             if not src_ip or not dst_ip or dst_port is None:
                 continue
 
@@ -50,29 +84,31 @@ class PortScanDetector:
                 }
             )
 
-        self._expire_old_state(now)
+        self._expire_old_events(now)
         return self._build_alerts(now)
 
-    def _build_alerts(self, now: datetime) -> list[dict[str, Any]]:
-        scan_cutoff = now - timedelta(seconds=self.window_sec)
+    def _build_alerts(self, now):
+        window_cutoff = now - timedelta(seconds=self.window_sec)
         multi_target_cutoff = now - timedelta(seconds=self.multi_target_window_sec)
-        ports_by_pair: dict[tuple[str, str], dict[str, Any]] = defaultdict(
-            lambda: {"ports": set(), "syn_count": 0}
-        )
-        scan_targets_by_source: dict[str, set[str]] = defaultdict(set)
+        grouped = defaultdict(lambda: {"ports": set(), "syn_count": 0})
+        scan_targets_by_source = defaultdict(set)
 
         for event in self.events:
-            pair = (event["src_ip"], event["dst_ip"])
-            if event["timestamp"] >= scan_cutoff:
-                ports_by_pair[pair]["ports"].add(event["dst_port"])
-                ports_by_pair[pair]["syn_count"] += 1
+            src_ip = event["src_ip"]
+            dst_ip = event["dst_ip"]
+
+            if event["timestamp"] >= window_cutoff:
+                grouped[(src_ip, dst_ip)]["ports"].add(event["dst_port"])
+                grouped[(src_ip, dst_ip)]["syn_count"] += 1
+
             if event["timestamp"] >= multi_target_cutoff:
-                scan_targets_by_source[event["src_ip"]].add(event["dst_ip"])
+                scan_targets_by_source[src_ip].add(dst_ip)
 
         alerts = []
-        for (src_ip, dst_ip), stats in ports_by_pair.items():
+        for (src_ip, dst_ip), stats in grouped.items():
             ports = stats["ports"]
             syn_count = stats["syn_count"]
+
             if len(ports) < self.unique_port_threshold:
                 continue
 
@@ -86,7 +122,7 @@ class PortScanDetector:
 
             self.last_alert_at[alert_key] = now
             alerts.append(
-                self._build_alert(
+                self._make_alert(
                     src_ip=src_ip,
                     dst_ip=dst_ip,
                     ports=ports,
@@ -97,36 +133,34 @@ class PortScanDetector:
 
         return alerts
 
-    def _build_alert(
-        self,
-        *,
-        src_ip: str,
-        dst_ip: str,
-        ports: set[int],
-        syn_count: int,
-        scanned_target_count: int,
-    ) -> dict[str, Any]:
+    def _make_alert(self, src_ip, dst_ip, ports, syn_count, scanned_target_count):
+        common_ports = sorted(port for port in ports if port in COMMON_SCAN_PORTS)
         matched_conditions = [
-            "tcp_syn_without_ack",
-            "same_source_target_pair",
-            "unique_dst_port_threshold_exceeded",
+            "TCP SYN만 있고 ACK는 없음",
+            "출발지와 목적지 IP가 확인됨",
+            "고유 목적지 포트 수 기준 초과",
         ]
-        score = 60
+        score = 50
 
         if syn_count >= self.syn_count_threshold:
-            matched_conditions.append("syn_count_threshold_satisfied")
+            matched_conditions.append("SYN 시도 수 기준 초과")
             score += 10
+
         if scanned_target_count >= self.multi_target_threshold:
-            matched_conditions.append("multi_target_scan")
+            matched_conditions.append("여러 대상 IP로 스캔 시도")
             score += 15
+
+        if len(common_ports) >= self.common_port_hit_threshold:
+            matched_conditions.append("관리/서비스 포트 다수 포함")
+            score += 10
+
         if len(ports) >= self.high_unique_dst_port_threshold:
-            matched_conditions.append("high_unique_dst_port_count")
+            matched_conditions.append("고유 목적지 포트 수가 높은 기준 초과")
             score += 15
 
         score = min(score, 100)
-        has_auxiliary_condition = len(matched_conditions) > 3
-        response_level = "L2" if has_auxiliary_condition else "L1"
-        recommended_action = "alert" if has_auxiliary_condition else "monitor"
+        response_level = "L2" if score >= 70 else "L1"
+        recommended_action = "alert" if response_level == "L2" else "monitor"
 
         return {
             "host": src_ip,
@@ -140,14 +174,16 @@ class PortScanDetector:
             "window_seconds": self.window_sec,
             "unique_dst_port_count": len(ports),
             "unique_dst_ports": sorted(ports),
+            "common_dst_ports": common_ports,
             "syn_count": syn_count,
+            "scanned_target_count": scanned_target_count,
             "matched_conditions": matched_conditions,
             "score": score,
             "response_level": response_level,
             "recommended_action": recommended_action,
         }
 
-    def _expire_old_state(self, now: datetime) -> None:
+    def _expire_old_events(self, now):
         retention_sec = max(self.window_sec, self.multi_target_window_sec)
         event_cutoff = now - timedelta(seconds=retention_sec)
         alert_cutoff = now - timedelta(seconds=self.alert_cooldown_sec)
@@ -163,17 +199,8 @@ class PortScanDetector:
         for key in expired_alerts:
             self.last_alert_at.pop(key, None)
 
-
-def _is_tcp_syn_probe(packet: dict[str, Any]) -> bool:
-    if packet.get("protocol") != "TCP":
-        return False
-
-    flags = str(packet.get("tcp_flags") or "").upper()
-    return "S" in flags and "A" not in flags
-
-
-def _coerce_dst_port(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    def _to_int(self, value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None

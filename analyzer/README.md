@@ -20,17 +20,19 @@ Scapy capture
 
 | 탐지 | 기준 | 대응 후보 |
 |---|---|---|
-| `ARP_SPOOFING` | 신뢰 Gateway IP를 다른 MAC이 주장하는 ARP Reply | `DROP`, L3 |
+| `ARP_SPOOFING` | 신뢰 Gateway IP를 다른 MAC이 주장하는 ARP Reply | 근거가 충분하면 `DROP`, L3 |
 | `PORT_SCAN` | 짧은 시간에 같은 대상의 여러 TCP 포트로 향하는 SYN | 자동 대응 없음, L1/L2 알림 |
-| `ICMP_FLOOD` | 출발지·목적지별 ICMP pps가 기준 이상 | L2에서 `RATE_LIMIT` |
+| `ICMP_FLOOD` | 출발지·목적지별 ICMP pps가 기준 이상 | 높은 점수에서 `RATE_LIMIT` |
 
 `DDoS`, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위가 아니다. ICMP 탐지는 분산 공격 전체가 아니라 관찰 가능한 단일 출발지 기반 Flood로 다룬다.
 
-ARP Spoofing은 다음 조건을 모두 만족할 때만 생성한다.
+ARP Spoofing은 다음 조건을 만족할 때 생성한다.
 
 1. ARP Reply다.
 2. sender IP가 설정된 Gateway IP와 같다.
 3. sender MAC이 신뢰 Gateway MAC과 다르다.
+
+이후 대상 호스트 IP 포함, Ethernet source MAC 일치, 반복 관측 같은 추가 근거를 점수에 더한다. 근거가 부족하면 L1/L2로 기록하고, 충분하면 L3 DROP 후보를 만든다.
 
 신뢰 기준이 없는 일반 IP에서 MAC이 둘 이상 보이는 경우에는 공격자를 확정할 수 없으므로 자동 DROP하지 않는다.
 
@@ -57,12 +59,16 @@ ARP Spoofing은 다음 조건을 모두 만족할 때만 생성한다.
 | `ARP_DROP_IDLE_TIMEOUT` | `60` | ARP DROP 후보 idle timeout |
 | `ARP_DROP_HARD_TIMEOUT` | `300` | ARP DROP 후보 hard timeout |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan 집계 시간 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | 고유 목적지 포트 기준 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | SYN 수 보조 기준 |
-| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | 동일 스캔 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 기준 |
-| `ICMP_MIN_PACKET_COUNT` | `1000` | L2 승격 최소 패킷 수 |
-| `ICMP_HIGH_PPS_THRESHOLD` | `3000` | high pps 기준 |
+| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `10` | 고유 목적지 포트 기준 |
+| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `10` | SYN 수 보조 기준 |
+| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `2` | 여러 대상 IP 스캔 기준 |
+| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `25` | 높은 고유 포트 수 기준 |
+| `PORT_SCAN_COMMON_PORT_HIT_THRESHOLD` | `3` | 관리/서비스 포트 포함 기준 |
+| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `30` | 동일 스캔 알림 억제 시간 |
+| `ICMP_PPS_THRESHOLD` | `100` | ICMP Flood 기록 기준 |
+| `ICMP_MIN_PACKET_COUNT` | `100` | 패킷 수 보조 기준 |
+| `ICMP_HIGH_PPS_THRESHOLD` | `300` | 높은 pps 기준 |
+| `ICMP_LARGE_PAYLOAD_THRESHOLD` | `512` | 큰 ICMP payload 기준 |
 | `EVENT_DEDUP_WINDOW_SEC` | `60` | 동일 보안 흐름 중복 억제 시간 |
 | `RATE_LIMIT_PPS` | `100` | ICMP RATE_LIMIT 후보 pps |
 

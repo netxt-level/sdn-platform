@@ -81,7 +81,7 @@ export function Shell({ children }: { children: ReactNode }) {
           setHasSecurityAlert(hasUnhandledHighRiskEvent(data.items));
         }
       } catch {
-        // Keep the previous alert state when the sidebar refresh fails briefly.
+        // 잠깐 조회가 실패해도 기존 알림 상태를 그대로 둔다.
       }
     }
 

@@ -2,13 +2,13 @@
 
 ## 범위
 
-최종 시나리오는 `ARP_SPOOFING`이다. `PORT_SCAN`과 `ICMP_FLOOD`는 서로 다른 탐지 기준을 보여 주는 보조 항목이다.
+최종 시나리오는 `ARP_SPOOFING`이다. `PORT_SCAN`과 `ICMP_FLOOD`는 서로 다른 탐지 흐름을 보여 주는 보조 항목으로 둔다.
 
 | 이벤트 | 판단 기준 | 대응 |
 |---|---|---|
-| `ARP_SPOOFING` | Gateway IP를 신뢰 MAC이 아닌 값으로 주장하는 ARP Reply | `DROP` 후보 |
+| `ARP_SPOOFING` | Gateway IP를 신뢰 MAC이 아닌 값으로 주장하는 ARP Reply | 근거가 충분하면 `DROP` 후보 |
 | `PORT_SCAN` | 같은 출발지·목적지에서 여러 TCP 포트로 향하는 SYN | 관찰 또는 알림 |
-| `ICMP_FLOOD` | 같은 출발지·목적지의 ICMP pps가 기준 이상 | 조건 충족 시 `RATE_LIMIT` 후보 |
+| `ICMP_FLOOD` | 같은 출발지·목적지의 ICMP pps가 기준 이상 | 높은 점수일 때 `RATE_LIMIT` 후보 |
 
 DDoS, UDP Flood, SYN Flood, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위에 포함하지 않는다.
 
@@ -35,10 +35,11 @@ target: 10.0.0.1
 2. `SecurityEventBuilder`가 ARP Reply만 확인한다.
 3. sender IP가 보호 대상 Gateway IP인지 확인한다.
 4. sender MAC을 신뢰 Gateway MAC과 비교한다.
-5. 값이 다르면 `ARP_SPOOFING` Critical 이벤트를 만든다.
-6. 공격자의 Ethernet source MAC과 위조 Gateway IP에만 일치하는 DROP 후보를 만든다.
-7. Backend가 이벤트, 대응 내역, PENDING Flow Rule을 저장한다.
-8. Frontend는 공격자 IP 대신 MAC을 출발지로 표시한다.
+5. Gateway MAC이 다르면 `ARP_SPOOFING` 이벤트를 만든다.
+6. 대상 호스트 IP, Ethernet source MAC 일치, 반복 관측 여부를 점수에 반영한다.
+7. 점수가 충분하면 공격자의 Ethernet source MAC과 위조 Gateway IP에만 일치하는 DROP 후보를 만든다.
+8. Backend가 이벤트, 대응 내역, PENDING Flow Rule을 저장한다.
+9. Frontend는 공격자 IP 대신 MAC을 출발지로 표시한다.
 
 신뢰 정보가 없는 일반 IP에서 두 MAC이 관찰되더라도 어느 쪽이 공격자인지 판단할 수 없으므로 자동 DROP하지 않는다.
 
@@ -62,10 +63,15 @@ target: 10.0.0.1
     "spoofed_ip": "10.0.0.254",
     "trusted_mac": "00:00:00:00:ff:ff",
     "claimed_mac": "00:00:00:00:00:02",
+    "reply_count": 1,
+    "score": 95,
     "matched_conditions": [
-      "arp_reply",
-      "gateway_ip_claimed",
-      "gateway_mac_mismatch"
+      "ARP Reply 패킷",
+      "Gateway IP를 sender IP로 사용",
+      "신뢰 Gateway MAC과 다른 MAC 사용",
+      "ARP sender MAC 확인됨",
+      "Ethernet source MAC과 ARP sender MAC 일치",
+      "대상 호스트 IP 포함"
     ]
   },
   "mitigation": {
@@ -84,6 +90,20 @@ target: 10.0.0.1
 ```
 
 `mitigation`은 Controller 적용 후보이며 자동 적용 완료를 의미하지 않는다.
+
+## 보조 탐지 기준
+
+Port Scan:
+
+- 5초 안에 고유 목적지 포트 10개 이상이면 L1로 기록한다.
+- SYN 시도 수, 여러 대상 IP, 관리/서비스 포트 포함, 높은 포트 수를 보조 근거로 더한다.
+- 점수 70점 이상이면 L2 알림으로 올리지만 자동 차단하지 않는다.
+
+ICMP Flood:
+
+- 1초 기준 100 pps 이상이면 L1로 기록한다.
+- 패킷 수, 높은 pps, 큰 payload를 보조 근거로 더한다.
+- 점수 80점 이상이면 L2 `RATE_LIMIT` 후보를 만든다.
 
 ## 저장과 화면 전달
 

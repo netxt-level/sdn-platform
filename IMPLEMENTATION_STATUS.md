@@ -77,9 +77,9 @@ Packet Capture
 
 | 이벤트 | 상태 | 대응 |
 |---|---|---|
-| `ARP_SPOOFING` | 최종 시나리오 | Critical, L3 DROP 후보 |
+| `ARP_SPOOFING` | 최종 시나리오 | 근거 점수에 따라 L1/L2/L3, 충분하면 DROP 후보 |
 | `PORT_SCAN` | 보조 탐지 | L1/L2 관찰·알림 |
-| `ICMP_FLOOD` | 보조 탐지 | L2 RATE_LIMIT 후보 |
+| `ICMP_FLOOD` | 보조 탐지 | 높은 점수에서 L2 RATE_LIMIT 후보 |
 
 제외:
 

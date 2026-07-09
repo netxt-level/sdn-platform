@@ -7,12 +7,7 @@ from typing import Any
 
 
 class SecurityEventBuilder:
-    """패킷과 탐지 경고를 공통 보안 이벤트 형식으로 변환한다.
-
-    이 클래스는 공격 여부와 대응 후보까지만 결정한다. 실제 스위치 반영은
-    백엔드가 생성한 PENDING Flow Rule을 Controller가 처리하는 단계에서
-    이루어진다.
-    """
+    """탐지 결과를 백엔드가 저장할 수 있는 보안 이벤트 형식으로 바꾼다."""
 
     def __init__(
         self,
@@ -22,10 +17,11 @@ class SecurityEventBuilder:
         arp_drop_priority: int = 650,
         arp_drop_idle_timeout: int = 60,
         arp_drop_hard_timeout: int = 300,
-        icmp_pps_threshold: float = 1000,
-        icmp_min_packet_count: int = 1000,
-        icmp_high_pps_threshold: float = 3000,
+        icmp_pps_threshold: float = 100,
+        icmp_min_packet_count: int = 100,
+        icmp_high_pps_threshold: float = 300,
         icmp_high_pps_multiplier: float = 3.0,
+        icmp_large_payload_threshold: int = 512,
         event_dedup_window_sec: int = 60,
         rate_limit_priority: int = 500,
         rate_limit_idle_timeout: int = 60,
@@ -42,6 +38,7 @@ class SecurityEventBuilder:
         self.icmp_min_packet_count = icmp_min_packet_count
         self.icmp_high_pps_threshold = icmp_high_pps_threshold
         self.icmp_high_pps_multiplier = icmp_high_pps_multiplier
+        self.icmp_large_payload_threshold = icmp_large_payload_threshold
         self.event_dedup_window_sec = event_dedup_window_sec
         self.rate_limit_priority = rate_limit_priority
         self.rate_limit_idle_timeout = rate_limit_idle_timeout
@@ -57,6 +54,7 @@ class SecurityEventBuilder:
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         self._expire_recent_events(now)
+
         timestamp = now.isoformat()
         window_sec = packet_summary.get("window_sec", 1)
         event_window_sec = window_sec if window_sec > 0 else 1
@@ -83,7 +81,7 @@ class SecurityEventBuilder:
             )
         )
         events.extend(
-            self._build_flood_events(
+            self._build_icmp_flood_events(
                 timestamp=timestamp,
                 now=now,
                 window_sec=window_sec,
@@ -106,48 +104,80 @@ class SecurityEventBuilder:
         window_start_epoch: int,
         packets: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """게이트웨이 IP를 다른 MAC이 주장하는 ARP Reply를 찾는다.
+        """Gateway IP를 다른 MAC이 주장하는 ARP Reply를 찾는다."""
 
-        신뢰 MAC이 없는 일반 IP의 중복 매핑은 어느 쪽이 공격자인지 판단할
-        근거가 부족하므로 자동 DROP 대상으로 만들지 않는다.
-        """
+        reply_counts = defaultdict(int)
+        for packet in packets:
+            if not self._is_gateway_spoof_reply(packet):
+                continue
+
+            key = (
+                packet.get("arp_sender_ip") or packet.get("src_ip"),
+                str(packet.get("arp_sender_mac") or "").lower(),
+                packet.get("arp_target_ip") or packet.get("dst_ip") or "",
+            )
+            reply_counts[key] += 1
 
         events = []
-
         for packet in packets:
-            if packet.get("protocol") != "ARP":
-                continue
-            if str(packet.get("arp_opcode") or "").lower() not in {"reply", "2"}:
+            if not self._is_gateway_spoof_reply(packet):
                 continue
 
             claimed_ip = str(packet.get("arp_sender_ip") or packet.get("src_ip") or "")
             claimed_mac = str(packet.get("arp_sender_mac") or "").lower()
             ethernet_src_mac = str(packet.get("src_mac") or claimed_mac).lower()
             target_ip = str(packet.get("arp_target_ip") or packet.get("dst_ip") or "")
-
-            if claimed_ip != self.gateway_ip or not claimed_mac:
-                continue
-            if claimed_mac == self.gateway_mac:
-                continue
+            reply_key = (claimed_ip, claimed_mac, target_ip)
+            reply_count = reply_counts[reply_key]
 
             matched_conditions = [
-                "arp_reply",
-                "gateway_ip_claimed",
-                "gateway_mac_mismatch",
+                "ARP Reply 패킷",
+                "Gateway IP를 sender IP로 사용",
+                "신뢰 Gateway MAC과 다른 MAC 사용",
+                "ARP sender MAC 확인됨",
             ]
+            score = 75
+
+            if ethernet_src_mac:
+                if ethernet_src_mac == claimed_mac:
+                    matched_conditions.append("Ethernet source MAC과 ARP sender MAC 일치")
+                    score += 10
+                else:
+                    matched_conditions.append("Ethernet source MAC과 ARP sender MAC 불일치")
+                    score += 5
+
+            if target_ip:
+                matched_conditions.append("대상 호스트 IP 포함")
+                score += 10
+
+            if reply_count >= 2:
+                matched_conditions.append("같은 위조 ARP Reply 반복 관측")
+                score += 10
+
+            score = min(score, 100)
+            severity, confidence, recommended_action, response_level = (
+                self._arp_response_policy(score)
+            )
+            mitigation = None
+            if response_level == "L3":
+                mitigation = self._arp_drop_mitigation(
+                    attacker_mac=ethernet_src_mac or claimed_mac,
+                    spoofed_ip=claimed_ip,
+                )
+
             event = self._event(
                 timestamp=timestamp,
                 attack_category="L2_SPOOFING",
                 attack_type="ARP_SPOOFING",
-                severity="critical",
-                confidence="high",
+                severity=severity,
+                confidence=confidence,
                 src_ip=None,
                 src_mac=ethernet_src_mac or claimed_mac,
                 dst_ip=target_ip or self.gateway_ip,
                 protocol="ARP",
                 detection_rule="trusted_gateway_mac_mismatch",
-                recommended_action="block",
-                response_level="L3",
+                recommended_action=recommended_action,
+                response_level=response_level,
                 evidence={
                     "matched_conditions": matched_conditions,
                     "spoofed_ip": claimed_ip,
@@ -157,12 +187,10 @@ class SecurityEventBuilder:
                     "arp_target_ip": target_ip,
                     "arp_target_mac": packet.get("arp_target_mac") or "",
                     "arp_opcode": packet.get("arp_opcode"),
-                    "score": 100,
+                    "reply_count": reply_count,
+                    "score": score,
                 },
-                mitigation=self._arp_drop_mitigation(
-                    attacker_mac=ethernet_src_mac or claimed_mac,
-                    spoofed_ip=claimed_ip,
-                ),
+                mitigation=mitigation,
                 now=now,
                 window_start_epoch=window_start_epoch,
             )
@@ -170,6 +198,28 @@ class SecurityEventBuilder:
                 events.append(event)
 
         return events
+
+    def _is_gateway_spoof_reply(self, packet: dict[str, Any]) -> bool:
+        if packet.get("protocol") != "ARP":
+            return False
+
+        if str(packet.get("arp_opcode") or "").lower() not in {"reply", "2"}:
+            return False
+
+        claimed_ip = str(packet.get("arp_sender_ip") or packet.get("src_ip") or "")
+        claimed_mac = str(packet.get("arp_sender_mac") or "").lower()
+        if claimed_ip != self.gateway_ip or not claimed_mac:
+            return False
+
+        return claimed_mac != self.gateway_mac
+
+    def _arp_response_policy(self, score: int) -> tuple[str, str, str, str]:
+        # ARP Spoofing은 위험도가 높지만, 근거가 부족하면 바로 DROP 후보로 올리지 않는다.
+        if score >= 95:
+            return "critical", "high", "block", "L3"
+        if score >= 85:
+            return "high", "high", "alert", "L2"
+        return "medium", "medium", "monitor", "L1"
 
     def _build_port_scan_events(
         self,
@@ -188,35 +238,32 @@ class SecurityEventBuilder:
             if not src_ip or not dst_ip:
                 continue
 
-            unique_port_count = int(alert.get("unique_dst_port_count") or 0)
-            unique_dst_ports = alert.get("unique_dst_ports") or []
-            matched_conditions = alert.get("matched_conditions") or [
-                "tcp_syn_without_ack",
-                "same_source_target_pair",
-                "unique_dst_port_threshold_exceeded",
-            ]
-            score = int(alert.get("score") or 60)
-            recommended_action = alert.get("recommended_action") or "monitor"
             response_level = alert.get("response_level") or "L1"
             event = self._event(
                 timestamp=timestamp,
                 attack_category="RECON",
                 attack_type="PORT_SCAN",
                 severity="medium",
-                confidence="high",
+                confidence="high" if response_level == "L2" else "medium",
                 src_ip=src_ip,
                 dst_ip=dst_ip,
                 protocol="TCP",
                 detection_rule="tcp_syn_unique_ports",
-                recommended_action=recommended_action,
+                recommended_action=alert.get("recommended_action") or "monitor",
                 response_level=response_level,
                 evidence={
-                    "matched_conditions": matched_conditions,
+                    "matched_conditions": alert.get("matched_conditions") or [],
                     "window_seconds": alert.get("window_seconds") or window_sec,
-                    "unique_dst_port_count": unique_port_count,
-                    "unique_dst_ports": unique_dst_ports,
+                    "unique_dst_port_count": int(
+                        alert.get("unique_dst_port_count") or 0
+                    ),
+                    "unique_dst_ports": alert.get("unique_dst_ports") or [],
+                    "common_dst_ports": alert.get("common_dst_ports") or [],
                     "syn_count": int(alert.get("syn_count") or 0),
-                    "score": score,
+                    "scanned_target_count": int(
+                        alert.get("scanned_target_count") or 0
+                    ),
+                    "score": int(alert.get("score") or 0),
                 },
                 now=now,
                 window_start_epoch=window_start_epoch,
@@ -226,7 +273,7 @@ class SecurityEventBuilder:
 
         return events
 
-    def _build_flood_events(
+    def _build_icmp_flood_events(
         self,
         *,
         timestamp: str,
@@ -235,11 +282,10 @@ class SecurityEventBuilder:
         window_start_epoch: int,
         packets: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        grouped = defaultdict(lambda: {"packets": 0})
+        grouped = defaultdict(lambda: {"packets": 0, "payload_sum": 0})
 
         for packet in packets:
-            protocol = packet.get("protocol")
-            if protocol != "ICMP":
+            if packet.get("protocol") != "ICMP":
                 continue
 
             src_ip = packet.get("src_ip")
@@ -247,79 +293,83 @@ class SecurityEventBuilder:
             if not src_ip or not dst_ip:
                 continue
 
-            key = (protocol, src_ip, dst_ip)
+            key = (src_ip, dst_ip)
             grouped[key]["packets"] += 1
+            grouped[key]["payload_sum"] += self._to_int(packet.get("payload_size")) or 0
 
         events = []
         divisor = window_sec if window_sec > 0 else 1
 
-        for (protocol, src_ip, dst_ip), stats in grouped.items():
+        for (src_ip, dst_ip), stats in grouped.items():
             packet_count = stats["packets"]
-            pps = stats["packets"] / divisor
+            pps = packet_count / divisor
+            if pps < self.icmp_pps_threshold:
+                continue
 
-            if protocol == "ICMP" and pps >= self.icmp_pps_threshold:
-                matched_conditions = [
-                    "icmp_protocol",
-                    "same_source_target_pair",
-                    "icmp_pps_threshold_exceeded",
-                ]
-                score = 60
+            average_payload_size = stats["payload_sum"] / packet_count
+            high_pps_threshold = min(
+                self.icmp_high_pps_threshold,
+                self.icmp_pps_threshold * self.icmp_high_pps_multiplier,
+            )
+            matched_conditions = [
+                "ICMP 패킷",
+                "같은 출발지와 목적지 쌍",
+                "ICMP pps 기준 초과",
+            ]
+            score = 50
 
-                if packet_count >= self.icmp_min_packet_count:
-                    matched_conditions.append("min_packet_count_satisfied")
-                    score += 20
+            if packet_count >= self.icmp_min_packet_count:
+                matched_conditions.append("최소 패킷 수 기준 초과")
+                score += 15
 
-                high_pps_threshold = min(
-                    self.icmp_high_pps_threshold,
-                    self.icmp_pps_threshold * self.icmp_high_pps_multiplier,
-                )
-                if pps >= high_pps_threshold:
-                    matched_conditions.append("high_pps_exceeded")
-                    score += 15
+            if packet_count >= self.icmp_min_packet_count * 2:
+                matched_conditions.append("짧은 시간 패킷 수가 크게 증가")
+                score += 10
 
-                score = min(score, 100)
-                is_l2 = score >= 80
-                severity = "high" if is_l2 else "medium"
-                confidence = "high" if score >= 95 else "medium"
-                recommended_action = "rate_limit" if is_l2 else "monitor"
-                response_level = "L2" if is_l2 else "L1"
-                mitigation = (
-                    self._rate_limit_mitigation(
-                        src_ip=src_ip,
-                        dst_ip=dst_ip,
-                    )
+            if pps >= high_pps_threshold:
+                matched_conditions.append("높은 pps 기준 초과")
+                score += 20
+
+            if average_payload_size >= self.icmp_large_payload_threshold:
+                matched_conditions.append("ICMP payload 크기가 큼")
+                score += 10
+
+            score = min(score, 100)
+            is_l2 = score >= 80
+            event = self._event(
+                timestamp=timestamp,
+                attack_category="FLOOD",
+                attack_type="ICMP_FLOOD",
+                severity="high" if is_l2 else "medium",
+                confidence="high" if score >= 90 else "medium",
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                protocol="ICMP",
+                detection_rule="icmp_pps_threshold",
+                recommended_action="rate_limit" if is_l2 else "monitor",
+                response_level="L2" if is_l2 else "L1",
+                evidence={
+                    "matched_conditions": matched_conditions,
+                    "window_seconds": window_sec,
+                    "packet_count": packet_count,
+                    "pps": pps,
+                    "pps_threshold": self.icmp_pps_threshold,
+                    "min_packet_count": self.icmp_min_packet_count,
+                    "high_pps_threshold": high_pps_threshold,
+                    "average_payload_size": average_payload_size,
+                    "large_payload_threshold": self.icmp_large_payload_threshold,
+                    "score": score,
+                },
+                mitigation=(
+                    self._rate_limit_mitigation(src_ip=src_ip, dst_ip=dst_ip)
                     if is_l2
                     else None
-                )
-
-                event = self._event(
-                    timestamp=timestamp,
-                    attack_category="FLOOD",
-                    attack_type="ICMP_FLOOD",
-                    severity=severity,
-                    confidence=confidence,
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    protocol="ICMP",
-                    detection_rule="icmp_pps_threshold",
-                    recommended_action=recommended_action,
-                    response_level=response_level,
-                    evidence={
-                        "matched_conditions": matched_conditions,
-                        "window_seconds": window_sec,
-                        "packet_count": packet_count,
-                        "pps": pps,
-                        "pps_threshold": self.icmp_pps_threshold,
-                        "min_packet_count": self.icmp_min_packet_count,
-                        "high_pps_threshold": high_pps_threshold,
-                        "score": score,
-                    },
-                    mitigation=mitigation,
-                    now=now,
-                    window_start_epoch=window_start_epoch,
-                )
-                if event is not None:
-                    events.append(event)
+                ),
+                now=now,
+                window_start_epoch=window_start_epoch,
+            )
+            if event is not None:
+                events.append(event)
 
         return events
 
@@ -345,8 +395,7 @@ class SecurityEventBuilder:
         attacker_mac: str,
         spoofed_ip: str,
     ) -> dict[str, Any]:
-        """위조 ARP만 좁게 차단하는 OpenFlow 후보를 만든다."""
-
+        # 공격 MAC이 Gateway IP를 주장하는 ARP 패킷만 좁게 차단하도록 후보를 만든다.
         return {
             "action": "DROP",
             "target": "flow",
@@ -443,6 +492,7 @@ class SecurityEventBuilder:
         if elapsed >= self.event_dedup_window_sec:
             return False
 
+        # 더 높은 대응 단계나 더 높은 심각도로 올라간 경우에는 다시 보고한다.
         if _policy_rank(response_level) > _policy_rank(last_event["response_level"]):
             return False
 
@@ -452,8 +502,6 @@ class SecurityEventBuilder:
         return True
 
     def _expire_recent_events(self, now: datetime) -> None:
-        """중복 억제 시간이 지난 fingerprint를 제거해 메모리 증가를 막는다."""
-
         expired_keys = [
             key
             for key, event in self.recent_events.items()
@@ -462,6 +510,12 @@ class SecurityEventBuilder:
         ]
         for key in expired_keys:
             self.recent_events.pop(key, None)
+
+    def _to_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
 
 def _event_id(*parts: str) -> str:

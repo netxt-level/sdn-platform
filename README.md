@@ -245,16 +245,18 @@ docker compose down -v
 | `ARP_DROP_IDLE_TIMEOUT` | `60` | ARP DROP 후보 idle timeout |
 | `ARP_DROP_HARD_TIMEOUT` | `300` | ARP DROP 후보 hard timeout |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
+| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `10` | Port Scan 고유 목적지 포트 임계값 |
+| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `10` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
-| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
-| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
-| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
-| `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
-| `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
+| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `2` | Port Scan 다중 목적지 개수 기준 |
+| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `25` | Port Scan 높은 고유 포트 수 기준 |
+| `PORT_SCAN_COMMON_PORT_HIT_THRESHOLD` | `3` | Port Scan 관리/서비스 포트 포함 기준 |
+| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `30` | Port Scan 중복 알림 억제 시간 |
+| `ICMP_PPS_THRESHOLD` | `100` | ICMP Flood pps 임계값 |
+| `ICMP_MIN_PACKET_COUNT` | `100` | ICMP Flood 최소 패킷 수 기준 |
+| `ICMP_HIGH_PPS_THRESHOLD` | `300` | ICMP Flood high pps 기준 |
 | `ICMP_HIGH_PPS_MULTIPLIER` | `3.0` | ICMP Flood high pps 배수 기준 |
+| `ICMP_LARGE_PAYLOAD_THRESHOLD` | `512` | ICMP Flood 큰 payload 보조 기준 |
 | `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
 | `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
 | `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
@@ -287,7 +289,7 @@ Alembic migration은 `migrations/`에 있다.
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
 - `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다.
-- ARP Spoofing의 최종 시나리오는 신뢰 Gateway IP-MAC과 다른 ARP Reply를 탐지하는 방식이다. 신뢰 기준이 없는 일반 IP-MAC 중복은 자동 DROP하지 않는다.
+- ARP Spoofing의 최종 시나리오는 신뢰 Gateway IP-MAC과 다른 ARP Reply를 탐지하는 방식이다. 추가 근거가 부족하면 알림까지만 만들고, 신뢰 기준이 없는 일반 IP-MAC 중복은 자동 DROP하지 않는다.
 - DDoS, 링크 혼잡, 링크 장애는 현재 보안 이벤트 범위가 아니다. ICMP 항목은 단일 출발지 기반 `ICMP_FLOOD`로 기록한다.
 - `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
 - 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.

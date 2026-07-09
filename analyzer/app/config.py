@@ -22,11 +22,13 @@ class AnalyzerConfig:
     port_scan_multi_target_window_sec: int
     port_scan_multi_target_threshold: int
     port_scan_high_unique_dst_port_threshold: int
+    port_scan_common_port_hit_threshold: int
     port_scan_alert_cooldown_sec: int
     icmp_pps_threshold: float
     icmp_min_packet_count: int
     icmp_high_pps_threshold: float
     icmp_high_pps_multiplier: float
+    icmp_large_payload_threshold: int
     event_dedup_window_sec: int
     rate_limit_priority: int
     rate_limit_idle_timeout: int
@@ -76,11 +78,11 @@ def load_config() -> AnalyzerConfig:
         port_scan_window_sec=get_int_env("PORT_SCAN_WINDOW_SEC", 5),
         port_scan_unique_dst_port_threshold=get_int_env(
             "PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD",
-            20,
+            10,
         ),
         port_scan_syn_count_threshold=get_int_env(
             "PORT_SCAN_SYN_COUNT_THRESHOLD",
-            20,
+            10,
         ),
         port_scan_multi_target_window_sec=get_int_env(
             "PORT_SCAN_MULTI_TARGET_WINDOW_SEC",
@@ -88,20 +90,25 @@ def load_config() -> AnalyzerConfig:
         ),
         port_scan_multi_target_threshold=get_int_env(
             "PORT_SCAN_MULTI_TARGET_THRESHOLD",
-            3,
+            2,
         ),
         port_scan_high_unique_dst_port_threshold=get_int_env(
             "PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD",
-            50,
+            25,
+        ),
+        port_scan_common_port_hit_threshold=get_int_env(
+            "PORT_SCAN_COMMON_PORT_HIT_THRESHOLD",
+            3,
         ),
         port_scan_alert_cooldown_sec=get_int_env(
             "PORT_SCAN_ALERT_COOLDOWN_SEC",
-            60,
+            30,
         ),
-        icmp_pps_threshold=get_float_env("ICMP_PPS_THRESHOLD", 1000),
-        icmp_min_packet_count=get_int_env("ICMP_MIN_PACKET_COUNT", 1000),
-        icmp_high_pps_threshold=get_float_env("ICMP_HIGH_PPS_THRESHOLD", 3000),
+        icmp_pps_threshold=get_float_env("ICMP_PPS_THRESHOLD", 100),
+        icmp_min_packet_count=get_int_env("ICMP_MIN_PACKET_COUNT", 100),
+        icmp_high_pps_threshold=get_float_env("ICMP_HIGH_PPS_THRESHOLD", 300),
         icmp_high_pps_multiplier=get_float_env("ICMP_HIGH_PPS_MULTIPLIER", 3.0),
+        icmp_large_payload_threshold=get_int_env("ICMP_LARGE_PAYLOAD_THRESHOLD", 512),
         event_dedup_window_sec=get_int_env("EVENT_DEDUP_WINDOW_SEC", 60),
         rate_limit_priority=get_int_env("RATE_LIMIT_PRIORITY", 500),
         rate_limit_idle_timeout=get_int_env("RATE_LIMIT_IDLE_TIMEOUT", 60),

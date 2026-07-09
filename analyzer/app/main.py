@@ -52,6 +52,7 @@ security_event_builder = SecurityEventBuilder(
     icmp_min_packet_count=config.icmp_min_packet_count,
     icmp_high_pps_threshold=config.icmp_high_pps_threshold,
     icmp_high_pps_multiplier=config.icmp_high_pps_multiplier,
+    icmp_large_payload_threshold=config.icmp_large_payload_threshold,
     event_dedup_window_sec=config.event_dedup_window_sec,
     rate_limit_priority=config.rate_limit_priority,
     rate_limit_idle_timeout=config.rate_limit_idle_timeout,
@@ -78,6 +79,7 @@ port_scan_detector = PortScanDetector(
     multi_target_window_sec=config.port_scan_multi_target_window_sec,
     multi_target_threshold=config.port_scan_multi_target_threshold,
     high_unique_dst_port_threshold=config.port_scan_high_unique_dst_port_threshold,
+    common_port_hit_threshold=config.port_scan_common_port_hit_threshold,
     alert_cooldown_sec=config.port_scan_alert_cooldown_sec,
 )
 

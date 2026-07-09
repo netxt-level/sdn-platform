@@ -124,7 +124,16 @@ POST /api/security/events
     "spoofed_ip": "10.0.0.254",
     "trusted_mac": "00:00:00:00:ff:ff",
     "claimed_mac": "00:00:00:00:00:02",
-    "score": 100
+    "reply_count": 1,
+    "score": 95,
+    "matched_conditions": [
+      "ARP Reply 패킷",
+      "Gateway IP를 sender IP로 사용",
+      "신뢰 Gateway MAC과 다른 MAC 사용",
+      "ARP sender MAC 확인됨",
+      "Ethernet source MAC과 ARP sender MAC 일치",
+      "대상 호스트 IP 포함"
+    ]
   },
   "mitigation": {
     "action": "DROP",

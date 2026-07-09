@@ -6,7 +6,7 @@ from analyzer.app.detection.port_scan import PortScanDetector
 from analyzer.app.detection.security_events import SecurityEventBuilder
 
 
-def tcp_syn_packets(src_ip="10.0.0.2", dst_ip="10.0.0.4", ports=range(1, 21)):
+def tcp_syn_packets(src_ip="10.0.0.2", dst_ip="10.0.0.4", ports=range(1, 11)):
     return [
         {
             "protocol": "TCP",
@@ -19,12 +19,13 @@ def tcp_syn_packets(src_ip="10.0.0.2", dst_ip="10.0.0.4", ports=range(1, 21)):
     ]
 
 
-def icmp_packets(count, src_ip="10.0.0.2", dst_ip="10.0.0.4"):
+def icmp_packets(count, src_ip="10.0.0.2", dst_ip="10.0.0.4", payload_size=0):
     return [
         {
             "protocol": "ICMP",
             "src_ip": src_ip,
             "dst_ip": dst_ip,
+            "payload_size": payload_size,
         }
         for _ in range(count)
     ]
@@ -69,6 +70,7 @@ class ArpSpoofingDetectionPolicyTest(unittest.TestCase):
             [event["attack_type"] for event in result["events"]],
             ["ARP_SPOOFING"],
         )
+        self.assertEqual(result["events"][0]["response_level"], "L3")
 
     def test_trusted_gateway_reply_is_not_detected(self):
         builder = SecurityEventBuilder()
@@ -109,7 +111,21 @@ class ArpSpoofingDetectionPolicyTest(unittest.TestCase):
 
         self.assertEqual(result["events"], [])
 
-    def test_gateway_mac_mismatch_builds_critical_drop_candidate(self):
+    def test_gateway_mac_mismatch_without_target_is_alert_only(self):
+        builder = SecurityEventBuilder()
+
+        event = builder.build_security_events(
+            {"window_sec": 1},
+            [arp_reply(target_ip="")],
+        )["events"][0]
+
+        self.assertEqual(event["attack_type"], "ARP_SPOOFING")
+        self.assertEqual(event["response_level"], "L2")
+        self.assertEqual(event["recommended_action"], "alert")
+        self.assertIsNone(event["mitigation"])
+        self.assertEqual(event["evidence"]["score"], 85)
+
+    def test_gateway_mac_mismatch_with_target_builds_drop_candidate(self):
         builder = SecurityEventBuilder()
 
         event = builder.build_security_events(
@@ -125,8 +141,8 @@ class ArpSpoofingDetectionPolicyTest(unittest.TestCase):
         self.assertIsNone(event["src_ip"])
         self.assertEqual(event["src_mac"], "00:00:00:00:00:02")
         self.assertEqual(event["dst_ip"], "10.0.0.1")
-        self.assertEqual(event["evidence"]["spoofed_ip"], "10.0.0.254")
-        self.assertEqual(event["evidence"]["trusted_mac"], "00:00:00:00:ff:ff")
+        self.assertEqual(event["evidence"]["score"], 95)
+        self.assertIn("대상 호스트 IP 포함", event["evidence"]["matched_conditions"])
         self.assertEqual(event["mitigation"]["action"], "DROP")
         self.assertEqual(
             event["mitigation"]["match"],
@@ -142,33 +158,38 @@ class PortScanDetectionPolicyTest(unittest.TestCase):
     def test_port_scan_below_unique_port_threshold_is_not_detected(self):
         detector = PortScanDetector()
 
-        alerts = detector.detect(tcp_syn_packets(ports=range(1, 20)))
+        alerts = detector.detect(tcp_syn_packets(ports=range(1, 10)))
 
         self.assertEqual(alerts, [])
 
-    def test_port_scan_l2_alert_contains_policy_evidence(self):
+    def test_port_scan_default_threshold_is_l1_monitoring(self):
         detector = PortScanDetector()
 
         alert = detector.detect(tcp_syn_packets())[0]
 
+        self.assertEqual(alert["response_level"], "L1")
+        self.assertEqual(alert["recommended_action"], "monitor")
+        self.assertEqual(alert["score"], 60)
+        self.assertEqual(alert["syn_count"], 10)
+        self.assertEqual(len(alert["unique_dst_ports"]), 10)
+
+    def test_port_scan_common_service_ports_raise_to_l2(self):
+        detector = PortScanDetector()
+        ports = [22, 23, 80, 443, 3389, 1, 2, 3, 4, 5]
+
+        alert = detector.detect(tcp_syn_packets(ports=ports))[0]
+
         self.assertEqual(alert["response_level"], "L2")
         self.assertEqual(alert["recommended_action"], "alert")
         self.assertEqual(alert["score"], 70)
-        self.assertEqual(alert["syn_count"], 20)
-        self.assertEqual(len(alert["unique_dst_ports"]), 20)
-        self.assertEqual(
-            alert["matched_conditions"],
-            [
-                "tcp_syn_without_ack",
-                "same_source_target_pair",
-                "unique_dst_port_threshold_exceeded",
-                "syn_count_threshold_satisfied",
-            ],
-        )
+        self.assertEqual(alert["common_dst_ports"], [22, 23, 80, 443, 3389])
+        self.assertIn("관리/서비스 포트 다수 포함", alert["matched_conditions"])
 
     def test_port_scan_security_event_includes_evidence(self):
         detector = PortScanDetector()
-        alerts = detector.detect(tcp_syn_packets())
+        alerts = detector.detect(
+            tcp_syn_packets(ports=[22, 23, 80, 443, 3389, 1, 2, 3, 4, 5])
+        )
         builder = SecurityEventBuilder()
 
         event = builder.build_security_events(
@@ -182,20 +203,17 @@ class PortScanDetectionPolicyTest(unittest.TestCase):
         self.assertEqual(event["recommended_action"], "alert")
         self.assertIsNone(event["mitigation"])
         self.assertEqual(event["evidence"]["score"], 70)
-        self.assertEqual(event["evidence"]["syn_count"], 20)
-        self.assertEqual(len(event["evidence"]["unique_dst_ports"]), 20)
+        self.assertEqual(event["evidence"]["syn_count"], 10)
+        self.assertEqual(len(event["evidence"]["unique_dst_ports"]), 10)
 
 
 class IcmpFloodDetectionPolicyTest(unittest.TestCase):
     def test_icmp_flood_l1_has_no_mitigation(self):
-        builder = SecurityEventBuilder(
-            icmp_pps_threshold=1000,
-            icmp_min_packet_count=1200,
-        )
+        builder = SecurityEventBuilder()
 
         event = builder.build_security_events(
             {"window_sec": 1},
-            icmp_packets(1000),
+            icmp_packets(100),
         )["events"][0]
 
         self.assertEqual(event["response_level"], "L1")
@@ -203,45 +221,36 @@ class IcmpFloodDetectionPolicyTest(unittest.TestCase):
         self.assertEqual(event["severity"], "medium")
         self.assertEqual(event["confidence"], "medium")
         self.assertIsNone(event["mitigation"])
-        self.assertEqual(event["evidence"]["score"], 60)
-        self.assertEqual(
-            event["evidence"]["matched_conditions"],
-            [
-                "icmp_protocol",
-                "same_source_target_pair",
-                "icmp_pps_threshold_exceeded",
-            ],
-        )
+        self.assertEqual(event["evidence"]["score"], 65)
+        self.assertIn("최소 패킷 수 기준 초과", event["evidence"]["matched_conditions"])
 
     def test_icmp_flood_l2_includes_rate_limit_mitigation(self):
         builder = SecurityEventBuilder()
 
         event = builder.build_security_events(
             {"window_sec": 1},
-            icmp_packets(1000),
+            icmp_packets(300),
         )["events"][0]
 
         self.assertEqual(event["response_level"], "L2")
         self.assertEqual(event["recommended_action"], "rate_limit")
         self.assertEqual(event["severity"], "high")
-        self.assertEqual(event["confidence"], "medium")
-        self.assertEqual(event["evidence"]["score"], 80)
+        self.assertEqual(event["confidence"], "high")
+        self.assertEqual(event["evidence"]["score"], 95)
         self.assertEqual(event["mitigation"]["action"], "RATE_LIMIT")
         self.assertEqual(event["mitigation"]["match"]["ip_proto"], 1)
         self.assertEqual(event["mitigation"]["rate_limit_pps"], 100)
 
-    def test_icmp_flood_high_pps_raises_confidence(self):
+    def test_icmp_large_payload_adds_detection_evidence(self):
         builder = SecurityEventBuilder()
 
         event = builder.build_security_events(
             {"window_sec": 1},
-            icmp_packets(3000),
+            icmp_packets(100, payload_size=600),
         )["events"][0]
 
-        self.assertEqual(event["response_level"], "L2")
-        self.assertEqual(event["confidence"], "high")
-        self.assertEqual(event["evidence"]["score"], 95)
-        self.assertIn("high_pps_exceeded", event["evidence"]["matched_conditions"])
+        self.assertEqual(event["evidence"]["average_payload_size"], 600)
+        self.assertIn("ICMP payload 크기가 큼", event["evidence"]["matched_conditions"])
 
 
 class SecurityEventDedupPolicyTest(unittest.TestCase):
@@ -250,7 +259,7 @@ class SecurityEventDedupPolicyTest(unittest.TestCase):
 
         event = builder.build_security_events(
             {"window_sec": 1},
-            icmp_packets(1000),
+            icmp_packets(100),
         )["events"][0]
 
         self.assertTrue(event["event_id"].startswith("evt-"))
@@ -261,20 +270,17 @@ class SecurityEventDedupPolicyTest(unittest.TestCase):
     def test_duplicate_event_is_suppressed_inside_dedup_window(self):
         builder = SecurityEventBuilder()
 
-        first = builder.build_security_events({"window_sec": 1}, icmp_packets(1000))
-        second = builder.build_security_events({"window_sec": 1}, icmp_packets(1000))
+        first = builder.build_security_events({"window_sec": 1}, icmp_packets(100))
+        second = builder.build_security_events({"window_sec": 1}, icmp_packets(100))
 
         self.assertEqual(len(first["events"]), 1)
         self.assertEqual(second["events"], [])
 
     def test_escalated_event_bypasses_dedup(self):
-        builder = SecurityEventBuilder(
-            icmp_pps_threshold=1000,
-            icmp_min_packet_count=1200,
-        )
+        builder = SecurityEventBuilder()
 
-        first = builder.build_security_events({"window_sec": 1}, icmp_packets(1000))
-        second = builder.build_security_events({"window_sec": 1}, icmp_packets(1200))
+        first = builder.build_security_events({"window_sec": 1}, icmp_packets(100))
+        second = builder.build_security_events({"window_sec": 1}, icmp_packets(300))
 
         self.assertEqual(first["events"][0]["response_level"], "L1")
         self.assertEqual(len(second["events"]), 1)

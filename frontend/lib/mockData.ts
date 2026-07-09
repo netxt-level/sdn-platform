@@ -96,7 +96,7 @@ export const mockDetectionSummary: DetectionSummary = {
       protocol: "ICMP",
       bps: 614400,
       pps: 96,
-      reasons: ["ICMP PPS threshold exceeded", "Repeated requests to h4"]
+      reasons: ["ICMP pps 기준 초과", "h4로 ICMP 요청 반복"]
     }
   ]
 };
@@ -122,22 +122,28 @@ export const mockSecurityEvents: SecurityEvent[] = [
       match: {
         eth_type: 2054,
         eth_src: "00:00:00:00:00:02",
-        arp_spa: "10.0.0.1"
+        arp_spa: "10.0.0.254"
       },
       priority: 650,
       idle_timeout: 60,
       hard_timeout: 300
     },
     evidence: {
-      gateway_ip: "10.0.0.1",
-      trusted_gateway_mac: "00:00:00:00:00:01",
-      observed_sender_mac: "00:00:00:00:00:02",
+      spoofed_ip: "10.0.0.254",
+      trusted_mac: "00:00:00:00:ff:ff",
+      claimed_mac: "00:00:00:00:00:02",
+      ethernet_src_mac: "00:00:00:00:00:02",
+      arp_target_ip: "10.0.0.11",
+      reply_count: 1,
       matched_conditions: [
-        "arp_reply",
-        "sender_ip_matches_gateway",
-        "sender_mac_mismatch"
+        "ARP Reply 패킷",
+        "Gateway IP를 sender IP로 사용",
+        "신뢰 Gateway MAC과 다른 MAC 사용",
+        "ARP sender MAC 확인됨",
+        "Ethernet source MAC과 ARP sender MAC 일치",
+        "대상 호스트 IP 포함"
       ],
-      score: 100
+      score: 95
     }
   },
   {
@@ -150,7 +156,7 @@ export const mockSecurityEvents: SecurityEvent[] = [
     dst_ip: "10.0.0.4",
     port_summary: "-",
     protocol: "ICMP",
-    pps: 96,
+    pps: 300,
     bps: 614400,
     action: "block",
     mitigation: {
@@ -168,9 +174,21 @@ export const mockSecurityEvents: SecurityEvent[] = [
       rate_limit_pps: 100
     },
     evidence: {
-      matched_conditions: ["icmp_pps_threshold"],
-      score: 60,
-      response_level: "rate_limit_candidate"
+      matched_conditions: [
+        "ICMP 패킷",
+        "같은 출발지와 목적지 쌍",
+        "ICMP pps 기준 초과",
+        "최소 패킷 수 기준 초과",
+        "짧은 시간 패킷 수가 크게 증가",
+        "높은 pps 기준 초과"
+      ],
+      packet_count: 300,
+      pps_threshold: 100,
+      min_packet_count: 100,
+      high_pps_threshold: 300,
+      average_payload_size: 0,
+      score: 95,
+      response_level: "L2"
     }
   },
   {
@@ -185,7 +203,22 @@ export const mockSecurityEvents: SecurityEvent[] = [
     protocol: "TCP",
     pps: 42,
     bps: 172000,
-    action: "block"
+    action: "none",
+    evidence: {
+      matched_conditions: [
+        "TCP SYN만 있고 ACK는 없음",
+        "출발지와 목적지 IP가 확인됨",
+        "고유 목적지 포트 수 기준 초과",
+        "SYN 시도 수 기준 초과",
+        "관리/서비스 포트 다수 포함"
+      ],
+      unique_dst_port_count: 10,
+      unique_dst_ports: [1, 2, 3, 4, 5, 22, 23, 80, 443, 3389],
+      common_dst_ports: [22, 23, 80, 443, 3389],
+      syn_count: 10,
+      score: 70,
+      response_level: "L2"
+    }
   }
 ];
 
