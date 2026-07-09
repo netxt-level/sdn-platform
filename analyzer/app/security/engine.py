@@ -36,6 +36,8 @@ class SecurityAnalysisEngine:
         links: Iterable[LinkState] | None = None,
         now: datetime | None = None,
     ) -> AnalysisResult:
+        """한 시점의 rolling window를 세 보안 탐지 규칙으로 분석한다."""
+
         packet_list = list(packets)
         now = now or _analysis_time(packet_list)
         window_packets = self._select_window(packet_list, now)
@@ -58,6 +60,8 @@ class SecurityAnalysisEngine:
         )
 
     def _select_window(self, packets: list[PacketRecord], now: datetime) -> list[PacketRecord]:
+        """분석 시점보다 오래된 패킷이 현재 판단에 섞이지 않게 걸러 낸다."""
+
         if not packets:
             return []
 
@@ -65,6 +69,8 @@ class SecurityAnalysisEngine:
         return [packet for packet in packets if packet.timestamp.timestamp() >= cutoff]
 
     def _detect_arp_spoofing(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        """신뢰 IP-MAC 관계와 현재 ARP 주장 값을 비교한다."""
+
         # ARP Spoofing의 핵심은 "같은 IP가 원래 알고 있던 MAC과 다르게 보이는가"다.
         # Gateway IP/MAC은 config에서 우선 받고, 샘플이나 사전 학습값이 있으면 baseline도 참고한다.
         trusted = {ip: mac.lower() for ip, mac in self.config.trusted_ip_mac.items()}
@@ -145,6 +151,8 @@ class SecurityAnalysisEngine:
         return events
 
     def _detect_port_scan(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        """SYN-only 패킷의 고유 목적지 포트 수로 정찰 패턴을 찾는다."""
+
         # Port Scan은 공격 전 정찰 행위에 가깝다.
         # 여기서는 ICMP/Port Scan 브랜치의 흐름을 참고하되, TCP SYN만 기준으로 좁혀서 본다.
         # SYN은 있고 ACK는 없는 패킷이 여러 목적지 포트로 퍼지면 "연결 시도만 던져보는" 패턴이 된다.
@@ -215,6 +223,8 @@ class SecurityAnalysisEngine:
         return events
 
     def _detect_icmp_flood(self, packets: list[PacketRecord], now: datetime) -> list[SecurityEvent]:
+        """출발지-목적지별 ICMP PPS가 고정·동적 기준을 넘는지 판단한다."""
+
         # ICMP Flood는 "ping이 많다"만으로 단정하면 오탐이 생기기 쉽다.
         # 그래서 출발지/목적지 단위로 묶고, 절대 PPS 기준과 baseline 급증 기준을 함께 본다.
         grouped = _group_packets(packets, protocol="ICMP")
@@ -300,6 +310,8 @@ class SecurityAnalysisEngine:
         reason: str,
         rate_limit_pps: int | None = None,
     ) -> MitigationPolicy:
+        """탐지별 match 조건에 공통 timeout 설정을 적용한다."""
+
         return MitigationPolicy(
             action=action,
             match=match,
@@ -328,6 +340,8 @@ class SecurityAnalysisEngine:
         evidence: dict[str, object] | None = None,
         now: datetime,
     ) -> SecurityEvent:
+        """탐지 함수들이 같은 필드와 ID 규칙으로 이벤트를 만들게 한다."""
+
         event_evidence = evidence or {}
         return SecurityEvent(
             event_id=_event_id(
@@ -364,6 +378,8 @@ def analyze_security_window(
     config: DetectionConfig | None = None,
     baseline: BaselineProfile | None = None,
 ) -> AnalysisResult:
+    """상태를 보관할 필요가 없는 호출자를 위한 단발성 분석 함수."""
+
     return SecurityAnalysisEngine(config=config, baseline=baseline).analyze(
         packets,
         links=links,
@@ -371,6 +387,8 @@ def analyze_security_window(
 
 
 def _group_packets(packets: list[PacketRecord], protocol: str) -> dict[tuple[str, str], dict[str, int]]:
+    """같은 출발지와 목적지의 프로토콜 트래픽을 패킷·바이트 단위로 합친다."""
+
     grouped: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: {"packets": 0, "bytes": 0})
     for packet in packets:
         if packet.protocol_name != protocol or not packet.src_ip or not packet.dst_ip:
@@ -388,6 +406,8 @@ def _analysis_time(packets: list[PacketRecord]) -> datetime:
 
 
 def _event_id(*parts: str) -> str:
+    # 같은 공격 흐름이 같은 ID를 가져야 runtime cooldown으로 중복을 찾을 수 있다.
+    # 사건 발생 회차를 구분하는 별도 ID는 백엔드 통합 단계에서 보완해야 한다.
     raw = "|".join(parts)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
     return f"evt-{digest}"

@@ -15,6 +15,12 @@ from .ryu_adapter import flow_rules_from_policies, packet_record_from_ryu
 
 @dataclass(frozen=True)
 class SecurityRuntimeOutput:
+    """한 번의 분석으로 함께 만들어지는 세 종류의 출력.
+
+    analysis는 내부 판단 결과, backend_payload는 저장·화면 전달용 데이터,
+    flow_rules는 컨트롤러 연동용 정책 후보다.
+    """
+
     analysis: AnalysisResult
     backend_payload: dict[str, Any]
     flow_rules: list[dict[str, Any]]
@@ -44,7 +50,9 @@ class SecurityRuntime:
         self.config = config or DetectionConfig()
         self.engine = SecurityAnalysisEngine(config=self.config, baseline=baseline)
         self.datapath_id = datapath_id
+        # 분석 창보다 넉넉하게 보관하되, 오래된 패킷이 계속 쌓이지 않게 한다.
         self.max_window_multiplier = max(max_window_multiplier, 1.0)
+        # 같은 공격이 매 분석 주기마다 중복 이벤트로 쌓이는 것을 막는다.
         self.event_cooldown_seconds = max(event_cooldown_seconds, 0.0)
         self._packets: deque[PacketRecord] = deque()
         self._last_emitted_at: dict[str, datetime] = {}
@@ -54,6 +62,8 @@ class SecurityRuntime:
         return sum(max(packet.packet_count, 1) for packet in self._packets)
 
     def observe_packet(self, packet: PacketRecord | dict[str, Any]) -> PacketRecord:
+        """새 패킷을 공통 모델로 변환해 rolling window에 추가한다."""
+
         record = packet if isinstance(packet, PacketRecord) else packet_record_from_ryu(packet)
         self._packets.append(record)
         self._prune(_latest_time(self._packets))
@@ -76,6 +86,8 @@ class SecurityRuntime:
         now: datetime | None = None,
         datapath_id: str | None = None,
     ) -> SecurityRuntimeOutput:
+        """현재 rolling window를 분석하고 각 연동 지점의 출력으로 변환한다."""
+
         analysis_time = now or _latest_time(self._packets)
         self._prune(analysis_time)
         link_states = [_coerce_link(link) for link in (links or [])]
@@ -98,16 +110,26 @@ class SecurityRuntime:
         now: datetime | None = None,
         datapath_id: str | None = None,
     ) -> SecurityRuntimeOutput:
+        """Analyzer의 짧은 snapshot을 누적한 뒤 한 번에 분석한다."""
+
         self.observe_packets(packets)
         return self.analyze(links=links, now=now, datapath_id=datapath_id)
 
     def _prune(self, now: datetime) -> None:
+        """보관 기한을 지난 패킷을 앞에서부터 제거한다."""
+
         retention_seconds = self.config.window_seconds * self.max_window_multiplier
         cutoff = now.timestamp() - retention_seconds
         while self._packets and self._packets[0].timestamp.timestamp() < cutoff:
             self._packets.popleft()
 
     def _apply_event_cooldown(self, analysis: AnalysisResult, now: datetime) -> AnalysisResult:
+        """동일 event_id가 cooldown 안에 다시 발생하면 결과에서 제외한다.
+
+        이벤트를 제외할 때 연결된 정책도 함께 제외한다. 그렇지 않으면
+        화면에는 새 사건이 없는데 컨트롤러 요청만 반복되는 상태가 생긴다.
+        """
+
         if self.event_cooldown_seconds <= 0 or not analysis.events:
             return analysis
 

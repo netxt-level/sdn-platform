@@ -76,6 +76,8 @@ const FIVE_SECONDS_MS = 5 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
 const FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS;
 const SUSPICIOUS_HOST_REFRESH_MS = 5 * 1000;
+// 공용 Elasticsearch 조회 결과에는 다른 형식의 문서도 섞일 수 있다.
+// 현재 보안 화면은 담당 범위의 세 공격 유형만 허용한다.
 const SUPPORTED_SECURITY_ATTACK_TYPES = new Set<AttackType>([
   "ARP_SPOOFING",
   "ICMP_FLOOD",
@@ -247,6 +249,8 @@ function isSupportedSecurityAttackType(value: unknown): value is AttackType {
 }
 
 function isSecurityEvent(item: unknown): item is SecurityEvent {
+  // 백엔드 이력과 WebSocket 입력은 모두 외부 데이터이므로 같은 경계에서
+  // 필수 필드와 허용 값을 확인한다. 잘못된 한 건이 전체 화면을 깨지 않게 한다.
   if (!item || typeof item !== "object") {
     return false;
   }
@@ -609,6 +613,7 @@ export function useRealtime(): RealtimeState {
 
         const protocolStats = toProtocolStats(protocols.items ?? []);
         const historySecurityEvents = (storedSecurityEvents.items ?? [])
+          // 기존 detection summary 문서는 보안 이벤트 필수 필드가 없어 제외된다.
           .filter(isSecurityEvent)
           .filter((event) =>
             SUPPORTED_SECURITY_ATTACK_TYPES.has(event.attack_type)
@@ -801,6 +806,7 @@ export function useRealtime(): RealtimeState {
           }
 
           if (message.type === "security_event") {
+            // 실시간 이벤트도 이력과 같은 검증을 통과한 경우에만 앞에 추가한다.
             if (isSecurityEvent(message.data)) {
               setSecurityEvents((prev) => [message.data, ...prev].slice(0, 100));
             }

@@ -11,6 +11,8 @@ from .ryu_adapter import flow_rules_from_policies
 
 
 def main() -> int:
+    """저장된 시나리오 파일로 보안 엔진을 독립 실행한다."""
+
     parser = argparse.ArgumentParser(description="Run an SDN security scenario sample.")
     parser.add_argument("--input", required=True, help="Scenario JSON path.")
     parser.add_argument("--datapath-id", default="s1", help="Datapath id for flow-rule output.")
@@ -19,12 +21,14 @@ def main() -> int:
     args = parser.parse_args()
 
     packets, links, baseline, config = load_security_input(args.input)
+    # 실제 capture 없이도 샘플 패킷부터 정책 후보까지 같은 경로를 검증한다.
     result = SecurityAnalysisEngine(config=config, baseline=baseline).analyze(
         packets,
         links=links,
     )
     backend_payload = result_to_backend_payload(result)
     flow_payload = {
+        # Controller가 받을 수 있는 형태를 별도 파일로 확인할 수 있게 분리한다.
         "flow_rules": flow_rules_from_policies(
             result.policies,
             datapath_id=args.datapath_id,

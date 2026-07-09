@@ -21,14 +21,16 @@ ETH_TYPES = {
 
 
 def packet_record_from_ryu(raw: dict[str, Any]) -> PacketRecord:
-    """Convert controller packet metadata to the neutral security model.
+    """컨트롤러 패킷 메타데이터를 보안 엔진의 공통 모델로 변환한다.
 
-    This function intentionally accepts plain dictionaries so the security
-    package can be used from Ryu apps without importing Ryu in tests.
+    Ryu 객체를 직접 받지 않고 평범한 딕셔너리를 받도록 해, 테스트에서는
+    Ryu를 설치하지 않아도 같은 변환과 탐지 로직을 검증할 수 있다.
     """
 
+    # Ryu 앱마다 같은 값을 protocol, ip_proto, nw_proto처럼 다르게 줄 수 있다.
     protocol = _protocol_name(raw.get("protocol") or raw.get("ip_proto") or raw.get("nw_proto"))
     if not protocol:
+        # ARP에는 IP protocol 번호가 없으므로 Ethernet type으로 한 번 더 찾는다.
         protocol = _protocol_from_eth_type(raw.get("eth_type") or raw.get("dl_type"))
     return PacketRecord(
         timestamp=_parse_datetime(raw.get("timestamp")),
@@ -60,10 +62,11 @@ def link_state_from_port_stats(
     interval_seconds: float,
     capacity_bps: float,
 ) -> LinkState:
-    """Convert a port/link stats sample to a LinkState.
+    """포트 통계 한 건을 공통 LinkState 모델로 변환한다.
 
-    Expected byte fields are deltas over the sampling interval. If the caller
-    only has absolute counters, compute deltas before calling this function.
+    byte 필드는 누적값이 아니라 수집 간격 동안의 증가량이어야 한다. 호출자가
+    누적 counter만 가지고 있다면 이전 값과의 차이를 먼저 계산해야 한다.
+    현재 보안 범위에서는 이 값을 혼잡·장애 이벤트로 사용하지 않는다.
     """
 
     tx_delta = int(raw.get("tx_bytes_delta") or raw.get("byte_delta") or 0)
@@ -86,12 +89,14 @@ def link_state_from_port_stats(
 
 
 def flow_rule_from_policy(policy: MitigationPolicy, *, datapath_id: str | None = None) -> dict[str, Any]:
-    """Create a Ryu-friendly FlowMod description from a mitigation policy.
+    """대응 정책 후보를 Ryu가 FlowMod로 옮길 수 있는 설명으로 변환한다.
 
-    The returned dictionary is deliberately serializable. The controller owner
-    can map it to parser.OFPMatch, parser.OFPActionOutput, meters, and FlowMod.
+    반환값은 네트워크로 전달하기 위해 JSON 직렬화 가능한 딕셔너리로 유지한다.
+    Controller 담당 코드는 이 값을 OFPMatch, Meter, FlowMod로 매핑한다.
+    이 함수 호출만으로 실제 스위치 규칙이 설치되는 것은 아니다.
     """
 
+    # 사람이 읽는 프로토콜 이름을 OpenFlow가 사용하는 숫자로 정규화한다.
     match = _normalize_match(policy.match)
     base = {
         "datapath_id": datapath_id,
@@ -102,8 +107,10 @@ def flow_rule_from_policy(policy: MitigationPolicy, *, datapath_id: str | None =
         "reason": policy.reason,
     }
     if policy.action == MitigationAction.DROP:
+        # OpenFlow에서 action이 없는 flow entry는 일치한 패킷을 버린다.
         return {**base, "actions": [], "instruction": "DROP"}
     if policy.action == MitigationAction.RATE_LIMIT:
+        # 실제 meter ID 생성과 스위치 설치는 Controller 구현이 담당한다.
         return {
             **base,
             "actions": [{"type": "METER", "rate_limit_pps": policy.rate_limit_pps}],
@@ -127,6 +134,8 @@ def flow_rules_from_policies(policies: list[MitigationPolicy], *, datapath_id: s
 
 
 def _normalize_match(match: dict[str, Any]) -> dict[str, Any]:
+    """사람이 읽는 match 값을 OpenFlow 숫자 표현으로 바꾼다."""
+
     normalized: dict[str, Any] = {}
     for key, value in match.items():
         if key == "ip_proto" and isinstance(value, str):
@@ -171,6 +180,8 @@ def _protocol_from_eth_type(value: Any) -> str:
 
 
 def _tcp_flags(value: Any) -> tuple[str, ...]:
+    """Scapy 축약형과 일반 이름을 동일한 TCP flag 목록으로 정규화한다."""
+
     if value is None or value == "":
         return ()
     if isinstance(value, str):

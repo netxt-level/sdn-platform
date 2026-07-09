@@ -11,6 +11,11 @@ from .models import AnalysisResult, DetectionConfig, LinkState, PacketRecord
 
 
 def load_security_input(path: str | Path) -> tuple[list[PacketRecord], list[LinkState], BaselineProfile | None, DetectionConfig]:
+    """JSON 시나리오를 엔진 입력 모델과 설정으로 변환한다.
+
+    baseline_packets는 공격 패킷과 분리해 정상 기준을 만들 때만 사용한다.
+    """
+
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     config = _config_from_dict(payload.get("config", {}))
     packets = [packet_from_dict(item) for item in payload.get("packets", [])]
@@ -22,6 +27,8 @@ def load_security_input(path: str | Path) -> tuple[list[PacketRecord], list[Link
 
 
 def packet_from_dict(raw: dict[str, Any]) -> PacketRecord:
+    """샘플·파일 입력 패킷을 공통 PacketRecord로 변환한다."""
+
     return PacketRecord(
         timestamp=_parse_datetime(raw.get("timestamp")),
         src_ip=str(raw.get("src_ip") or ""),
@@ -47,6 +54,8 @@ def packet_from_dict(raw: dict[str, Any]) -> PacketRecord:
 
 
 def link_from_dict(raw: dict[str, Any]) -> LinkState:
+    """샘플·API 링크 데이터를 공통 LinkState로 변환한다."""
+
     return LinkState(
         link_id=str(raw.get("link_id") or ""),
         src_switch=str(raw.get("src_switch") or ""),
@@ -62,12 +71,16 @@ def link_from_dict(raw: dict[str, Any]) -> LinkState:
 
 
 def write_events_json(path: str | Path, result: AnalysisResult) -> None:
+    """분석 결과 전체를 재확인하기 쉬운 JSON 파일로 저장한다."""
+
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def write_events_csv(path: str | Path, result: AnalysisResult) -> None:
+    """개별 이벤트의 핵심 필드를 표 형태로 확인할 수 있게 저장한다."""
+
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     fields = [
@@ -95,6 +108,8 @@ def write_events_csv(path: str | Path, result: AnalysisResult) -> None:
 
 
 def render_security_report(result: AnalysisResult) -> str:
+    """발표·리뷰에서 바로 읽을 수 있는 Markdown 요약을 만든다."""
+
     lines = [
         "# SDN Security Analysis Report",
         "",
@@ -140,6 +155,7 @@ def write_security_report(path: str | Path, result: AnalysisResult) -> None:
 
 
 def _config_from_dict(raw: dict[str, Any]) -> DetectionConfig:
+    # 오타나 알 수 없는 설정이 dataclass 생성자까지 들어가지 않게 허용 필드만 남긴다.
     allowed = DetectionConfig.__dataclass_fields__.keys()
     return DetectionConfig(**{key: value for key, value in raw.items() if key in allowed})
 
@@ -169,6 +185,8 @@ def _optional_float(value: Any) -> float | None:
 
 
 def _tcp_flags(value: Any) -> tuple[str, ...]:
+    """문자열·목록·Scapy 축약형을 동일한 flag tuple로 변환한다."""
+
     if value in (None, ""):
         return ()
     if isinstance(value, str):

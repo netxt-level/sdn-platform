@@ -17,6 +17,8 @@ from app.security.ryu_adapter import flow_rules_from_policies, packet_record_fro
 
 
 def test_port_scan_detector_builds_suspicious_host_alert() -> None:
+    """20개 SYN 포트 접근이 대시보드용 의심 호스트 경고를 만드는지 확인한다."""
+
     detector = PortScanDetector(
         unique_port_threshold=20,
         syn_count_threshold=20,
@@ -53,6 +55,8 @@ def test_port_scan_detector_builds_suspicious_host_alert() -> None:
 
 
 def test_final_arp_spoofing_sample_builds_event_and_drop_rule() -> None:
+    """최종 발표 샘플이 ARP 이벤트와 좁은 DROP 조건을 함께 만드는지 확인한다."""
+
     sample_path = (
         Path(__file__).resolve().parents[2]
         / "samples"
@@ -72,9 +76,11 @@ def test_final_arp_spoofing_sample_builds_event_and_drop_rule() -> None:
     assert event.evidence["trusted_mac"] == "00:00:00:00:ff:ff"
 
     payload = result_to_backend_payload(result)
+    # 엔진 결과가 프론트 필수 필드를 빠뜨리지 않고 백엔드 계약으로 변환돼야 한다.
     assert validate_backend_payload(payload) == []
 
     flow_rules = flow_rules_from_policies(result.policies, datapath_id="s1")
+    # 공격 MAC이 게이트웨이 IP를 주장하는 ARP만 막고 다른 트래픽은 건드리지 않는다.
     assert flow_rules == [
         {
             "datapath_id": "s1",
@@ -94,6 +100,8 @@ def test_final_arp_spoofing_sample_builds_event_and_drop_rule() -> None:
 
 
 def test_security_engine_keeps_security_scope_focused() -> None:
+    """입력이 섞여 있어도 현재 범위의 세 이벤트만 생성하는지 확인한다."""
+
     now = datetime(2026, 7, 3, tzinfo=timezone.utc)
     config = DetectionConfig(
         window_seconds=10,
@@ -173,6 +181,7 @@ def test_security_engine_keeps_security_scope_focused() -> None:
     assert "tcp_syn_without_ack" in events_by_type["PORT_SCAN"].evidence["matched_conditions"]
     assert events_by_type["ICMP_FLOOD"].evidence["response_level"] == "L2"
     assert "min_packet_count_satisfied" in events_by_type["ICMP_FLOOD"].evidence["matched_conditions"]
+    # 아래 항목은 공용 모델이나 과거 아이디어에 남아 있어도 현재 발표 범위가 아니다.
     assert "UDP_FLOOD" not in attack_types
     assert "SYN_FLOOD" not in attack_types
     assert "ARP_REPLY_STORM" not in attack_types
@@ -181,6 +190,8 @@ def test_security_engine_keeps_security_scope_focused() -> None:
 
 
 def test_ryu_adapter_accepts_arp_eth_type() -> None:
+    """Ryu가 ARP를 EtherType 숫자로 주어도 ARP 필드가 보존되는지 확인한다."""
+
     record = packet_record_from_ryu(
         {
             "timestamp": "2026-07-03T00:00:09+00:00",

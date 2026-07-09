@@ -6,6 +6,8 @@ from typing import Any
 from .models import AnalysisResult, EventStatus, MitigationAction, MitigationPolicy, SecurityEvent
 
 
+# 프론트 보안 이벤트 화면이 공통으로 기대하는 최소 필드다.
+# 엔진 내부 필드가 늘어나더라도 이 계약은 별도로 검증한다.
 FRONTEND_EVENT_REQUIRED_FIELDS = {
     "id",
     "occurred_at",
@@ -26,6 +28,12 @@ FRONTEND_ACTIONS = {"none", "block", "reroute"}
 
 
 def event_to_backend_payload(event: SecurityEvent) -> dict[str, Any]:
+    """엔진 이벤트를 저장과 화면 표시에 필요한 형태로 확장한다.
+
+    canonical_*에는 엔진 원래 값을 보존하고, severity/status/action은 현재
+    프론트엔드가 사용하는 소문자·단순 상태로 변환한다.
+    """
+
     payload = event.to_dict()
     payload["id"] = event.event_id
     payload["occurred_at"] = event.created_at.isoformat()
@@ -44,11 +52,19 @@ def event_to_backend_payload(event: SecurityEvent) -> dict[str, Any]:
 
 
 def event_to_frontend_payload(event: SecurityEvent) -> dict[str, Any]:
+    """프론트가 반드시 알아야 하는 최소 필드만 추린다."""
+
     payload = event_to_backend_payload(event)
     return {field: payload[field] for field in FRONTEND_EVENT_REQUIRED_FIELDS}
 
 
 def policy_to_controller_request(policy: MitigationPolicy) -> dict[str, Any]:
+    """대응 정책 후보를 컨트롤러 요청으로 전달 가능한 구조로 만든다.
+
+    현재 탐지 항목은 DROP과 RATE_LIMIT만 생성한다. reroute_path는 공용
+    모델의 확장 호환 필드라서 현재 요청에서는 일반적으로 None이다.
+    """
+
     return {
         "action": policy.action.value,
         "match": policy.match,
@@ -62,6 +78,8 @@ def policy_to_controller_request(policy: MitigationPolicy) -> dict[str, Any]:
 
 
 def result_to_backend_payload(result: AnalysisResult) -> dict[str, Any]:
+    """분석 요약, 개별 이벤트, 컨트롤러 정책 후보를 한 요청으로 묶는다."""
+
     return {
         "summary": {
             "window_seconds": result.window_seconds,
@@ -74,6 +92,8 @@ def result_to_backend_payload(result: AnalysisResult) -> dict[str, Any]:
 
 
 def validate_backend_payload(payload: Mapping[str, Any]) -> list[str]:
+    """백엔드로 보내기 전 계약 위반을 사람이 읽을 수 있는 목록으로 반환한다."""
+
     errors: list[str] = []
     summary = payload.get("summary")
     events = payload.get("events")
@@ -130,6 +150,8 @@ def _dashboard_status(status: EventStatus) -> str:
 
 
 def _dashboard_action(action: MitigationAction) -> str:
+    # 현재 UI의 block은 DROP뿐 아니라 RATE_LIMIT 후보도 포함하는 넓은 표현이다.
+    # 실제 적용된 차단 상태는 이벤트 status와 Controller 결과로 구분해야 한다.
     if action == MitigationAction.REROUTE:
         return "reroute"
     if action in {MitigationAction.DROP, MitigationAction.RATE_LIMIT}:

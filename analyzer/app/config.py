@@ -11,10 +11,12 @@ class AnalyzerConfig:
     window_sec: int
     status_interval_sec: int
     backend_base_url: str
+    # 보안 이벤트 엔진의 rolling window와 ARP 신뢰 기준
     security_window_sec: int
     security_gateway_ip: str
     security_gateway_mac: str
     security_event_cooldown_sec: int
+    # Port Scan 의심 호스트와 이벤트 생성에 사용하는 세부 기준
     port_scan_window_sec: int
     port_scan_unique_dst_port_threshold: int
     port_scan_syn_count_threshold: int
@@ -22,6 +24,7 @@ class AnalyzerConfig:
     port_scan_multi_target_threshold: int
     port_scan_high_unique_dst_port_threshold: int
     port_scan_alert_cooldown_sec: int
+    # Flood 판단 기준과 탐지 후 제안할 속도 제한 값
     icmp_pps_threshold: float
     rate_limit_pps: int
 
