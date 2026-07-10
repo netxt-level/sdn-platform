@@ -5,8 +5,13 @@ import time
 from app.analyzer_status import AnalyzerStatus
 from app.backend_client import BackendClient
 from app.config import load_config
+from app.detection.flood import FloodThresholds, IcmpFloodDetector, UdpFloodDetector
 from app.detection.port_scan import PortScanDetector
-from app.detection.security_events import SecurityEventBuilder
+from app.detection.security_events import (
+    PendingSecurityEventQueue,
+    SecurityEventBuilder,
+)
+from app.detection.syn_flood import SynFloodDetector
 from app.detection.traffic_stats import TrafficStatsBuilder
 from app.packet.capture import PacketCaptureError, start_capture
 from app.packet.parser import parse_packet
@@ -31,6 +36,7 @@ BACKEND_BASE_URL = config.backend_base_url
 # 캡처 스레드가 쌓고 분석 스레드가 비우는 공유 패킷 버퍼
 packets = []
 packets_lock = threading.Lock()
+pending_security_events = PendingSecurityEventQueue(max_size=500)
 
 # 패킷 목록을 백엔드 전송용 packet-summary payload로 변환
 summary_builder = PacketSummaryBuilder(
@@ -45,18 +51,14 @@ traffic_builder = TrafficStatsBuilder(
 
 security_event_builder = SecurityEventBuilder(
     analyzer_id=ANALYZER_ID,
-    icmp_pps_threshold=config.icmp_pps_threshold,
-    icmp_min_packet_count=config.icmp_min_packet_count,
-    icmp_high_pps_threshold=config.icmp_high_pps_threshold,
-    icmp_high_pps_multiplier=config.icmp_high_pps_multiplier,
-    icmp_baseline_spike_multiplier=config.icmp_baseline_spike_multiplier,
-    icmp_baseline_min_pps=config.icmp_baseline_min_pps,
-    icmp_alert_cooldown_sec=config.icmp_alert_cooldown_sec,
     event_dedup_window_sec=config.event_dedup_window_sec,
     rate_limit_priority=config.rate_limit_priority,
     rate_limit_idle_timeout=config.rate_limit_idle_timeout,
     rate_limit_hard_timeout=config.rate_limit_hard_timeout,
     rate_limit_pps=config.rate_limit_pps,
+    drop_priority=config.drop_priority,
+    drop_idle_timeout=config.drop_idle_timeout,
+    drop_hard_timeout=config.drop_hard_timeout,
 )
 
 # 백엔드 API 호출을 담당하는 클라이언트
@@ -77,9 +79,41 @@ port_scan_detector = PortScanDetector(
     unique_port_threshold=config.port_scan_unique_dst_port_threshold,
     syn_count_threshold=config.port_scan_syn_count_threshold,
     multi_target_window_sec=config.port_scan_multi_target_window_sec,
-    multi_target_threshold=config.port_scan_multi_target_threshold,
     high_unique_dst_port_threshold=config.port_scan_high_unique_dst_port_threshold,
+    horizontal_target_threshold=config.port_scan_horizontal_target_threshold,
     alert_cooldown_sec=config.port_scan_alert_cooldown_sec,
+)
+
+# ICMP Flood는 ping 요청이 짧은 시간에 과도하게 몰리는지 확인한다.
+icmp_flood_detector = IcmpFloodDetector(
+    FloodThresholds(
+        pps=config.icmp_pps_threshold,
+        high_pps=config.icmp_high_pps_threshold,
+        critical_pps=config.icmp_critical_pps_threshold,
+        minimum_packets=config.icmp_min_packet_count,
+    )
+)
+
+# UDP Flood는 패킷 수와 트래픽 양을 같이 보며, 단순 PPS 기준의 한계를 줄인다.
+udp_flood_detector = UdpFloodDetector(
+    FloodThresholds(
+        pps=config.udp_pps_threshold,
+        high_pps=config.udp_high_pps_threshold,
+        critical_pps=config.udp_critical_pps_threshold,
+        minimum_packets=config.udp_min_packet_count,
+        bps=config.udp_bps_threshold,
+        high_bps=config.udp_high_bps_threshold,
+        critical_bps=config.udp_critical_bps_threshold,
+    )
+)
+
+# SYN Flood는 Port Scan과 겹치지 않도록 단일 서비스 집중 패턴만 본다.
+syn_flood_detector = SynFloodDetector(
+    pps_threshold=config.syn_pps_threshold,
+    high_pps_threshold=config.syn_high_pps_threshold,
+    critical_pps_threshold=config.syn_critical_pps_threshold,
+    max_unique_ports=config.syn_max_unique_ports,
+    minimum_syn_count=config.syn_min_count,
 )
 
 
@@ -98,6 +132,40 @@ def handle_packet(packet):
         packets.append(metadata)
 
 
+def queue_security_events(events):
+    """백엔드 전송 전 보안 이벤트를 메모리 대기 큐에 저장한다."""
+
+    dropped_events = pending_security_events.add(events)
+    if dropped_events:
+        security_event_builder.forget_events(dropped_events)
+
+
+def send_pending_security_events(timestamp):
+    """전송 실패로 남아 있는 보안 이벤트를 다음 분석 주기에 다시 전송한다."""
+
+    if len(pending_security_events) == 0:
+        return True
+
+    payload = pending_security_events.payload(
+        timestamp=timestamp,
+        analyzer_id=ANALYZER_ID,
+    )
+
+    try:
+        sent = backend_client.send_security_events(payload)
+    except Exception as exc:
+        analyzer_status.mark_backend_failed("failed to send security events")
+        logger.exception("security events 전송 중 예외가 발생했습니다: %s", exc)
+        return False
+
+    if sent:
+        pending_security_events.clear()
+        return True
+
+    analyzer_status.mark_backend_failed("failed to send security events")
+    return False
+
+
 # WINDOW_SEC마다 패킷 버퍼를 비우고 요약/탐지 결과를 백엔드로 전송
 def analysis_loop():
     while True:
@@ -111,6 +179,17 @@ def analysis_loop():
 
             # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
             port_scan_alerts = port_scan_detector.detect(packets_snapshot)
+            security_detections = []
+            security_detections.extend(port_scan_alerts)
+            security_detections.extend(
+                icmp_flood_detector.detect(packets_snapshot, WINDOW_SEC)
+            )
+            security_detections.extend(
+                udp_flood_detector.detect(packets_snapshot, WINDOW_SEC)
+            )
+            security_detections.extend(
+                syn_flood_detector.detect(packets_snapshot, WINDOW_SEC)
+            )
 
             packet_summary = summary_builder.build_packet_summary(
                 packets_snapshot,
@@ -125,9 +204,9 @@ def analysis_loop():
             # 보안 탐지 결과는 traffic stats와 분리해 공통 SecurityEvent 형식으로 전송한다.
             security_events = security_event_builder.build_security_events(
                 packet_summary=packet_summary,
-                packets=packets_snapshot,
-                port_scan_alerts=port_scan_alerts,
+                detections=security_detections,
             )
+            queue_security_events(security_events["events"])
 
             # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
             packet_summary_sent = backend_client.send_packet_summary(
@@ -138,15 +217,16 @@ def analysis_loop():
                 traffic_stats
             )
 
-            if security_events["events"]:
-                backend_client.send_security_events(security_events)
+            security_events_sent = send_pending_security_events(
+                security_events["timestamp"]
+            )
 
-            # 두 요약 전송이 모두 성공한 경우에만 백엔드 연결 상태를 정상으로 표시
-            if packet_summary_sent and traffic_stats_sent:
+            # 요약과 보안 이벤트가 모두 전송된 경우에만 백엔드 연결 상태를 정상으로 표시
+            if packet_summary_sent and traffic_stats_sent and security_events_sent:
                 analyzer_status.mark_summary_sent()
             else:
                 analyzer_status.mark_backend_failed(
-                    "failed to send analyzer metrics"
+                    "failed to send analyzer metrics or security events"
                 )
 
         except Exception as exc:

@@ -44,6 +44,8 @@ def parse_packet(packet):
     # 패킷이 ICMP 프로토콜을 사용하는 경우
     elif ICMP in packet:
         metadata["protocol"] = "ICMP"   # 프로토콜 종류 (ICMP)
+        metadata["icmp_type"] = packet[ICMP].type # ICMP 메시지 종류
+        metadata["icmp_code"] = packet[ICMP].code # ICMP 세부 코드
         
         # ICMP Payload 크기 계산 (실제 데이터 부분 크기)
         metadata["payload_size"] = len(bytes(packet[ICMP].payload))

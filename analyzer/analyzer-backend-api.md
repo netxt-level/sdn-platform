@@ -22,29 +22,41 @@
 | 환경변수 | 기본값 | 설명 |
 |---|---:|---|
 | `ANALYZER_ID` | `analyzer-1` | 분석 서버 식별자 |
-| `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
+| `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
+| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `15` | Port Scan 고유 목적지 포트 임계값 |
+| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `30` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
-| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
+| `PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD` | `3` | Port Scan 수평 스캔 목적지 수 기준 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
-| `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
-| `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
-| `ICMP_HIGH_PPS_MULTIPLIER` | `3.0` | ICMP Flood high pps 배수 기준 |
-| `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | ICMP baseline 급증 배수 기준 |
-| `ICMP_BASELINE_MIN_PPS` | `100` | ICMP baseline 급증 최소 pps 기준 |
-| `ICMP_ALERT_COOLDOWN_SEC` | `60` | ICMP Flood 중복 알림 억제 시간 |
+| `ICMP_PPS_THRESHOLD` | `150` | ICMP Flood pps 임계값 |
+| `ICMP_MIN_PACKET_COUNT` | `100` | ICMP Flood 최소 패킷 수 기준 |
+| `ICMP_HIGH_PPS_THRESHOLD` | `500` | ICMP Flood high pps 기준 |
+| `ICMP_CRITICAL_PPS_THRESHOLD` | `1000` | ICMP Flood critical pps 기준 |
+| `UDP_PPS_THRESHOLD` | `250` | UDP Flood pps 임계값 |
+| `UDP_MIN_PACKET_COUNT` | `100` | UDP Flood 최소 패킷 수 기준 |
+| `UDP_HIGH_PPS_THRESHOLD` | `800` | UDP Flood high pps 기준 |
+| `UDP_CRITICAL_PPS_THRESHOLD` | `1500` | UDP Flood critical pps 기준 |
+| `UDP_BPS_THRESHOLD` | `2000000` | UDP Flood bps 임계값 |
+| `UDP_HIGH_BPS_THRESHOLD` | `8000000` | UDP Flood high bps 기준 |
+| `UDP_CRITICAL_BPS_THRESHOLD` | `15000000` | UDP Flood critical bps 기준 |
+| `SYN_PPS_THRESHOLD` | `120` | SYN Flood pps 임계값 |
+| `SYN_MIN_COUNT` | `30` | SYN Flood 최소 SYN 수 기준 |
+| `SYN_HIGH_PPS_THRESHOLD` | `400` | SYN Flood high pps 기준 |
+| `SYN_CRITICAL_PPS_THRESHOLD` | `800` | SYN Flood critical pps 기준 |
+| `SYN_MAX_UNIQUE_PORTS` | `5` | SYN Flood로 볼 최대 목적지 포트 수 |
 | `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
 | `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
 | `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
 | `RATE_LIMIT_HARD_TIMEOUT` | `300` | Rate limit 후보 hard timeout |
 | `RATE_LIMIT_PPS` | `100` | Rate limit 후보 제한 pps |
+| `DROP_PRIORITY` | `700` | Drop 후보 flow rule 우선순위 |
+| `DROP_IDLE_TIMEOUT` | `30` | Drop 후보 idle timeout |
+| `DROP_HARD_TIMEOUT` | `120` | Drop 후보 hard timeout |
 
 ## 1. 패킷 요약 전달
 
@@ -215,7 +227,7 @@ POST /api/analyzer/detection-summary
 POST /api/security/events
 ```
 
-분석 서버가 포트 스캔, ICMP flood 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`다.
+분석 서버가 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`다.
 
 ### Request Body
 
@@ -226,8 +238,8 @@ POST /api/security/events
   "events": [
     {
       "event_id": "evt-4c8a9d4d4d5a",
-      "event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
-      "dedup_key": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
+      "event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab44a7e7d0d62f4f4a3f0d9b1a",
+      "dedup_key": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab44a7e7d0d62f4f4a3f0d9b1a",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
       "attack_category": "RECON",
@@ -238,69 +250,79 @@ POST /api/security/events
       "src_ip": "10.0.0.2",
       "dst_ip": "10.0.0.4",
       "protocol": "TCP",
-      "detection_rule": "tcp_syn_unique_ports",
+      "detection_rule": "tcp_syn_port_scan",
       "recommended_action": "alert",
-      "response_level": "L2",
+      "response_level": "L1",
       "evidence": {
         "matched_conditions": [
-          "tcp_syn_without_ack",
-          "same_source_target_pair",
-          "unique_dst_port_threshold_exceeded",
-          "syn_count_threshold_satisfied"
+          "TCP SYN 패킷",
+          "ACK 없이 연결 시도",
+          "단일 대상의 고유 목적지 포트 기준 초과"
         ],
         "window_seconds": 5,
-        "unique_dst_port_count": 20,
-        "unique_dst_ports": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-        "syn_count": 20,
-        "score": 70
+        "unique_dst_port_count": 15,
+        "unique_dst_ports": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        "syn_count": 15,
+        "scan_type": "vertical",
+        "score": 50
       },
       "mitigation": null
     },
     {
       "event_id": "evt-8e44e9b97a2c",
-      "event_fingerprint": "764e3e790da17f7a5e21e51af7b4d06608bd450a",
-      "dedup_key": "764e3e790da17f7a5e21e51af7b4d06608bd450a",
+      "event_fingerprint": "764e3e790da17f7a5e21e51af7b4d06608bd450a3f114eead915a6c6b68f22ad",
+      "dedup_key": "764e3e790da17f7a5e21e51af7b4d06608bd450a3f114eead915a6c6b68f22ad",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "analyzer_id": "analyzer-1",
-      "attack_category": "DDOS",
-      "attack_type": "ICMP_FLOOD",
-      "severity": "high",
-      "confidence": "medium",
+      "attack_category": "FLOOD",
+      "attack_type": "UDP_FLOOD",
+      "severity": "critical",
+      "confidence": "high",
       "status": "detected",
       "src_ip": "10.0.0.2",
       "dst_ip": "10.0.0.4",
-      "protocol": "ICMP",
-      "detection_rule": "icmp_pps_threshold",
-      "recommended_action": "rate_limit",
-      "response_level": "L2",
+      "protocol": "UDP",
+      "detection_rule": "udp_flood_rate_threshold",
+      "recommended_action": "drop",
+      "response_level": "L3",
       "evidence": {
         "matched_conditions": [
-          "icmp_protocol",
-          "same_source_target_pair",
-          "icmp_pps_threshold_exceeded",
-          "min_packet_count_satisfied"
+          "UDP 패킷",
+          "BPS 기준 초과",
+          "최소 패킷 수 기준 충족",
+          "여러 분석 구간에서 반복 초과",
+          "Critical 기준 즉시 초과"
         ],
         "window_seconds": 1,
-        "packet_count": 1200,
-        "pps": 1200,
-        "pps_threshold": 1000,
-        "min_packet_count": 1000,
-        "high_pps_threshold": 3000,
-        "score": 80
+        "packet_count": 2000,
+        "pps": 2000,
+        "bps": 16000000,
+        "pps_threshold": 250,
+        "bps_threshold": 2000000,
+        "high_pps_threshold": 800,
+        "critical_pps_threshold": 1500,
+        "unique_dst_port_count": 1,
+        "destination_port": 9999,
+        "dominant_dst_port": 9999,
+        "dominant_port_ratio": 1.0,
+        "exceeded_windows": 2,
+        "required_exceeded_windows": 2,
+        "drop_allowed": true,
+        "score": 90
       },
       "mitigation": {
-        "action": "RATE_LIMIT",
+        "action": "DROP",
         "target": "flow",
         "match": {
           "eth_type": 2048,
           "ipv4_src": "10.0.0.2",
           "ipv4_dst": "10.0.0.4",
-          "ip_proto": 1
+          "ip_proto": 17,
+          "udp_dst": 9999
         },
-        "priority": 500,
-        "idle_timeout": 60,
-        "hard_timeout": 300,
-        "rate_limit_pps": 100
+        "priority": 700,
+        "idle_timeout": 30,
+        "hard_timeout": 120
       }
     }
   ]
@@ -324,26 +346,28 @@ POST /api/security/events
 | `dedup_key` | `string` | O | 중복 억제 기준 키. 기본값은 `event_fingerprint` |
 | `timestamp` | `datetime` | O | 이벤트 발생/생성 시각 |
 | `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `DDOS` |
-| `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD` |
-| `severity` | `string` | O | 위험도. 현재 `medium`, `high` |
+| `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `FLOOD` |
+| `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD` |
+| `severity` | `string` | O | 위험도. 현재 `low`, `medium`, `high`, `critical` |
 | `confidence` | `string` | O | 탐지 신뢰도. 현재 `medium`, `high` |
 | `status` | `string` | O | 이벤트 상태. 최초 생성값은 `detected` |
 | `src_ip` | `string` | O | 공격/의심 트래픽 출발지 IP |
 | `dst_ip` | `string` | O | 공격/의심 트래픽 대상 IP |
 | `protocol` | `string` | O | 프로토콜 |
 | `detection_rule` | `string` | O | 적용된 탐지 기준 이름 |
-| `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `alert`, `rate_limit` |
-| `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2` |
+| `recommended_action` | `string` | O | 권장 대응. 현재 `log`, `alert`, `rate_limit`, `drop` |
+| `response_level` | `string` | O | 대응 레벨. 현재 `L0`, `L1`, `L2`, `L3` |
 | `evidence` | `object` | O | 탐지 유형별 상세 근거 |
-| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 후보. `PORT_SCAN`과 `L1` 이벤트는 `null`, `ICMP_FLOOD` L2는 `RATE_LIMIT` 후보 |
+| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 후보. `alert` 이하는 `null`, `rate_limit`은 `RATE_LIMIT`, `drop`은 `DROP` 후보 |
 
 ### 탐지별 evidence
 
 | attack_type | detection_rule | 주요 evidence |
 |---|---|---|
-| `PORT_SCAN` | `tcp_syn_unique_ports` | `matched_conditions`, `window_seconds`, `unique_dst_port_count`, `unique_dst_ports`, `syn_count`, `score` |
-| `ICMP_FLOOD` | `icmp_pps_threshold` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `pps_threshold`, `min_packet_count`, `high_pps_threshold`, `score` |
+| `PORT_SCAN` | `tcp_syn_port_scan` | `matched_conditions`, `window_seconds`, `scan_type`, `unique_dst_port_count`, `unique_dst_ports`, `target_count`, `target_ips`, `syn_count`, `score` |
+| `ICMP_FLOOD` | `icmp_flood_rate_threshold` | `matched_conditions`, `window_seconds`, `icmp_type`, `packet_count`, `pps`, `bps`, `pps_threshold`, `high_pps_threshold`, `critical_pps_threshold`, `exceeded_windows`, `score` |
+| `UDP_FLOOD` | `udp_flood_rate_threshold` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `bps`, `destination_port`, `unique_dst_port_count`, `dominant_dst_port`, `dominant_port_ratio`, `pps_threshold`, `bps_threshold`, `exceeded_windows`, `score` |
+| `SYN_FLOOD` | `tcp_syn_single_service_rate` | `matched_conditions`, `window_seconds`, `destination_port`, `syn_count`, `response_count`, `syn_response_ratio`, `unique_dst_port_count`, `score` |
 
 ### 백엔드 처리
 
@@ -435,7 +459,9 @@ POST /api/analyzer/status
 | HTTP 오류 응답 | 콘솔에 HTTP status 로그 출력, `False` 반환 |
 | 기타 요청 오류 | 콘솔에 일반 요청 오류 로그 출력, `False` 반환 |
 
-패킷 요약과 탐지 요약 둘 다 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 둘 중 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
+패킷 요약, 탐지 요약, 보안 이벤트 전송이 모두 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics or security events"`로 상태를 갱신한다.
+
+보안 이벤트 전송이 실패하면 이미 만든 이벤트를 메모리 대기 큐에 남겨 다음 분석 구간에서 다시 전송한다. 그래서 Port Scan처럼 탐지기 내부 cooldown이 있는 항목도 백엔드 장애 때문에 이벤트가 바로 유실되지 않는다. 큐 크기를 넘어서 밀려난 이벤트만 중복 억제 기록에서 제거해 이후 분석 구간에서 다시 만들어질 수 있게 한다.
 
 ## 추가 예정
 

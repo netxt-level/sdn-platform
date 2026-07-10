@@ -6,7 +6,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 | 영역 | 경로 | 진행 상태 |
 |---|---|---|
-| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ICMP Flood/Port Scan 탐지, 백엔드 전송 구현 |
+| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ICMP/UDP/SYN Flood와 Port Scan 탐지, 백엔드 전송 구현 |
 | 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회/생성 API, WebSocket broadcast 구현 |
 | 프론트엔드 | `frontend/` | 실시간 대시보드와 보안 이벤트/경로/Flow Rule 운영 화면 구현 |
 
@@ -64,7 +64,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 
 ## 구현된 기능
 
-보안 탐지 항목과 대응 레벨 정책은 `SECURITY_DETECTION_POLICY.md`를 기준으로 한다.
+보안 탐지 항목과 대응 레벨 정책은 `analyzer/README_SECURITY_DETECTION.md`를 기준으로 한다.
 
 ### 분석 서버
 
@@ -75,6 +75,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 출발지/목적지/프로토콜별 host traffic 집계
 - 전체 패킷 수와 전체 bit 수 계산
 - ICMP pps 기반 ICMP Flood 탐지
+- UDP pps/bps 기반 UDP Flood 탐지
+- 단일 서비스 집중 패턴 기반 SYN Flood 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
 - 분석 서버 상태 주기적 보고
 - 백엔드 전송 실패, timeout, HTTP 오류 처리
@@ -238,24 +240,36 @@ docker compose down -v
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 분석 서버 상태 전송 주기 |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
+| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `15` | Port Scan 고유 목적지 포트 임계값 |
+| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `30` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
-| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
+| `PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD` | `3` | Port Scan 수평 스캔 목적지 수 기준 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
-| `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
-| `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
-| `ICMP_HIGH_PPS_MULTIPLIER` | `3.0` | ICMP Flood high pps 배수 기준 |
-| `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | ICMP baseline 급증 배수 기준 |
-| `ICMP_BASELINE_MIN_PPS` | `100` | ICMP baseline 급증 최소 pps 기준 |
-| `ICMP_ALERT_COOLDOWN_SEC` | `60` | ICMP Flood 중복 알림 억제 시간 |
+| `ICMP_PPS_THRESHOLD` | `150` | ICMP Flood pps 임계값 |
+| `ICMP_MIN_PACKET_COUNT` | `100` | ICMP Flood 최소 패킷 수 기준 |
+| `ICMP_HIGH_PPS_THRESHOLD` | `500` | ICMP Flood high pps 기준 |
+| `ICMP_CRITICAL_PPS_THRESHOLD` | `1000` | ICMP Flood critical pps 기준 |
+| `UDP_PPS_THRESHOLD` | `250` | UDP Flood pps 임계값 |
+| `UDP_MIN_PACKET_COUNT` | `100` | UDP Flood 최소 패킷 수 기준 |
+| `UDP_HIGH_PPS_THRESHOLD` | `800` | UDP Flood high pps 기준 |
+| `UDP_CRITICAL_PPS_THRESHOLD` | `1500` | UDP Flood critical pps 기준 |
+| `UDP_BPS_THRESHOLD` | `2000000` | UDP Flood bps 임계값 |
+| `UDP_HIGH_BPS_THRESHOLD` | `8000000` | UDP Flood high bps 기준 |
+| `UDP_CRITICAL_BPS_THRESHOLD` | `15000000` | UDP Flood critical bps 기준 |
+| `SYN_PPS_THRESHOLD` | `120` | SYN Flood pps 임계값 |
+| `SYN_MIN_COUNT` | `30` | SYN Flood 최소 SYN 수 기준 |
+| `SYN_HIGH_PPS_THRESHOLD` | `400` | SYN Flood high pps 기준 |
+| `SYN_CRITICAL_PPS_THRESHOLD` | `800` | SYN Flood critical pps 기준 |
+| `SYN_MAX_UNIQUE_PORTS` | `5` | SYN Flood로 볼 최대 목적지 포트 수 |
 | `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
 | `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
 | `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
 | `RATE_LIMIT_HARD_TIMEOUT` | `300` | Rate limit 후보 hard timeout |
 | `RATE_LIMIT_PPS` | `100` | Rate limit 후보 제한 pps |
+| `DROP_PRIORITY` | `700` | Drop 후보 flow rule 우선순위 |
+| `DROP_IDLE_TIMEOUT` | `30` | Drop 후보 idle timeout |
+| `DROP_HARD_TIMEOUT` | `120` | Drop 후보 hard timeout |
 | `BACKEND_BASE_URL` | `http://backend:8000` | 분석 서버가 호출할 백엔드 주소 |
 | `FRONTEND_PORT` | `3000` | 프론트엔드 호스트 포트 |
 | `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite가 사용할 내부 백엔드 주소 |
