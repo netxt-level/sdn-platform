@@ -56,13 +56,28 @@
 
 ```http
 GET /health
+GET /health/live
+GET /health/ready
 ```
+
+`/health`와 `/health/live`는 백엔드 프로세스가 살아 있는지 확인한다. `/health/ready`는 PostgreSQL, InfluxDB, Elasticsearch 연결 가능 여부를 함께 확인한다.
 
 ### Response Body
 
 ```json
 {
   "status": "ok"
+}
+```
+
+Readiness가 일부 실패하면 HTTP `503`과 함께 아래처럼 반환한다.
+
+```json
+{
+  "status": "degraded",
+  "postgres": "ok",
+  "influxdb": "error",
+  "elasticsearch": "ok"
 }
 ```
 
@@ -90,7 +105,7 @@ PostgreSQL `sdn_controller.analyzer`에 저장된 분석 서버 상태를 조회
     {
       "analyzer_id": "analyzer-1",
       "status": "running",
-      "interface": "en0",
+      "interface": "eth0",
       "capture_active": true,
       "backend_connected": true,
       "last_packet_at": "2026-05-24T10:00:04+00:00",
@@ -124,6 +139,7 @@ POST /api/analyzer/status
 
 - PostgreSQL `sdn_controller.analyzer`에 upsert한다.
 - WebSocket으로 `{"type":"analyzer_status","data":...}` 메시지를 broadcast한다.
+- PostgreSQL에는 기존 분석 서버 상태 컬럼을 저장하고, 보안 이벤트 대기 수처럼 실시간 확인용 성격이 강한 런타임 지표는 WebSocket payload로 전달한다.
 
 ### 2.3 패킷 요약 수신
 
@@ -143,7 +159,7 @@ POST /api/analyzer/packet-summary
 
 ### Side Effects
 
-- InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다. `host_traffic`은 `src_ip`, `src_port`, `dst_ip`, `dst_port`, `protocol` 기준의 집계 트래픽을 저장한다.
+- InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다. `host_traffic`은 `src_ip`, `dst_ip`, `protocol` 기준으로 합산하고, 대표 `src_port`와 `dst_port`는 field로 저장한다.
 - WebSocket으로 `{"type":"packet_summary","data":...}` 메시지를 broadcast한다.
 
 ### 2.4 탐지 요약 수신
@@ -383,13 +399,15 @@ POST /api/flows
 
 | 이름 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---:|---|---|
-| `switch_id` | `string \| null` | X | `null` | 적용 대상 스위치 ID |
-| `match` | `object` | O | `{}` | flow match 조건 |
-| `action` | `string` | O | 없음 | `RATE_LIMIT`, `DROP`, `output:s2` 등 |
+| `switch_id` | `string` | O | 없음 | 적용 대상 스위치 ID |
+| `match` | `object` | O | 없음 | IPv4 OpenFlow match 조건. 허용 필드는 `eth_type`, `ipv4_src`, `ipv4_dst`, `ip_proto`, `tcp_src`, `tcp_dst`, `udp_src`, `udp_dst`, `icmpv4_type`, `icmpv4_code` |
+| `action` | `string` | O | 없음 | `RATE_LIMIT`, `DROP`, `output:s2` 형식 |
 | `priority` | `integer` | X | `100` | 우선순위. `1 <= priority <= 65535` |
 | `idle_timeout` | `integer \| null` | X | `null` | idle timeout |
 | `hard_timeout` | `integer \| null` | X | `null` | hard timeout |
 | `rate_limit_pps` | `integer \| null` | X | `null` | rate limit pps |
+
+`match`에 정의되지 않은 필드가 있거나, TCP/UDP/ICMP 조건과 `ip_proto`가 맞지 않으면 `422`로 거절한다. `DROP`과 `RATE_LIMIT`은 `eth_type` 또는 `ip_proto`만 있는 넓은 match를 허용하지 않고, IP 주소, 포트, ICMP 타입 중 하나 이상의 구체적인 조건이 필요하다.
 
 ### Response Body
 
@@ -466,12 +484,14 @@ POST /api/security/events
 
 ### Side Effects
 
-- Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
+- Elasticsearch `sdn-security-events` 인덱스에 `event_id`를 문서 `_id`로 사용해 bulk 저장한다. 같은 이벤트가 재전송되면 새 문서를 만들지 않고 기존 문서를 갱신한다.
 - PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
 - 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 
-`security_responses`는 `event_fingerprint + response_action`, `flow_rules`는 `event_fingerprint + action` 기준으로 중복 생성을 방지한다.
+`SecurityEvent`는 현재 구현된 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`와 IPv4 주소만 허용한다. `security_responses`는 `event_fingerprint + response_action`, `flow_rules`는 `event_fingerprint + action` 기준으로 중복 생성을 방지한다. 같은 match에 이미 더 강하거나 같은 수준의 flow rule 후보가 있으면 새 후보를 추가하지 않고 기존 후보를 재사용한다.
+
+수동 Flow Rule 생성 요청은 `switch_id`가 필요하다. `DROP`과 `RATE_LIMIT`은 `eth_type`이나 `ip_proto`만 있는 넓은 match를 허용하지 않고, IP 주소, 포트, ICMP 타입 중 하나 이상의 구체적인 조건이 있어야 한다.
 
 ### 보안 이벤트 목록 조회
 
@@ -588,7 +608,7 @@ PostgreSQL `sdn_controller.security_responses`에 저장된 최신 보안 대응
 WS /ws/analyzer
 ```
 
-백엔드가 분석 서버 수신 API에서 받은 이벤트를 실시간으로 broadcast한다. 클라이언트가 보낸 text message는 현재 별도 처리 없이 receive loop 유지에만 사용된다.
+백엔드가 분석 서버 수신 API에서 받은 이벤트를 실시간으로 broadcast한다. 여러 클라이언트에는 병렬로 전송하며, 전송 실패가 발생한 연결만 정리한다. 클라이언트가 보낸 text message는 현재 별도 처리 없이 receive loop 유지에만 사용된다.
 
 ### Server -> Client Messages
 
@@ -601,11 +621,15 @@ WS /ws/analyzer
     "timestamp": "2026-05-24T10:00:05+00:00",
     "analyzer_id": "analyzer-1",
     "status": "running",
-    "interface": "en0",
+    "interface": "eth0",
     "capture_active": true,
     "backend_connected": true,
     "last_packet_at": "2026-05-24T10:00:04+00:00",
     "last_summary_sent_at": "2026-05-24T10:00:05+00:00",
+    "pending_security_event_count": 0,
+    "dropped_security_event_count": 0,
+    "packet_buffer_dropped_count": 0,
+    "last_security_event_send_failure": null,
     "error_message": null
   }
 }

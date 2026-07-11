@@ -75,11 +75,13 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 출발지/목적지/프로토콜별 host traffic 집계
 - 전체 패킷 수와 전체 bit 수 계산
 - ICMP pps 기반 ICMP Flood 탐지
-- UDP pps/bps 기반 UDP Flood 탐지
-- 단일 서비스 집중 패턴 기반 SYN Flood 탐지
+- UDP pps/bps 기반 UDP Flood 탐지. 목적지 포트별 기준과 출발지-목적지 합산 기준을 함께 사용
+- 단일/다중 서비스 SYN Flood 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
 - 분석 서버 상태 주기적 보고
 - 백엔드 전송 실패, timeout, HTTP 오류 처리
+- 분석 루프와 백엔드 전송 루프 분리
+- 분석 지연 시 패킷 버퍼 최대 크기 제한과 초과 로그 처리
 - 분석 루프/상태 전송 루프 예외 발생 시 오류 상태 기록 후 루프 유지
 
 ### 백엔드 서버
@@ -87,13 +89,14 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 분석 서버 상태 수신 및 PostgreSQL upsert
 - 패킷 요약 수신 및 InfluxDB 저장
 - 트래픽 상태 요약 수신 및 InfluxDB 저장
-- 보안 이벤트 수신 및 Elasticsearch 저장
+- 보안 이벤트 수신 및 Elasticsearch bulk 저장
 - 대시보드 조회 API 제공
 - 보안 이벤트 조회 API 제공
+- 보안 이벤트와 수동 Flow Rule 입력 검증
 - Flow 목록 조회 및 수동 Flow Rule 생성 API 제공
 - 경로 제어 상태 조회 API 제공
 - 보안 대응 내역과 flow rule 후보를 PostgreSQL에 저장
-- WebSocket으로 분석 이벤트 실시간 broadcast
+- WebSocket으로 분석 이벤트 실시간 병렬 broadcast
 
 ### 프론트엔드
 
@@ -129,6 +132,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | `GET` | `/health` | 백엔드 상태 확인 |
+| `GET` | `/health/live` | 백엔드 프로세스 생존 확인 |
+| `GET` | `/health/ready` | PostgreSQL, InfluxDB, Elasticsearch 준비 상태 확인 |
 | `GET` | `/api/analyzer/status` | 분석 서버 상태 조회 |
 | `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
 | `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
@@ -172,6 +177,7 @@ cp .env.example .env
 ```
 
 기본값은 Docker Compose 실행 기준으로 작성되어 있다. 분석 서버가 캡처할 인터페이스는 환경에 맞게 수정해야 한다.
+개인 `.env`에는 실제 비밀번호나 토큰이 들어갈 수 있으므로 Git이나 ZIP 결과물에 포함하지 않는다.
 
 ```env
 ANALYZER_INTERFACE=eth0
@@ -199,6 +205,7 @@ docker compose up --build
 
 ```bash
 curl http://localhost:8000/health
+curl http://localhost:8000/health/ready
 ```
 
 정상 응답:
@@ -208,6 +215,8 @@ curl http://localhost:8000/health
   "status": "ok"
 }
 ```
+
+저장소 중 일부가 준비되지 않으면 `/health/ready`는 `503`과 함께 `degraded` 상태를 반환한다.
 
 ### 4. 서비스 종료
 
@@ -221,6 +230,34 @@ docker compose down
 docker compose down -v
 ```
 
+## 패킷 미러링 확인
+
+Analyzer는 자신이 캡처하는 인터페이스로 들어온 패킷만 볼 수 있다. Docker 권한에 `NET_RAW`, `NET_ADMIN`이 있어도 Mininet이나 OVS 스위치의 트래픽이 자동으로 Analyzer 컨테이너에 들어오지는 않는다.
+
+SDN 공격 시나리오를 시연할 때는 다음 중 하나로 트래픽을 Analyzer가 보는 인터페이스에 전달해야 한다.
+
+- OVS Port Mirroring
+- SPAN 또는 TAP 구조
+- host network
+- veth 연결
+- 보안 분석 전용 미러링 포트
+
+OVS 미러링을 쓰는 경우에는 다음 순서로 확인한다.
+
+```bash
+ovs-vsctl list-br
+ovs-vsctl list-ports <bridge>
+ovs-vsctl list interface
+```
+
+미러 출력 포트를 정한 뒤 Analyzer의 `ANALYZER_INTERFACE`를 해당 인터페이스 이름으로 맞춘다. 시연 전에는 다음처럼 실제 패킷이 보이는지 먼저 확인한다.
+
+```bash
+tcpdump -i <analyzer-interface> -n icmp
+```
+
+공격 트래픽을 발생시켰는데 `tcpdump`에 패킷이 보이지 않으면 탐지 코드 문제가 아니라 미러링 또는 인터페이스 연결 문제일 가능성이 높다.
+
 ## 환경변수
 
 주요 환경변수는 `.env.example`에 정의되어 있다.
@@ -229,21 +266,24 @@ docker compose down -v
 |---|---|---|
 | `POSTGRES_DB` | `sdn_platform` | PostgreSQL DB 이름 |
 | `POSTGRES_USER` | `sdn_user` | PostgreSQL 사용자 |
-| `POSTGRES_PASSWORD` | `sdn_password` | PostgreSQL 비밀번호 |
+| `POSTGRES_PASSWORD` | `change_me_postgres_password` | PostgreSQL 예시 비밀번호. 실제 값은 개인 `.env`에서 변경 |
 | `POSTGRES_HOST_PORT` | `5433` | 호스트에서 접근할 PostgreSQL 포트 |
 | `INFLUXDB_ORG` | `sdn_org` | InfluxDB organization |
 | `INFLUXDB_BUCKET` | `sdn_metrics` | InfluxDB bucket |
-| `INFLUXDB_TOKEN` | `influx_id_token` | InfluxDB admin token |
+| `INFLUXDB_TOKEN` | `change_me_influx_token` | InfluxDB 예시 admin token. 실제 값은 개인 `.env`에서 변경 |
 | `ELASTICSEARCH_HTTP_PORT` | `9200` | Elasticsearch HTTP 포트 |
 | `ANALYZER_ID` | `analyzer-1` | 분석 서버 ID |
 | `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 분석 서버 상태 전송 주기 |
+| `ANALYZER_PACKET_BUFFER_MAX_SIZE` | `100000` | 분석 지연 시 메모리에 보관할 최대 패킷 수 |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
 | `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `15` | Port Scan 고유 목적지 포트 임계값 |
 | `PORT_SCAN_SYN_COUNT_THRESHOLD` | `30` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
 | `PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD` | `3` | Port Scan 수평 스캔 목적지 수 기준 |
+| `SECURITY_TRUSTED_SOURCE_IPS` | `` | 관리 호스트 IPv4 목록. 쉼표로 여러 개 입력하며 수평 Port Scan 기준만 완화 |
+| `TRUSTED_HORIZONTAL_SCAN_THRESHOLD` | `10` | 관리 호스트의 수평 Port Scan 목적지 수 기준. 작은 토폴로지에서는 반복 SYN 기준도 함께 적용 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
 | `ICMP_PPS_THRESHOLD` | `150` | ICMP Flood pps 임계값 |
@@ -270,6 +310,8 @@ docker compose down -v
 | `DROP_PRIORITY` | `700` | Drop 후보 flow rule 우선순위 |
 | `DROP_IDLE_TIMEOUT` | `30` | Drop 후보 idle timeout |
 | `DROP_HARD_TIMEOUT` | `120` | Drop 후보 hard timeout |
+| `SECURITY_EVENT_QUEUE_MAX_SIZE` | `500` | 백엔드 전송 실패 시 보안 이벤트를 보관할 최대 개수 |
+| `SECURITY_EVENT_SEND_BATCH_SIZE` | `100` | 대기 중인 보안 이벤트를 한 번에 재전송할 개수 |
 | `BACKEND_BASE_URL` | `http://backend:8000` | 분석 서버가 호출할 백엔드 주소 |
 | `FRONTEND_PORT` | `3000` | 프론트엔드 호스트 포트 |
 | `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite가 사용할 내부 백엔드 주소 |
@@ -280,7 +322,7 @@ docker compose down -v
 | 저장소 | 저장 내용 |
 |---|---|
 | PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
-| InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태 |
+| InfluxDB | 트래픽 시계열, 프로토콜 통계, 상위 host traffic, 네트워크 상태 |
 | Elasticsearch | 보안 이벤트 문서, `sdn-security-events` |
 
 Alembic migration은 `migrations/`에 있다.
@@ -291,12 +333,16 @@ Alembic migration은 `migrations/`에 있다.
 | `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
 | `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
 | `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
+| `migrations/versions/005_add_analyzer_runtime_metrics.py` | Analyzer 런타임 큐/드롭 메트릭 컬럼 추가 |
 
 ## 현재 제한 사항
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
-- `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
+- `/api/security/events`는 `event_id`를 Elasticsearch 문서 ID로 사용해 보안 이벤트를 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
 - `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다.
+- 보안 이벤트와 Flow Rule 입력은 현재 구현 범위에 맞게 IPv4, 허용 프로토콜, 허용 action, OpenFlow match 필드를 검증한다.
+- Analyzer 상태에는 보안 이벤트 대기열 수, 드롭된 이벤트 수, 패킷 버퍼 드롭 수, 마지막 보안 이벤트 전송 실패 시각을 함께 저장한다.
+- host traffic은 `src_port`와 `dst_port`를 집계 키에서 제외하고 출발지/목적지/프로토콜 단위로 합산한다. InfluxDB에서는 대표 포트를 tag가 아니라 field로 저장한다.
 - `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
 - 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
@@ -345,6 +391,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/sdn-platform-pycache python3 -m unittest discov
 ## 커밋 전 체크
 
 - `__pycache__/`, `.DS_Store`, `.next/`, `node_modules/` 같은 생성 파일은 커밋하지 않는다.
+- `.env`처럼 실제 비밀번호나 토큰이 들어갈 수 있는 파일은 커밋하거나 ZIP에 포함하지 않는다.
 - 분석 서버 payload를 수정하면 백엔드 Pydantic schema와 API 문서를 함께 확인한다.
 - 백엔드 broadcast 메시지를 수정하면 프론트엔드 `types/realtime.ts`, `hooks/useRealtime.ts`를 함께 확인한다.
 - DB 구조를 수정하면 Alembic migration을 추가한다.

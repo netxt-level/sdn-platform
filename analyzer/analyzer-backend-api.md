@@ -25,12 +25,15 @@
 | `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
+| `ANALYZER_PACKET_BUFFER_MAX_SIZE` | `100000` | 분석 지연 시 메모리에 보관할 최대 패킷 수 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
 | `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `15` | Port Scan 고유 목적지 포트 임계값 |
 | `PORT_SCAN_SYN_COUNT_THRESHOLD` | `30` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
 | `PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD` | `3` | Port Scan 수평 스캔 목적지 수 기준 |
+| `SECURITY_TRUSTED_SOURCE_IPS` | `` | 관리 호스트 IPv4 목록. 쉼표로 여러 개 입력하며 수평 Port Scan 기준만 완화 |
+| `TRUSTED_HORIZONTAL_SCAN_THRESHOLD` | `10` | 관리 호스트의 수평 Port Scan 목적지 수 기준. 작은 토폴로지에서는 반복 SYN 기준도 함께 적용 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
 | `ICMP_PPS_THRESHOLD` | `150` | ICMP Flood pps 임계값 |
@@ -57,6 +60,8 @@
 | `DROP_PRIORITY` | `700` | Drop 후보 flow rule 우선순위 |
 | `DROP_IDLE_TIMEOUT` | `30` | Drop 후보 idle timeout |
 | `DROP_HARD_TIMEOUT` | `120` | Drop 후보 hard timeout |
+| `SECURITY_EVENT_QUEUE_MAX_SIZE` | `500` | 백엔드 전송 실패 시 보안 이벤트를 보관할 최대 개수 |
+| `SECURITY_EVENT_SEND_BATCH_SIZE` | `100` | 대기 중인 보안 이벤트를 한 번에 재전송할 개수 |
 
 ## 1. 패킷 요약 전달
 
@@ -132,7 +137,7 @@ POST /api/analyzer/packet-summary
 
 ### 백엔드 처리
 
-- InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다. `host_traffic`은 `src_ip`, `src_port`, `dst_ip`, `dst_port`, `protocol` 기준으로 조회할 수 있게 저장한다.
+- InfluxDB에 `traffic_summary`, `protocol_stats`, `host_traffic` measurement로 저장한다. `host_traffic`은 `src_ip`, `dst_ip`, `protocol` 기준으로 합산하고, 대표 `src_port`와 `dst_port`는 field로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 아래 메시지를 broadcast한다.
 
 ```json
@@ -228,6 +233,7 @@ POST /api/security/events
 ```
 
 분석 서버가 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`다.
+현재 대응 후보는 IPv4 OpenFlow match 기준으로 생성하므로, 잘못된 IP 주소와 IPv6 주소는 보안 이벤트 변환 단계에서 제외한다.
 
 ### Request Body
 
@@ -297,17 +303,21 @@ POST /api/security/events
         "packet_count": 2000,
         "pps": 2000,
         "bps": 16000000,
+        "aggregation_scope": "service",
         "pps_threshold": 250,
         "bps_threshold": 2000000,
         "high_pps_threshold": 800,
         "critical_pps_threshold": 1500,
         "unique_dst_port_count": 1,
+        "sample_dst_ports": [9999],
         "destination_port": 9999,
         "dominant_dst_port": 9999,
         "dominant_port_ratio": 1.0,
         "exceeded_windows": 2,
         "required_exceeded_windows": 2,
         "drop_allowed": true,
+        "mitigation_stage": "escalated",
+        "escalation_reason": "repeated threshold exceeded",
         "score": 90
       },
       "mitigation": {
@@ -349,11 +359,11 @@ POST /api/security/events
 | `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `FLOOD` |
 | `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD` |
 | `severity` | `string` | O | 위험도. 현재 `low`, `medium`, `high`, `critical` |
-| `confidence` | `string` | O | 탐지 신뢰도. 현재 `medium`, `high` |
+| `confidence` | `string` | O | 탐지 신뢰도. 현재 `low`, `medium`, `high` |
 | `status` | `string` | O | 이벤트 상태. 최초 생성값은 `detected` |
-| `src_ip` | `string` | O | 공격/의심 트래픽 출발지 IP |
-| `dst_ip` | `string` | O | 공격/의심 트래픽 대상 IP |
-| `protocol` | `string` | O | 프로토콜 |
+| `src_ip` | `string` | O | 공격/의심 트래픽 출발지 IPv4 |
+| `dst_ip` | `string` | O | 공격/의심 트래픽 대상 IPv4 |
+| `protocol` | `string` | O | 프로토콜. 현재 `ICMP`, `UDP`, `TCP` |
 | `detection_rule` | `string` | O | 적용된 탐지 기준 이름 |
 | `recommended_action` | `string` | O | 권장 대응. 현재 `log`, `alert`, `rate_limit`, `drop` |
 | `response_level` | `string` | O | 대응 레벨. 현재 `L0`, `L1`, `L2`, `L3` |
@@ -366,18 +376,23 @@ POST /api/security/events
 |---|---|---|
 | `PORT_SCAN` | `tcp_syn_port_scan` | `matched_conditions`, `window_seconds`, `scan_type`, `unique_dst_port_count`, `unique_dst_ports`, `target_count`, `target_ips`, `syn_count`, `score` |
 | `ICMP_FLOOD` | `icmp_flood_rate_threshold` | `matched_conditions`, `window_seconds`, `icmp_type`, `packet_count`, `pps`, `bps`, `pps_threshold`, `high_pps_threshold`, `critical_pps_threshold`, `exceeded_windows`, `score` |
-| `UDP_FLOOD` | `udp_flood_rate_threshold` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `bps`, `destination_port`, `unique_dst_port_count`, `dominant_dst_port`, `dominant_port_ratio`, `pps_threshold`, `bps_threshold`, `exceeded_windows`, `score` |
-| `SYN_FLOOD` | `tcp_syn_single_service_rate` | `matched_conditions`, `window_seconds`, `destination_port`, `syn_count`, `response_count`, `syn_response_ratio`, `unique_dst_port_count`, `score` |
+| `UDP_FLOOD` | `udp_flood_rate_threshold`, `udp_flood_rate_threshold_pair_total` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `bps`, `aggregation_scope`, `destination_port`, `unique_dst_port_count`, `sample_dst_ports`, `dominant_dst_port`, `dominant_port_ratio`, `pps_threshold`, `bps_threshold`, `exceeded_windows`, `mitigation_stage`, `escalation_reason`, `score` |
+| `SYN_FLOOD` | `tcp_syn_single_service_rate`, `tcp_syn_multi_service_rate` | `matched_conditions`, `window_seconds`, `destination_port`, `syn_count`, `response_count`, `syn_pps`, `syn_response_ratio`, `unique_dst_port_count`, `sample_dst_ports`, `related_detections`, `mitigation_stage`, `escalation_reason`, `score` |
+
+UDP Flood의 `aggregation_scope`가 `service`이면 특정 목적지 포트 기준 탐지이며 `destination_port`가 포함된다. `pair`이면 여러 목적지 포트로 분산된 UDP 트래픽을 출발지-목적지 기준으로 합산한 탐지라서 `destination_port`가 없을 수 있다.
+
+SYN Flood의 `tcp_syn_multi_service_rate`는 여러 목적지 포트에 나뉜 SYN이 출발지-목적지 전체 기준으로 높을 때 생성된다. 같은 흐름에서 Port Scan도 함께 잡히면 Port Scan 이벤트는 별도 대응 후보로 보내지 않고 `related_detections`에 요약된다.
 
 ### 백엔드 처리
 
 백엔드는 `POST /api/security/events` 요청을 검증한 뒤 이벤트 단위로 처리한다.
 
-- `backend/app/schemas/security.py`의 `SecurityEventPayload` / `SecurityEvent` 스키마로 요청을 검증한다.
-- Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
+- `backend/app/schemas/security.py`의 `SecurityEventsRequest` / `SecurityEvent` 스키마로 요청을 검증한다.
+- 현재 구현된 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`와 IPv4 주소만 허용한다.
+- Elasticsearch `sdn-security-events` 인덱스에 `event_id`를 문서 `_id`로 사용해 bulk 저장한다. 같은 이벤트가 재전송되면 기존 문서를 갱신한다.
 - PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
 - 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
-- WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
+- WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 병렬 broadcast한다.
 - 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
 
 ## 4. 분석 서버 상태 전달
@@ -395,11 +410,15 @@ POST /api/analyzer/status
   "timestamp": "2026-05-24T10:00:05+00:00",
   "analyzer_id": "analyzer-1",
   "status": "running",
-  "interface": "en0",
+  "interface": "eth0",
   "capture_active": true,
   "backend_connected": true,
   "last_packet_at": "2026-05-24T10:00:04+00:00",
   "last_summary_sent_at": "2026-05-24T10:00:05+00:00",
+  "pending_security_event_count": 0,
+  "dropped_security_event_count": 0,
+  "packet_buffer_dropped_count": 0,
+  "last_security_event_send_failure": null,
   "error_message": null
 }
 ```
@@ -416,6 +435,10 @@ POST /api/analyzer/status
 | `backend_connected` | `boolean` | O | 최근 백엔드 전송 성공 여부 |
 | `last_packet_at` | `datetime \| null` | X | 마지막 패킷 수신 시각 |
 | `last_summary_sent_at` | `datetime \| null` | X | 마지막 요약 전송 성공 시각 |
+| `pending_security_event_count` | `integer` | X | 백엔드 전송 대기 중인 보안 이벤트 수 |
+| `dropped_security_event_count` | `integer` | X | 대기 큐 초과로 제거된 보안 이벤트 누적 수 |
+| `packet_buffer_dropped_count` | `integer` | X | 패킷 버퍼 초과로 제거된 패킷 누적 수 |
+| `last_security_event_send_failure` | `datetime \| null` | X | 마지막 보안 이벤트 전송 실패 시각 |
 | `error_message` | `string \| null` | X | 오류 메시지 |
 
 ### Response Body
@@ -438,7 +461,7 @@ POST /api/analyzer/status
     "timestamp": "2026-05-24T10:00:05+00:00",
     "analyzer_id": "analyzer-1",
     "status": "running",
-    "interface": "en0",
+    "interface": "eth0",
     "capture_active": true,
     "backend_connected": true,
     "last_packet_at": "2026-05-24T10:00:04+00:00",
@@ -461,7 +484,8 @@ POST /api/analyzer/status
 
 패킷 요약, 탐지 요약, 보안 이벤트 전송이 모두 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics or security events"`로 상태를 갱신한다.
 
-보안 이벤트 전송이 실패하면 이미 만든 이벤트를 메모리 대기 큐에 남겨 다음 분석 구간에서 다시 전송한다. 그래서 Port Scan처럼 탐지기 내부 cooldown이 있는 항목도 백엔드 장애 때문에 이벤트가 바로 유실되지 않는다. 큐 크기를 넘어서 밀려난 이벤트만 중복 억제 기록에서 제거해 이후 분석 구간에서 다시 만들어질 수 있게 한다.
+보안 이벤트 전송이 실패하면 이미 만든 이벤트를 메모리 대기 큐에 남겨 다음 분석 구간에서 다시 전송한다. 재전송은 기본 100개씩 나누어 보내며, 큐는 기본 500개까지만 보관한다. 그래서 Port Scan처럼 탐지기 내부 cooldown이 있는 항목도 백엔드 장애 때문에 이벤트가 바로 유실되지 않는다. 큐 크기를 넘어서 밀려난 이벤트는 로그로 남기고 중복 억제 기록에서 제거해 이후 분석 구간에서 다시 만들어질 수 있게 한다.
+
 
 ## 추가 예정
 

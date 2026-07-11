@@ -1,10 +1,13 @@
 import logging
 import threading
 import time
+from collections import deque
+from queue import Empty, Full, Queue
 
 from app.analyzer_status import AnalyzerStatus
 from app.backend_client import BackendClient
 from app.config import load_config
+from app.detection.correlation import correlate_detections
 from app.detection.flood import FloodThresholds, IcmpFloodDetector, UdpFloodDetector
 from app.detection.port_scan import PortScanDetector
 from app.detection.security_events import (
@@ -30,13 +33,21 @@ ANALYZER_ID = config.analyzer_id
 INTERFACE = config.interface
 WINDOW_SEC = config.window_sec
 STATUS_INTERVAL_SEC = config.status_interval_sec
+PACKET_BUFFER_MAX_SIZE = config.packet_buffer_max_size
 BACKEND_BASE_URL = config.backend_base_url
+SECURITY_EVENT_SEND_BATCH_SIZE = config.security_event_send_batch_size
+BACKEND_SEND_QUEUE_MAX_SIZE = max(10, config.security_event_queue_max_size)
 
 # 아래 객체들은 캡처, 분석, 전송 루프가 공유하는 런타임 구성요소다.
 # 캡처 스레드가 쌓고 분석 스레드가 비우는 공유 패킷 버퍼
-packets = []
+packets = deque(maxlen=PACKET_BUFFER_MAX_SIZE)
 packets_lock = threading.Lock()
-pending_security_events = PendingSecurityEventQueue(max_size=500)
+packet_buffer_dropped_count = 0
+pending_security_events = PendingSecurityEventQueue(
+    max_size=config.security_event_queue_max_size,
+)
+pending_security_events_lock = threading.Lock()
+backend_send_queue = Queue(maxsize=BACKEND_SEND_QUEUE_MAX_SIZE)
 
 # 패킷 목록을 백엔드 전송용 packet-summary payload로 변환
 summary_builder = PacketSummaryBuilder(
@@ -81,6 +92,8 @@ port_scan_detector = PortScanDetector(
     multi_target_window_sec=config.port_scan_multi_target_window_sec,
     high_unique_dst_port_threshold=config.port_scan_high_unique_dst_port_threshold,
     horizontal_target_threshold=config.port_scan_horizontal_target_threshold,
+    trusted_source_ips=config.security_trusted_source_ips,
+    trusted_horizontal_target_threshold=config.trusted_horizontal_scan_threshold,
     alert_cooldown_sec=config.port_scan_alert_cooldown_sec,
 )
 
@@ -107,7 +120,8 @@ udp_flood_detector = UdpFloodDetector(
     )
 )
 
-# SYN Flood는 Port Scan과 겹치지 않도록 단일 서비스 집중 패턴만 본다.
+# SYN Flood는 단일 서비스 집중과 다중 서비스 SYN 폭주를 함께 본다.
+# Port Scan과 겹치는 경우에는 correlation 단계에서 더 강한 대응 하나로 정리한다.
 syn_flood_detector = SynFloodDetector(
     pps_threshold=config.syn_pps_threshold,
     high_pps_threshold=config.syn_high_pps_threshold,
@@ -119,6 +133,8 @@ syn_flood_detector = SynFloodDetector(
 
 # packet_capture가 패킷을 하나 받을 때마다 호출하는 callback
 def handle_packet(packet):
+    global packet_buffer_dropped_count
+
     metadata = parse_packet(packet)
 
     # 파싱할 수 없는 패킷은 집계 대상에서 제외
@@ -129,70 +145,127 @@ def handle_packet(packet):
 
     # 캡처 callback과 분석 루프가 동시에 접근하므로 lock으로 보호
     with packets_lock:
+        if len(packets) >= PACKET_BUFFER_MAX_SIZE:
+            packet_buffer_dropped_count += 1
+            if (
+                packet_buffer_dropped_count == 1
+                or packet_buffer_dropped_count % 1000 == 0
+            ):
+                logger.warning(
+                    "패킷 버퍼 초과로 오래된 패킷이 제거되었습니다. 누적 제거 수=%d",
+                    packet_buffer_dropped_count,
+                )
         packets.append(metadata)
 
 
 def queue_security_events(events):
     """백엔드 전송 전 보안 이벤트를 메모리 대기 큐에 저장한다."""
 
-    dropped_events = pending_security_events.add(events)
+    with pending_security_events_lock:
+        dropped_events = pending_security_events.add(events)
     if dropped_events:
+        logger.warning(
+            "보안 이벤트 대기 큐 초과로 %d개 이벤트가 제거되었습니다.",
+            len(dropped_events),
+        )
         security_event_builder.forget_events(dropped_events)
 
 
 def send_pending_security_events(timestamp):
     """전송 실패로 남아 있는 보안 이벤트를 다음 분석 주기에 다시 전송한다."""
 
-    if len(pending_security_events) == 0:
-        return True
+    with pending_security_events_lock:
+        if len(pending_security_events) == 0:
+            return True
 
-    payload = pending_security_events.payload(
-        timestamp=timestamp,
-        analyzer_id=ANALYZER_ID,
-    )
+        batch = pending_security_events.peek_batch(SECURITY_EVENT_SEND_BATCH_SIZE)
+        payload = pending_security_events.payload(
+            timestamp=timestamp,
+            analyzer_id=ANALYZER_ID,
+            events=batch,
+        )
 
     try:
         sent = backend_client.send_security_events(payload)
     except Exception as exc:
         analyzer_status.mark_backend_failed("failed to send security events")
+        analyzer_status.mark_security_event_send_failed()
         logger.exception("security events 전송 중 예외가 발생했습니다: %s", exc)
         return False
 
     if sent:
-        pending_security_events.clear()
+        with pending_security_events_lock:
+            pending_security_events.remove_sent(batch)
         return True
 
     analyzer_status.mark_backend_failed("failed to send security events")
+    analyzer_status.mark_security_event_send_failed()
     return False
 
 
-# WINDOW_SEC마다 패킷 버퍼를 비우고 요약/탐지 결과를 백엔드로 전송
+def enqueue_backend_result(result):
+    """분석 결과를 전송 큐에 넣는다. 큐가 가득 차면 오래된 요약을 버리고 최신 결과를 유지한다."""
+
+    try:
+        backend_send_queue.put_nowait(result)
+        return
+    except Full:
+        pass
+
+    try:
+        backend_send_queue.get_nowait()
+        backend_send_queue.task_done()
+    except Empty:
+        pass
+
+    try:
+        backend_send_queue.put_nowait(result)
+        logger.warning("백엔드 전송 큐가 가득 차 오래된 분석 결과를 제거했습니다.")
+    except Full:
+        logger.warning("백엔드 전송 큐가 가득 차 최신 분석 결과를 넣지 못했습니다.")
+
+
+# WINDOW_SEC마다 패킷 버퍼를 비우고 요약/탐지 결과를 백엔드 전송 큐로 넘긴다.
 def analysis_loop():
+    last_snapshot_at = time.monotonic()
+
     while True:
         try:
             time.sleep(WINDOW_SEC)
+            snapshot_at = time.monotonic()
+            actual_window_sec = max(snapshot_at - last_snapshot_at, 0.001)
+            last_snapshot_at = snapshot_at
 
             # 현재 윈도우의 패킷만 분석하기 위해 snapshot을 만든 뒤 버퍼를 초기화
             with packets_lock:
                 packets_snapshot = list(packets)
                 packets.clear()
 
+            if actual_window_sec > WINDOW_SEC * 2:
+                logger.warning(
+                    "분석 주기가 지연되었습니다. 기준 %.2f초, 실제 %.2f초",
+                    WINDOW_SEC,
+                    actual_window_sec,
+                )
+
             # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
             port_scan_alerts = port_scan_detector.detect(packets_snapshot)
             security_detections = []
             security_detections.extend(port_scan_alerts)
             security_detections.extend(
-                icmp_flood_detector.detect(packets_snapshot, WINDOW_SEC)
+                icmp_flood_detector.detect(packets_snapshot, actual_window_sec)
             )
             security_detections.extend(
-                udp_flood_detector.detect(packets_snapshot, WINDOW_SEC)
+                udp_flood_detector.detect(packets_snapshot, actual_window_sec)
             )
             security_detections.extend(
-                syn_flood_detector.detect(packets_snapshot, WINDOW_SEC)
+                syn_flood_detector.detect(packets_snapshot, actual_window_sec)
             )
+            security_detections = correlate_detections(security_detections)
 
             packet_summary = summary_builder.build_packet_summary(
                 packets_snapshot,
+                window_sec=actual_window_sec,
             )
 
             # traffic stats는 네트워크 전체 트래픽 상태만 포함한다.
@@ -208,26 +281,13 @@ def analysis_loop():
             )
             queue_security_events(security_events["events"])
 
-            # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
-            packet_summary_sent = backend_client.send_packet_summary(
-                packet_summary
+            enqueue_backend_result(
+                {
+                    "packet_summary": packet_summary,
+                    "traffic_stats": traffic_stats,
+                    "security_events_timestamp": security_events["timestamp"],
+                }
             )
-
-            traffic_stats_sent = backend_client.send_traffic_stats(
-                traffic_stats
-            )
-
-            security_events_sent = send_pending_security_events(
-                security_events["timestamp"]
-            )
-
-            # 요약과 보안 이벤트가 모두 전송된 경우에만 백엔드 연결 상태를 정상으로 표시
-            if packet_summary_sent and traffic_stats_sent and security_events_sent:
-                analyzer_status.mark_summary_sent()
-            else:
-                analyzer_status.mark_backend_failed(
-                    "failed to send analyzer metrics or security events"
-                )
 
         except Exception as exc:
             # 탐지 로직 예외로 분석 스레드가 죽지 않도록 오류 상태를 남기고 다음 윈도우로 넘어간다.
@@ -236,12 +296,48 @@ def analysis_loop():
             logger.exception(error_message)
 
 
+def backend_sender_loop():
+    while True:
+        result = backend_send_queue.get()
+        try:
+            packet_summary_sent = backend_client.send_packet_summary(
+                result["packet_summary"]
+            )
+            traffic_stats_sent = backend_client.send_traffic_stats(
+                result["traffic_stats"]
+            )
+            security_events_sent = send_pending_security_events(
+                result["security_events_timestamp"]
+            )
+
+            if packet_summary_sent and traffic_stats_sent and security_events_sent:
+                analyzer_status.mark_summary_sent()
+            else:
+                analyzer_status.mark_backend_failed(
+                    "failed to send analyzer metrics or security events"
+                )
+        except Exception as exc:
+            analyzer_status.mark_backend_failed("backend sender loop failed")
+            logger.exception("backend sender loop failed: %s", exc)
+        finally:
+            backend_send_queue.task_done()
+
+
 # STATUS_INTERVAL_SEC마다 분석 서버의 현재 상태를 백엔드로 보고
 def status_loop():
     while True:
         try:
             time.sleep(STATUS_INTERVAL_SEC)
 
+            with pending_security_events_lock:
+                pending_event_count = len(pending_security_events)
+                dropped_event_count = pending_security_events.dropped_count
+
+            analyzer_status.update_runtime_metrics(
+                pending_security_event_count=pending_event_count,
+                dropped_security_event_count=dropped_event_count,
+                packet_buffer_dropped_count=packet_buffer_dropped_count,
+            )
             status_sent = backend_client.send_analyzer_status(
                 analyzer_status.to_dict()
             )
@@ -266,6 +362,11 @@ if __name__ == "__main__":
         # 분석과 상태 보고는 캡처가 막히지 않도록 daemon thread에서 수행
         threading.Thread(
             target=analysis_loop,
+            daemon=True,
+        ).start()
+
+        threading.Thread(
+            target=backend_sender_loop,
             daemon=True,
         ).start()
 

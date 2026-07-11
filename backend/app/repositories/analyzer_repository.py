@@ -32,6 +32,12 @@ def _to_dict(analyzer: Analyzer) -> dict:
         "last_packet_at": analyzer.last_packet_at,
         "last_summary_sent_at": analyzer.last_summary_sent_at,
         "error_message": analyzer.error_message,
+        "pending_security_event_count": analyzer.pending_security_event_count,
+        "dropped_security_event_count": analyzer.dropped_security_event_count,
+        "packet_buffer_dropped_count": analyzer.packet_buffer_dropped_count,
+        "last_security_event_send_failure": (
+            analyzer.last_security_event_send_failure
+        ),
         "reported_at": analyzer.reported_at,
         "created_at": analyzer.created_at,
         "updated_at": analyzer.updated_at,
@@ -58,6 +64,18 @@ class AnalyzerRepository:
                 payload.get("last_summary_sent_at"),
             )
             analyzer.error_message = payload.get("error_message")
+            analyzer.pending_security_event_count = int(
+                payload.get("pending_security_event_count") or 0
+            )
+            analyzer.dropped_security_event_count = int(
+                payload.get("dropped_security_event_count") or 0
+            )
+            analyzer.packet_buffer_dropped_count = int(
+                payload.get("packet_buffer_dropped_count") or 0
+            )
+            analyzer.last_security_event_send_failure = _parse_datetime(
+                payload.get("last_security_event_send_failure")
+            )
             analyzer.reported_at = _parse_required_datetime(payload["timestamp"])
 
     def list_statuses(self, analyzer_id: str | None = None) -> list[dict]:

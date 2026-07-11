@@ -26,10 +26,11 @@ type EventScopeFilter =
   | typeof URGENT_EVENT_SCOPE
   | typeof COMPLETED_EVENT_SCOPE;
 
-function isUrgentEvent(event: { severity: string }) {
+function isUrgentEvent(event: { severity: string; status: string }) {
   return (
-    event.severity === "high" ||
-    event.severity === "critical"
+    !isCompletedEvent(event) &&
+    (event.severity === "high" ||
+      event.severity === "critical")
   );
 }
 
@@ -96,7 +97,8 @@ export default function SecurityEventsPage() {
 
       return counts;
     }, {})
-  );
+  ).sort((left, right) => right[1] - left[1]);
+  const maxAttackCount = attackCounts[0]?.[1] ?? 0;
 
   useEffect(() => {
     if (
@@ -257,7 +259,12 @@ export default function SecurityEventsPage() {
                   <strong>{formatDateTime(selectedEvent.occurred_at)}</strong>
                 </div>
                 {selectedEvent.severity === "critical" ? (
-                  <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red">
+                  <button
+                    type="button"
+                    disabled
+                    title="상태 변경 API 연동 예정"
+                    className="cursor-not-allowed rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red opacity-60"
+                  >
                     처리 확인
                   </button>
                 ) : isCompletedEvent(selectedEvent) ? (
@@ -267,9 +274,30 @@ export default function SecurityEventsPage() {
                   </div>
                 ) : (
                   <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
-                    <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red">차단</button>
-                    <button className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-center text-yellow">무시</button>
-                    <button className="rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-center text-green">해결</button>
+                    <button
+                      type="button"
+                      disabled
+                      title="컨트롤러 차단 연동 예정"
+                      className="cursor-not-allowed rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red opacity-60"
+                    >
+                      차단
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      title="상태 변경 API 연동 예정"
+                      className="cursor-not-allowed rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-center text-yellow opacity-60"
+                    >
+                      무시
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      title="상태 변경 API 연동 예정"
+                      className="cursor-not-allowed rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-center text-green opacity-60"
+                    >
+                      해결
+                    </button>
                   </div>
                 )}
               </div>
@@ -290,7 +318,12 @@ export default function SecurityEventsPage() {
                       <span>{value}</span>
                     </div>
                     <div className="h-1.5 rounded bg-sidebar">
-                      <div className="h-full rounded bg-red" style={{ width: `${Math.max(value * 8, 4)}%` }} />
+                      <div
+                        className="h-full rounded bg-red"
+                        style={{
+                          width: `${Math.min(Math.max((value / maxAttackCount) * 100, 4), 100)}%`
+                        }}
+                      />
                     </div>
                   </div>
                 ))

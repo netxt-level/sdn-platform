@@ -1,1 +1,33 @@
-Generic single-database configuration.
+SDN Platform Alembic Migration
+==============================
+
+이 디렉터리는 PostgreSQL의 `sdn_controller` 스키마와 관련 테이블을 만든다.
+
+주요 명령
+---------
+
+```bash
+alembic current
+alembic upgrade head
+alembic downgrade -1
+alembic upgrade head --sql
+```
+
+Docker Compose 실행
+-------------------
+
+`docker compose up --build`를 실행하면 `migrate` 서비스가 먼저 `alembic upgrade head`를 수행한다. Backend는 migration이 성공한 뒤 시작된다.
+
+깨끗한 DB로 다시 확인하려면 다음 순서로 실행한다.
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
+주의 사항
+---------
+
+- DB 구조를 바꾸면 반드시 새 revision 파일을 추가한다.
+- Backend readiness는 핵심 테이블 존재 여부까지 확인한다.
+- migration 실패 시 Backend가 시작되지 않는 것이 정상이다.

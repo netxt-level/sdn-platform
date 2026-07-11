@@ -83,7 +83,7 @@ export function TrafficTrend({
   const dataKey = isBps ? "bps" : "pps";
   const stroke = isBps ? "var(--green)" : "var(--accent)";
   const fillId = isBps ? "bpsFill" : "packetsFill";
-  const chartData = trafficData ?? [];
+  const chartData = useMemo(() => trafficData ?? [], [trafficData]);
   const chartKey = `${dataKey}-${chartData.length}-${chartData.at(-1)?.timestampMs ?? 0}`;
   const yAxisTicks = useMemo(() => {
     const maxValue = Math.max(

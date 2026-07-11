@@ -59,6 +59,14 @@ def _optional_int(value: Any) -> int | None:
     return int(value)
 
 
+def _action_rank(action: str | None) -> int:
+    return {
+        "DROP": 3,
+        "RATE_LIMIT": 2,
+        "FORWARD": 1,
+    }.get(str(action or "").upper(), 0)
+
+
 class FlowRepository:
     def list_flows(self, src_ip: str | None = None) -> list[dict[str, Any]]:
         stmt = select(FlowRule).order_by(FlowRule.created_at.desc())
@@ -113,6 +121,8 @@ class FlowRepository:
 
         action = str(mitigation["action"]).upper()
         fingerprint = event.get("event_fingerprint")
+        match = mitigation.get("match") or {}
+        switch_id = mitigation.get("switch_id")
 
         with SessionLocal.begin() as session:
             flow_rule = None
@@ -124,15 +134,25 @@ class FlowRepository:
                 flow_rule = session.execute(stmt).scalar_one_or_none()
 
             if flow_rule is None:
+                stmt = select(FlowRule).where(
+                    FlowRule.match == match,
+                    FlowRule.switch_id == switch_id,
+                )
+                same_match_rules = session.execute(stmt).scalars().all()
+                for existing_rule in same_match_rules:
+                    if _action_rank(existing_rule.action) >= _action_rank(action):
+                        return _to_dict(existing_rule)
+
+            if flow_rule is None:
                 flow_rule = FlowRule(
                     source_event_id=event.get("event_id"),
                     source_event_fingerprint=fingerprint,
                     security_response_id=security_response_id,
                     analyzer_id=event["analyzer_id"],
-                    switch_id=mitigation.get("switch_id"),
+                    switch_id=switch_id,
                     target=mitigation.get("target", "flow"),
                     action=action,
-                    match=mitigation.get("match") or {},
+                    match=match,
                     priority=int(mitigation["priority"]),
                     idle_timeout=_optional_int(mitigation.get("idle_timeout")),
                     hard_timeout=_optional_int(mitigation.get("hard_timeout")),

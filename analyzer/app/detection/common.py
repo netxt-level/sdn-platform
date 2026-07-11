@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from ipaddress import IPv4Address, ip_address
 from typing import Any
 
 
@@ -45,6 +46,18 @@ def to_port(value: Any) -> int | None:
     if port is None or not 1 <= port <= 65535:
         return None
     return port
+
+
+def to_ip(value: Any) -> str | None:
+    """OpenFlow IPv4 match에 안전하게 넣을 수 있는 IPv4 주소만 반환한다."""
+
+    try:
+        address = ip_address(str(value))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(address, IPv4Address):
+        return None
+    return str(address)
 
 
 def clamp_score(score: int | float) -> int:

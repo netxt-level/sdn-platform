@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 from typing import Any
 
-from .common import to_int, to_port
+from .common import to_int, to_ip, to_port
 
 
 class PendingSecurityEventQueue:
@@ -15,6 +15,7 @@ class PendingSecurityEventQueue:
         self.max_size = max_size
         self.events: deque[dict[str, Any]] = deque()
         self.event_ids: set[str] = set()
+        self.dropped_count = 0
 
     def add(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """새 이벤트를 대기 큐에 넣고, 크기 제한 때문에 밀려난 이벤트를 돌려준다."""
@@ -32,14 +33,41 @@ class PendingSecurityEventQueue:
                 dropped = self.events.popleft()
                 dropped_events.append(dropped)
                 self.event_ids.discard(str(dropped.get("event_id") or ""))
+                self.dropped_count += 1
 
         return dropped_events
 
-    def payload(self, *, timestamp: str, analyzer_id: str) -> dict[str, Any]:
+    def peek_batch(self, size: int) -> list[dict[str, Any]]:
+        batch_size = max(1, size)
+        return list(self.events)[:batch_size]
+
+    def remove_sent(self, events: list[dict[str, Any]]) -> None:
+        sent_ids = {
+            str(event.get("event_id") or "")
+            for event in events
+            if event.get("event_id")
+        }
+        if not sent_ids:
+            return
+
+        self.events = deque(
+            event
+            for event in self.events
+            if str(event.get("event_id") or "") not in sent_ids
+        )
+        self.event_ids.difference_update(sent_ids)
+
+    def payload(
+        self,
+        *,
+        timestamp: str,
+        analyzer_id: str,
+        events: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         return {
             "timestamp": timestamp,
             "analyzer_id": analyzer_id,
-            "events": list(self.events),
+            "events": events if events is not None else list(self.events),
         }
 
     def clear(self) -> None:
@@ -123,8 +151,8 @@ class SecurityEventBuilder:
         now: datetime,
         window_start_epoch: int,
     ) -> dict[str, Any] | None:
-        src_ip = str(detection.get("src_ip") or "")
-        dst_ip = str(detection.get("dst_ip") or "")
+        src_ip = to_ip(detection.get("src_ip"))
+        dst_ip = to_ip(detection.get("dst_ip"))
         if not src_ip or not dst_ip:
             return None
 
@@ -231,8 +259,8 @@ class SecurityEventBuilder:
             return None
 
         protocol = str(detection.get("protocol") or "")
-        src_ip = detection.get("src_ip")
-        dst_ip = detection.get("dst_ip")
+        src_ip = to_ip(detection.get("src_ip"))
+        dst_ip = to_ip(detection.get("dst_ip"))
         if not src_ip or not dst_ip:
             return None
 

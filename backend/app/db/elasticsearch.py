@@ -1,84 +1,100 @@
 import time
+from typing import Any
 
 from elasticsearch import Elasticsearch
-from elasticsearch import ConnectionError as ElasticsearchConnectionError
+from elasticsearch.helpers import bulk
 
 from app.core.config import settings
 
-# elasticsearch 클라이언트 생성 함수
-def get_elasticsearch_client() -> Elasticsearch:
-    # password = get_env("ELASTIC_PASSWORD")
 
+def get_elasticsearch_client() -> Elasticsearch:
     return Elasticsearch(
         settings.elasticsearch_url,
-        # basic_auth=("elastic", password),
     )
+
+
+def is_elasticsearch_ready() -> bool:
+    es = get_elasticsearch_client()
+    try:
+        return bool(es.ping())
+    except Exception:
+        return False
+    finally:
+        es.close()
+
 
 def create_elasticsearch_indices() -> None:
-    """
-    SDN 프로젝트에서 사용할 Elasticsearch 인덱스를 생성
-
-    생성 대상:
-        1. sdn-security-events
-            - 포트 스캔, ICMP flood 같은 보안 이벤트 저장
-    """
-
-    # Elasticsearch 클라이언트 생성
-    es = get_elasticsearch_client()
-    
-    # elasticsearch가 요청을 받을 준비가 되었는지 대기
-    for attempt in range(30):
-        try:
-            if es.ping():
-                break
-        except ElasticsearchConnectionError:
-            pass
-
-        time.sleep(2)
-    else:
-        raise RuntimeError("Elasticsearch is not ready")
-
-    if not es.indices.exists(index="sdn-security-events"):
-        es.indices.create(
-            index="sdn-security-events",
-            mappings={
-                "properties": {
-                    "@timestamp": {"type": "date"},
-                    "event_id": {"type": "keyword"},
-                    "event_fingerprint": {"type": "keyword"},
-                    "dedup_key": {"type": "keyword"},
-                    "timestamp": {"type": "date"},
-                    "analyzer_id": {"type": "keyword"},
-                    "attack_category": {"type": "keyword"},
-                    "attack_type": {"type": "keyword"},
-                    "severity": {"type": "keyword"},
-                    "confidence": {"type": "keyword"},
-                    "status": {"type": "keyword"},
-                    "src_ip": {"type": "ip"},
-                    "dst_ip": {"type": "ip"},
-                    "protocol": {"type": "keyword"},
-                    "detection_rule": {"type": "keyword"},
-                    "recommended_action": {"type": "keyword"},
-                    "response_level": {"type": "keyword"},
-                    "evidence": {"type": "object", "enabled": True},
-                    "mitigation": {"type": "object", "enabled": True},
-                }
-            },
-        )
-
-
-def index_security_event(payload: dict) -> None:
     es = get_elasticsearch_client()
 
-    document = {
-        **payload,
-        "@timestamp": payload["timestamp"],
-    }
+    try:
+        # Elasticsearch가 요청을 받을 수 있을 때만 인덱스 생성을 시도한다.
+        for _ in range(30):
+            try:
+                if es.ping():
+                    break
+            except Exception:
+                pass
 
-    es.index(
-        index="sdn-security-events",
-        document=document,
-    )
+            time.sleep(2)
+        else:
+            raise RuntimeError("Elasticsearch is not ready")
+
+        if not es.indices.exists(index="sdn-security-events"):
+            es.indices.create(
+                index="sdn-security-events",
+                mappings={
+                    "properties": {
+                        "@timestamp": {"type": "date"},
+                        "event_id": {"type": "keyword"},
+                        "event_fingerprint": {"type": "keyword"},
+                        "dedup_key": {"type": "keyword"},
+                        "timestamp": {"type": "date"},
+                        "analyzer_id": {"type": "keyword"},
+                        "attack_category": {"type": "keyword"},
+                        "attack_type": {"type": "keyword"},
+                        "severity": {"type": "keyword"},
+                        "confidence": {"type": "keyword"},
+                        "status": {"type": "keyword"},
+                        "src_ip": {"type": "ip"},
+                        "dst_ip": {"type": "ip"},
+                        "protocol": {"type": "keyword"},
+                        "detection_rule": {"type": "keyword"},
+                        "recommended_action": {"type": "keyword"},
+                        "response_level": {"type": "keyword"},
+                        "evidence": {"type": "object", "enabled": True},
+                        "mitigation": {"type": "object", "enabled": True},
+                    }
+                },
+            )
+    finally:
+        es.close()
+
+
+def index_security_events(events: list[dict[str, Any]]) -> None:
+    if not events:
+        return
+
+    es = get_elasticsearch_client()
+    try:
+        actions = [
+            {
+                "_op_type": "index",
+                "_index": "sdn-security-events",
+                "_id": event["event_id"],
+                "_source": {
+                    **event,
+                    "@timestamp": event["timestamp"],
+                },
+            }
+            for event in events
+        ]
+        bulk(es, actions)
+    finally:
+        es.close()
+
+
+def index_security_event(payload: dict[str, Any]) -> None:
+    index_security_events([payload])
 
 
 def search_security_events(limit: int = 50) -> list[dict]:
@@ -108,6 +124,29 @@ def search_security_events(limit: int = 50) -> list[dict]:
         es.close()
 
 
+def _number_from_evidence(evidence: dict, *keys: str) -> float:
+    for key in keys:
+        value = evidence.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+    return 0.0
+
+
+def _pps_from_evidence(evidence: dict) -> float:
+    explicit_pps = _number_from_evidence(evidence, "syn_pps", "pps")
+    if explicit_pps > 0:
+        return explicit_pps
+
+    packet_count = _number_from_evidence(evidence, "packet_count", "syn_count")
+    window_seconds = _number_from_evidence(evidence, "window_seconds")
+    if packet_count > 0 and window_seconds > 0:
+        return packet_count / window_seconds
+
+    return 0.0
+
+
 def query_suspicious_hosts_from_security_events(
     limit: int = 100,
 ) -> list[dict]:
@@ -134,7 +173,7 @@ def query_suspicious_hosts_from_security_events(
                 "ip": ip,
                 "protocol": protocol,
                 "bps": float(evidence.get("bps") or 0),
-                "pps": float(evidence.get("pps") or 0),
+                "pps": _pps_from_evidence(evidence),
                 "reasons": [reason],
                 "attack_type": attack_type,
                 "severity": event.get("severity"),

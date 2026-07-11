@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from app.api.analyzer import router as analyzer_router
 from app.api.dashboard import router as dashboard_router
@@ -9,11 +11,22 @@ from app.api.path import router as path_router
 from app.api.security import router as security_router
 from app.api.ws import router as ws_router
 from app.db.elasticsearch import create_elasticsearch_indices
+from app.db.elasticsearch import is_elasticsearch_ready
+from app.db.influxdb import is_influxdb_ready
+from app.db.postgres import is_postgres_ready
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_elasticsearch_indices()
+    try:
+        create_elasticsearch_indices()
+    except Exception:
+        logger.warning(
+            "Elasticsearch 준비가 늦어 보안 이벤트 인덱스 초기화를 건너뜁니다.",
+            exc_info=True,
+        )
     yield
 
 app = FastAPI(
@@ -50,6 +63,33 @@ app.include_router(
 
 @app.get("/health")
 def health_check():
+    return health_live()
+
+
+@app.get("/health/live")
+def health_live():
     return {
         "status": "ok",
     }
+
+
+@app.get("/health/ready")
+def health_ready():
+    checks = {
+        "postgres": is_postgres_ready(),
+        "influxdb": is_influxdb_ready(),
+        "elasticsearch": is_elasticsearch_ready(),
+    }
+    status = "ok" if all(checks.values()) else "degraded"
+    body = {
+        "status": status,
+        **{
+            name: "ok" if ready else "error"
+            for name, ready in checks.items()
+        },
+    }
+
+    if status == "ok":
+        return body
+
+    return JSONResponse(status_code=503, content=body)

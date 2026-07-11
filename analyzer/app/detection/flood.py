@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
-from .common import clamp_score, score_policy, to_int, to_port
+from .common import clamp_score, score_policy, to_int, to_ip, to_port
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,13 @@ class FloodThresholds:
 
 
 class FloodDetector:
-    """특정 프로토콜의 과도한 패킷 또는 트래픽 증가를 탐지한다."""
+    """
+    단일 출발지와 목적지 사이의 PPS/BPS 증가를 기준으로 Flood를 탐지한다.
+
+    UDP는 목적지 포트 단위 집계와 출발지-목적지 합산 집계를 함께 사용한다.
+    그래서 특정 포트 공격은 좁게 대응하고, 여러 포트로 나눈 UDP Flood도 놓치지 않는다.
+    여러 출발지가 한 목적지를 동시에 공격하는 분산 DDoS 집계는 별도 탐지기로 분리한다.
+    """
 
     def __init__(
         self,
@@ -42,11 +48,11 @@ class FloodDetector:
         self.thresholds = thresholds
         self.icmp_type = icmp_type
         self.group_by_dst_port = group_by_dst_port
-        self.history: dict[tuple[str, str, int | None], deque[bool]] = defaultdict(
+        self.history: dict[tuple[str, str, str, int | None], deque[bool]] = defaultdict(
             lambda: deque(maxlen=thresholds.history_size)
         )
         self.window_index = 0
-        self.last_seen_window: dict[tuple[str, str, int | None], int] = {}
+        self.last_seen_window: dict[tuple[str, str, str, int | None], int] = {}
 
     def detect(
         self,
@@ -54,16 +60,20 @@ class FloodDetector:
         window_sec: int | float,
     ) -> list[dict[str, Any]]:
         self.window_index += 1
-        grouped = defaultdict(lambda: {"packets": 0, "bytes": 0, "ports": set()})
+        grouped = defaultdict(_new_flood_stats)
+        pair_grouped = defaultdict(_new_flood_stats)
 
         for packet in packets:
             if packet.get("protocol") != self.protocol:
                 continue
-            if self.icmp_type is not None and to_int(packet.get("icmp_type")) != self.icmp_type:
+            if (
+                self.icmp_type is not None
+                and to_int(packet.get("icmp_type")) != self.icmp_type
+            ):
                 continue
 
-            src_ip = packet.get("src_ip")
-            dst_ip = packet.get("dst_ip")
+            src_ip = to_ip(packet.get("src_ip"))
+            dst_ip = to_ip(packet.get("dst_ip"))
             if not src_ip or not dst_ip:
                 continue
 
@@ -71,124 +81,178 @@ class FloodDetector:
             if self.group_by_dst_port and dst_port is None:
                 continue
 
-            key = (str(src_ip), str(dst_ip), dst_port if self.group_by_dst_port else None)
-            grouped[key]["packets"] += 1
             packet_size = max(to_int(packet.get("packet_size")) or 0, 0)
-            grouped[key]["bytes"] += packet_size
-            if dst_port is not None:
-                grouped[key]["ports"].add(dst_port)
+            key = (src_ip, dst_ip, dst_port if self.group_by_dst_port else None)
+            _add_flood_packet(grouped[key], packet_size, dst_port)
+            if self.group_by_dst_port:
+                _add_flood_packet(
+                    pair_grouped[(src_ip, dst_ip, None)],
+                    packet_size,
+                    dst_port,
+                )
 
         alerts = []
         divisor = float(window_sec) if window_sec and window_sec > 0 else 1.0
 
         for (src_ip, dst_ip, dst_port), stats in grouped.items():
-            packet_count = stats["packets"]
-            pps = packet_count / divisor
-            bps = (stats["bytes"] * 8) / divisor
-
-            pps_exceeded = pps >= self.thresholds.pps
-            bps_exceeded = self.thresholds.bps > 0 and bps >= self.thresholds.bps
-            exceeded = pps_exceeded or bps_exceeded
-
-            # 중간에 관측되지 않은 구간이 있으면 연속 공격으로 보지 않고 기록을 새로 시작한다.
-            key = (src_ip, dst_ip, dst_port)
-            history = self.history[key]
-            last_seen = self.last_seen_window.get(key)
-            if last_seen is not None and last_seen < self.window_index - 1:
-                history.clear()
-            history.append(exceeded)
-            self.last_seen_window[key] = self.window_index
-            exceeded_windows = sum(history)
-
-            # Critical 급증은 즉시 보고하되, 첫 대응은 Rate Limit 후보로 제한한다.
-            immediate_critical = pps >= self.thresholds.critical_pps or (
-                self.thresholds.critical_bps > 0
-                and bps >= self.thresholds.critical_bps
+            alert = self._build_alert(
+                scope="service",
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                stats=stats,
+                divisor=divisor,
             )
-            sustained = (
-                exceeded
-                and packet_count >= self.thresholds.minimum_packets
-                and exceeded_windows >= self.thresholds.required_exceeded_windows
-            )
-            if not immediate_critical and not sustained:
-                continue
+            if alert is not None:
+                alerts.append(alert)
 
-            conditions = [
-                "ICMP Echo Request" if self.icmp_type == 8 else f"{self.protocol} 패킷"
-            ]
-            score = 40
-
-            if pps_exceeded:
-                conditions.append("PPS 기준 초과")
-                score += 15
-            if bps_exceeded:
-                conditions.append("BPS 기준 초과")
-                score += 15
-            if packet_count >= self.thresholds.minimum_packets:
-                conditions.append("최소 패킷 수 기준 충족")
-            if exceeded_windows >= self.thresholds.required_exceeded_windows:
-                conditions.append("여러 분석 구간에서 반복 초과")
-                score += 10
-            if pps >= self.thresholds.high_pps or (
-                self.thresholds.high_bps > 0 and bps >= self.thresholds.high_bps
-            ):
-                conditions.append("높은 트래픽 기준 초과")
-                score += 15
-            if immediate_critical:
-                conditions.append("Critical 기준 즉시 초과")
-                score = 90
-
-            score = clamp_score(score)
-            severity, response_level, recommended_action = score_policy(
-                score,
-                drop_allowed=sustained,
-            )
-            evidence = {
-                "window_seconds": divisor,
-                "packet_count": packet_count,
-                "pps": pps,
-                "bps": bps,
-                "pps_threshold": self.thresholds.pps,
-                "bps_threshold": self.thresholds.bps,
-                "high_pps_threshold": self.thresholds.high_pps,
-                "critical_pps_threshold": self.thresholds.critical_pps,
-                "exceeded_windows": exceeded_windows,
-                "required_exceeded_windows": (
-                    self.thresholds.required_exceeded_windows
-                ),
-                "drop_allowed": sustained,
-            }
-            if self.icmp_type is not None:
-                evidence["icmp_type"] = self.icmp_type
-            if stats["ports"]:
-                evidence["unique_dst_port_count"] = len(stats["ports"])
-            if dst_port is not None:
-                evidence["destination_port"] = dst_port
-                evidence["dominant_dst_port"] = dst_port
-                evidence["dominant_port_ratio"] = 1.0
-
-            alerts.append(
-                {
-                    "src_ip": src_ip,
-                    "dst_ip": dst_ip,
-                    "protocol": self.protocol,
-                    "attack_category": "FLOOD",
-                    "attack_type": self.attack_type,
-                    "severity": severity,
-                    "confidence": (
-                        "high" if immediate_critical or sustained else "medium"
-                    ),
-                    "detection_rule": self.detection_rule,
-                    "recommended_action": recommended_action,
-                    "response_level": response_level,
-                    "matched_conditions": conditions,
-                    "score": score,
-                    "evidence": evidence,
-                }
-            )
+        if self.group_by_dst_port:
+            for (src_ip, dst_ip, dst_port), stats in pair_grouped.items():
+                if len(stats["ports"]) <= 1:
+                    continue
+                alert = self._build_alert(
+                    scope="pair",
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    stats=stats,
+                    divisor=divisor,
+                )
+                if alert is not None:
+                    alerts.append(alert)
 
         self._cleanup_state()
         return alerts
+
+    def _build_alert(
+        self,
+        *,
+        scope: str,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int | None,
+        stats: dict[str, Any],
+        divisor: float,
+    ) -> dict[str, Any] | None:
+        packet_count = stats["packets"]
+        pps = packet_count / divisor
+        bps = (stats["bytes"] * 8) / divisor
+
+        pps_exceeded = pps >= self.thresholds.pps
+        bps_exceeded = self.thresholds.bps > 0 and bps >= self.thresholds.bps
+        exceeded = pps_exceeded or bps_exceeded
+
+        # 중간에 빈 구간이 있으면 연속 공격으로 이어 붙이지 않는다.
+        key = (scope, src_ip, dst_ip, dst_port)
+        history = self.history[key]
+        last_seen = self.last_seen_window.get(key)
+        if last_seen is not None and last_seen < self.window_index - 1:
+            history.clear()
+        history.append(exceeded)
+        self.last_seen_window[key] = self.window_index
+        exceeded_windows = sum(history)
+
+        # Critical 급증도 첫 대응은 Rate Limit 후보로 두고, 지속될 때 Drop 후보로 올린다.
+        immediate_critical = pps >= self.thresholds.critical_pps or (
+            self.thresholds.critical_bps > 0
+            and bps >= self.thresholds.critical_bps
+        )
+        sustained = (
+            exceeded
+            and packet_count >= self.thresholds.minimum_packets
+            and exceeded_windows >= self.thresholds.required_exceeded_windows
+        )
+        if not immediate_critical and not sustained:
+            return None
+
+        conditions = [
+            "ICMP Echo Request" if self.icmp_type == 8 else f"{self.protocol} 패킷"
+        ]
+        if scope == "pair":
+            conditions.append("여러 목적지 포트 합산 기준 초과")
+        score = 40
+
+        if pps_exceeded:
+            conditions.append("PPS 기준 초과")
+            score += 15
+        if bps_exceeded:
+            conditions.append("BPS 기준 초과")
+            score += 15
+        if packet_count >= self.thresholds.minimum_packets:
+            conditions.append("최소 패킷 수 기준 충족")
+        if exceeded_windows >= self.thresholds.required_exceeded_windows:
+            conditions.append("여러 분석 구간에서 반복 초과")
+            score += 10
+        if pps >= self.thresholds.high_pps or (
+            self.thresholds.high_bps > 0 and bps >= self.thresholds.high_bps
+        ):
+            conditions.append("높은 트래픽 기준 초과")
+            score += 15
+        if immediate_critical:
+            conditions.append("Critical 기준 즉시 초과")
+            score = 90
+
+        score = clamp_score(score)
+        severity, response_level, recommended_action = score_policy(
+            score,
+            drop_allowed=sustained,
+        )
+        evidence = {
+            "window_seconds": divisor,
+            "packet_count": packet_count,
+            "pps": pps,
+            "bps": bps,
+            "aggregation_scope": scope,
+            "pps_threshold": self.thresholds.pps,
+            "bps_threshold": self.thresholds.bps,
+            "high_pps_threshold": self.thresholds.high_pps,
+            "critical_pps_threshold": self.thresholds.critical_pps,
+            "exceeded_windows": exceeded_windows,
+            "required_exceeded_windows": (
+                self.thresholds.required_exceeded_windows
+            ),
+            "drop_allowed": sustained,
+            "mitigation_stage": "escalated" if sustained else "initial",
+        }
+        if immediate_critical and not sustained:
+            evidence["escalation_reason"] = "critical rate observed once"
+        elif sustained:
+            evidence["escalation_reason"] = "repeated threshold exceeded"
+        if self.icmp_type is not None:
+            evidence["icmp_type"] = self.icmp_type
+
+        ports = stats["ports"]
+        if ports:
+            evidence["unique_dst_port_count"] = len(ports)
+            evidence["sample_dst_ports"] = sorted(ports)[:10]
+            dominant_port, dominant_count = max(
+                stats["port_counts"].items(),
+                key=lambda item: item[1],
+            )
+            evidence["dominant_dst_port"] = dominant_port
+            evidence["dominant_port_ratio"] = dominant_count / packet_count
+        if dst_port is not None:
+            evidence["destination_port"] = dst_port
+
+        detection_rule = self.detection_rule
+        if scope == "pair":
+            detection_rule = f"{self.detection_rule}_pair_total"
+
+        return {
+            "src_ip": src_ip,
+            "dst_ip": dst_ip,
+            "protocol": self.protocol,
+            "attack_category": "FLOOD",
+            "attack_type": self.attack_type,
+            "severity": severity,
+            "confidence": "high" if immediate_critical or sustained else "medium",
+            "detection_rule": detection_rule,
+            "recommended_action": recommended_action,
+            "response_level": response_level,
+            "matched_conditions": conditions,
+            "score": score,
+            "evidence": evidence,
+        }
 
     def _cleanup_state(self) -> None:
         stale_keys = [
@@ -199,6 +263,27 @@ class FloodDetector:
         for key in stale_keys:
             self.history.pop(key, None)
             self.last_seen_window.pop(key, None)
+
+
+def _new_flood_stats() -> dict[str, Any]:
+    return {
+        "packets": 0,
+        "bytes": 0,
+        "ports": set(),
+        "port_counts": defaultdict(int),
+    }
+
+
+def _add_flood_packet(
+    stats: dict[str, Any],
+    packet_size: int,
+    dst_port: int | None,
+) -> None:
+    stats["packets"] += 1
+    stats["bytes"] += packet_size
+    if dst_port is not None:
+        stats["ports"].add(dst_port)
+        stats["port_counts"][dst_port] += 1
 
 
 class IcmpFloodDetector(FloodDetector):

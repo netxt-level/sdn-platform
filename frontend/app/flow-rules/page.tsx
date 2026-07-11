@@ -62,19 +62,25 @@ export default function FlowRulesPage() {
   const [flowRules, setFlowRules] = useState<FlowRule[]>([]);
   const [selectedSwitch, setSelectedSwitch] = useState("ALL");
   const [switchId, setSwitchId] = useState("s1");
-  const [matchText, setMatchText] = useState("ipv4_src=10.0.0.2, ipv4_dst=10.0.0.4, ip_proto=1");
+  const [matchText, setMatchText] = useState("eth_type=2048, ipv4_src=10.0.0.2, ipv4_dst=10.0.0.4, ip_proto=1");
   const [action, setAction] = useState("RATE_LIMIT");
   const [priority, setPriority] = useState("500");
   const [rateLimitPps, setRateLimitPps] = useState("100");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const selectedRule = flowRules[0];
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
   const filteredRules = useMemo(
     () =>
       selectedSwitch === "ALL"
         ? flowRules
         : flowRules.filter((rule) => rule.switch_id === selectedSwitch),
     [flowRules, selectedSwitch]
+  );
+  const selectedRule = useMemo(
+    () =>
+      filteredRules.find((rule) => rule.id === selectedRuleId) ??
+      filteredRules[0],
+    [filteredRules, selectedRuleId]
   );
   const dropCount = flowRules.filter((rule) => rule.action.toUpperCase() === "DROP").length;
   const forwardCount = flowRules.filter((rule) => rule.action.toLowerCase().startsWith("output")).length;
@@ -116,7 +122,22 @@ export default function FlowRulesPage() {
     }
 
     load();
+
+    return () => {
+      ignored = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!filteredRules.length) {
+      setSelectedRuleId(null);
+      return;
+    }
+
+    if (!selectedRuleId || !filteredRules.some((rule) => rule.id === selectedRuleId)) {
+      setSelectedRuleId(filteredRules[0].id);
+    }
+  }, [filteredRules, selectedRuleId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -207,7 +228,11 @@ export default function FlowRulesPage() {
               </thead>
               <tbody>
                 {filteredRules.map((rule) => (
-                  <tr key={rule.id} className="border-b border-line last:border-0">
+                  <tr
+                    key={rule.id}
+                    onClick={() => setSelectedRuleId(rule.id)}
+                    className={`cursor-pointer border-b border-line last:border-0 ${selectedRule?.id === rule.id ? "bg-[var(--accent-dim)]" : ""}`}
+                  >
                     <td className="px-3 py-3 font-black">{rule.switch_id ?? "-"}</td>
                     <td className="px-3 py-3">{formatMatch(rule.match)}</td>
                     <td className={`px-3 py-3 ${rule.action.toUpperCase() === "DROP" ? "text-red" : "text-accent"}`}>{rule.action}</td>

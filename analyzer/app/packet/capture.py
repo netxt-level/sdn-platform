@@ -7,11 +7,11 @@ PacketHandler = Callable[[object], None]
 
 # 패킷 캡처 중 발생한 예외를 표현하기 위한 사용자 정의 예외 클래스
 class PacketCaptureError(RuntimeError):
-    pass
+    """패킷 캡처 초기화 또는 실행 실패를 나타낸다."""
 
 
 # 지정한 네트워크 인터페이스에서 패킷 캡처를 시작하는 함수
-def start_capture(interface: str, packet_handler: PacketHandler):
+def start_capture(interface: str, packet_handler: PacketHandler) -> None:
     try:
         # scapy에서 제공하는 패킷 캡쳐 함수
         sniff(

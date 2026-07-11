@@ -10,6 +10,7 @@ app/packet/capture.py
   -> app/packet/summary.py
   -> app/detection/traffic_stats.py
   -> app/detection/port_scan.py / app/detection/flood.py / app/detection/syn_flood.py
+  -> app/detection/correlation.py
   -> app/detection/security_events.py
   -> app/backend_client.py
   -> backend /api/analyzer/*, /api/security/events
@@ -28,7 +29,8 @@ app/packet/capture.py
 | `app/detection/common.py` | 공통 점수 정책과 안전한 값 변환 함수 |
 | `app/detection/flood.py` | ICMP Flood, UDP Flood 탐지 |
 | `app/detection/port_scan.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
-| `app/detection/syn_flood.py` | 단일 서비스 집중 SYN Flood 탐지 |
+| `app/detection/syn_flood.py` | 단일/다중 서비스 SYN Flood 탐지 |
+| `app/detection/correlation.py` | 겹치는 탐지 결과를 하나의 대응 흐름으로 정리 |
 | `app/detection/security_events.py` | 보안 탐지 결과를 공통 보안 이벤트 payload와 대응 후보로 변환 |
 | `app/analyzer_status.py` | 분석 서버 상태 payload 생성 |
 | `app/backend_client.py` | 백엔드 API 전송 |
@@ -42,12 +44,15 @@ app/packet/capture.py
 | `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 전송 주기 |
+| `ANALYZER_PACKET_BUFFER_MAX_SIZE` | `100000` | 분석 지연 시 메모리에 보관할 최대 패킷 수 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API 주소 |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
 | `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `15` | Port Scan 고유 목적지 포트 임계값 |
 | `PORT_SCAN_SYN_COUNT_THRESHOLD` | `30` | Port Scan SYN 시도 수 보조 조건 기준 |
 | `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
 | `PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD` | `3` | Port Scan 수평 스캔 목적지 수 기준 |
+| `SECURITY_TRUSTED_SOURCE_IPS` | `` | 관리 호스트 IPv4 목록. 쉼표로 여러 개 입력하며 수평 Port Scan 기준만 완화한다 |
+| `TRUSTED_HORIZONTAL_SCAN_THRESHOLD` | `10` | 관리 호스트의 수평 Port Scan 목적지 수 기준. 작은 토폴로지에서는 반복 SYN 기준도 함께 적용한다 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
 | `ICMP_PPS_THRESHOLD` | `150` | ICMP Flood pps 임계값 |
@@ -74,6 +79,8 @@ app/packet/capture.py
 | `DROP_PRIORITY` | `700` | Drop 후보 flow rule 우선순위 |
 | `DROP_IDLE_TIMEOUT` | `30` | Drop 후보 idle timeout |
 | `DROP_HARD_TIMEOUT` | `120` | Drop 후보 hard timeout |
+| `SECURITY_EVENT_QUEUE_MAX_SIZE` | `500` | 백엔드 전송 실패 시 보안 이벤트를 보관할 최대 개수 |
+| `SECURITY_EVENT_SEND_BATCH_SIZE` | `100` | 대기 중인 보안 이벤트를 한 번에 재전송할 개수 |
 
 Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 사용한다.
 
@@ -98,8 +105,8 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 |---|---|---|
 | Port Scan | `app/detection/port_scan.py` | TCP SYN 패턴으로 수직/수평 스캔 탐지 |
 | ICMP Flood | `app/detection/flood.py` | ICMP Echo Request가 반복적으로 기준 이상이면 탐지 |
-| UDP Flood | `app/detection/flood.py` | 같은 목적지 포트로 UDP pps와 bps가 반복적으로 기준 이상이면 탐지 |
-| SYN Flood | `app/detection/syn_flood.py` | 단일 서비스에 SYN 패킷이 집중되고 SYN/ACK 응답이 부족하면 탐지 |
+| UDP Flood | `app/detection/flood.py` | 목적지 포트별 UDP pps/bps와 출발지-목적지 합산 트래픽을 함께 보고 탐지 |
+| SYN Flood | `app/detection/syn_flood.py` | SYN 패킷 집중과 SYN/ACK 응답 부족을 단일/다중 서비스 기준으로 탐지 |
 
 탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다. 탐지 조건과 대응 레벨 정책은 `README_SECURITY_DETECTION.md`를 기준으로 한다.
 
@@ -107,10 +114,12 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 - 분석 서버는 컨트롤러에 직접 대응 요청을 보내지 않는다.
 - 자동 대응에 필요한 payload는 `mitigation`으로만 제안한다. 실제 승인, 저장, 컨트롤러 적용 여부는 백엔드/컨트롤러 쪽 책임이다.
+- 대응 후보는 현재 IPv4 OpenFlow match 기준으로 만들기 때문에 IPv6 주소는 보안 이벤트 변환에서 제외한다.
 - `total_bps`, `total_pps`는 윈도우 내 누적 값을 `window_sec`로 나눈 초당 값이다.
 - 분석 루프와 상태 전송 루프는 예외가 발생해도 오류 상태를 기록하고 계속 실행된다.
 - 백엔드 전송 실패는 로그로 남기고 해당 전송은 실패 처리한다.
-- 보안 이벤트 전송이 실패하면 메모리 대기 큐에 남겨 다음 분석 구간에서 다시 전송한다.
+- 보안 이벤트 전송이 실패하면 메모리 대기 큐에 남겨 다음 분석 구간에서 설정된 배치 크기만큼 다시 전송한다.
+- 패킷 버퍼가 설정된 최대 크기를 넘으면 가장 오래된 패킷부터 제거하고 로그로 남긴다.
 - 패킷 캡처에는 OS/컨테이너 권한이 필요할 수 있다.
 
 ## 팀원이 주로 수정할 곳

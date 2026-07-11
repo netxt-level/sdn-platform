@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from ipaddress import IPv4Address, ip_address
 
 
 @dataclass(frozen=True)
@@ -10,12 +11,15 @@ class AnalyzerConfig:
     interface: str
     window_sec: int
     status_interval_sec: int
+    packet_buffer_max_size: int
     backend_base_url: str
     port_scan_window_sec: int
     port_scan_unique_dst_port_threshold: int
     port_scan_syn_count_threshold: int
     port_scan_multi_target_window_sec: int
     port_scan_horizontal_target_threshold: int
+    security_trusted_source_ips: set[str]
+    trusted_horizontal_scan_threshold: int
     port_scan_high_unique_dst_port_threshold: int
     port_scan_alert_cooldown_sec: int
     icmp_pps_threshold: float
@@ -42,6 +46,8 @@ class AnalyzerConfig:
     drop_priority: int
     drop_idle_timeout: int
     drop_hard_timeout: int
+    security_event_queue_max_size: int
+    security_event_send_batch_size: int
 
 
 def get_int_env(name: str, default: int) -> int:
@@ -70,12 +76,33 @@ def get_float_env(name: str, default: float) -> float:
         raise RuntimeError(f"{name} must be a number") from exc
 
 
+def get_ip_set_env(name: str) -> set[str]:
+    value = os.getenv(name, "")
+    addresses = set()
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        try:
+            address = ip_address(item)
+        except ValueError as exc:
+            raise RuntimeError(f"{name} must contain valid IPv4 addresses") from exc
+        if not isinstance(address, IPv4Address):
+            raise RuntimeError(f"{name} must contain valid IPv4 addresses")
+        addresses.add(str(address))
+    return addresses
+
+
 def load_config() -> AnalyzerConfig:
     config = AnalyzerConfig(
         analyzer_id=os.getenv("ANALYZER_ID", "analyzer-1"),
         interface=os.getenv("ANALYZER_INTERFACE", "eth0"),
         window_sec=get_int_env("ANALYZER_WINDOW_SEC", 1),
         status_interval_sec=get_int_env("ANALYZER_STATUS_INTERVAL_SEC", 5),
+        packet_buffer_max_size=get_int_env(
+            "ANALYZER_PACKET_BUFFER_MAX_SIZE",
+            100_000,
+        ),
         backend_base_url=os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000"),
         port_scan_window_sec=get_int_env("PORT_SCAN_WINDOW_SEC", 5),
         port_scan_unique_dst_port_threshold=get_int_env(
@@ -93,6 +120,11 @@ def load_config() -> AnalyzerConfig:
         port_scan_horizontal_target_threshold=get_int_env(
             "PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD",
             3,
+        ),
+        security_trusted_source_ips=get_ip_set_env("SECURITY_TRUSTED_SOURCE_IPS"),
+        trusted_horizontal_scan_threshold=get_int_env(
+            "TRUSTED_HORIZONTAL_SCAN_THRESHOLD",
+            10,
         ),
         port_scan_high_unique_dst_port_threshold=get_int_env(
             "PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD",
@@ -138,6 +170,14 @@ def load_config() -> AnalyzerConfig:
         drop_priority=get_int_env("DROP_PRIORITY", 700),
         drop_idle_timeout=get_int_env("DROP_IDLE_TIMEOUT", 30),
         drop_hard_timeout=get_int_env("DROP_HARD_TIMEOUT", 120),
+        security_event_queue_max_size=get_int_env(
+            "SECURITY_EVENT_QUEUE_MAX_SIZE",
+            500,
+        ),
+        security_event_send_batch_size=get_int_env(
+            "SECURITY_EVENT_SEND_BATCH_SIZE",
+            100,
+        ),
     )
     validate_config(config)
     return config
@@ -151,6 +191,10 @@ def validate_config(config: AnalyzerConfig) -> None:
     _require_text("BACKEND_BASE_URL", config.backend_base_url)
     _require_positive("ANALYZER_WINDOW_SEC", config.window_sec)
     _require_positive("ANALYZER_STATUS_INTERVAL_SEC", config.status_interval_sec)
+    _require_positive(
+        "ANALYZER_PACKET_BUFFER_MAX_SIZE",
+        config.packet_buffer_max_size,
+    )
 
     _require_positive("PORT_SCAN_WINDOW_SEC", config.port_scan_window_sec)
     _require_positive(
@@ -168,6 +212,12 @@ def validate_config(config: AnalyzerConfig) -> None:
     _require_positive(
         "PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD",
         config.port_scan_horizontal_target_threshold,
+    )
+    _require_order(
+        "PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD",
+        config.port_scan_horizontal_target_threshold,
+        "TRUSTED_HORIZONTAL_SCAN_THRESHOLD",
+        config.trusted_horizontal_scan_threshold,
     )
     _require_order(
         "PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD",
@@ -236,6 +286,16 @@ def validate_config(config: AnalyzerConfig) -> None:
         config.drop_idle_timeout,
         "DROP_HARD_TIMEOUT",
         config.drop_hard_timeout,
+    )
+    _require_positive(
+        "SECURITY_EVENT_QUEUE_MAX_SIZE",
+        config.security_event_queue_max_size,
+    )
+    _require_order(
+        "SECURITY_EVENT_SEND_BATCH_SIZE",
+        config.security_event_send_batch_size,
+        "SECURITY_EVENT_QUEUE_MAX_SIZE",
+        config.security_event_queue_max_size,
     )
 
 

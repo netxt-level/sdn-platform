@@ -10,6 +10,10 @@ export type AnalyzerStatus = {
   last_packet_at?: string | null;
   last_summary_sent_at?: string | null;
   error_message?: string | null;
+  pending_security_event_count?: number;
+  dropped_security_event_count?: number;
+  packet_buffer_dropped_count?: number;
+  last_security_event_send_failure?: string | null;
 };
 
 export type HostStat = {
