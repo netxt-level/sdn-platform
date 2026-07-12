@@ -1,5 +1,5 @@
 from scapy.layers.inet import ICMP, IP, TCP, UDP
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import ARP, Ether
 
 
 def parse_packet(packet):
@@ -17,6 +17,9 @@ def parse_packet(packet):
     if IP in packet:
         metadata["src_ip"] = packet[IP].src
         metadata["dst_ip"] = packet[IP].dst
+    elif ARP in packet:
+        metadata["src_ip"] = packet[ARP].psrc
+        metadata["dst_ip"] = packet[ARP].pdst
 
     if TCP in packet:
         metadata["protocol"] = "TCP"
@@ -35,7 +38,10 @@ def parse_packet(packet):
         metadata["icmp_type"] = packet[ICMP].type
         metadata["icmp_code"] = packet[ICMP].code
 
+    elif ARP in packet:
+        metadata["protocol"] = "ARP"
+
     else:
-        metadata["protocol"] = "UNKNOWN"
+        metadata["protocol"] = "OTHER"
 
     return metadata

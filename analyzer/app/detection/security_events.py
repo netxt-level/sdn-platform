@@ -8,6 +8,9 @@ from typing import Any
 from .common import to_int, to_ip, to_port
 
 
+SUPPORTED_SECURITY_EVENT_PROTOCOLS = {"ICMP", "UDP", "TCP"}
+
+
 class PendingSecurityEventQueue:
     """전송 실패로 보안 이벤트가 사라지지 않도록 메모리에 보관한다."""
 
@@ -158,7 +161,10 @@ class SecurityEventBuilder:
 
         evidence = self._build_evidence(detection)
         attack_type = str(detection.get("attack_type") or "UNKNOWN")
-        protocol = str(detection.get("protocol") or "UNKNOWN")
+        protocol = str(detection.get("protocol") or "").upper()
+        # 보안 이벤트 스키마는 현재 탐지 범위인 ICMP, UDP, TCP만 받는다.
+        if protocol not in SUPPORTED_SECURITY_EVENT_PROTOCOLS:
+            return None
         detection_rule = str(detection.get("detection_rule") or "unknown_rule")
         severity = str(detection.get("severity") or "medium")
         confidence = str(detection.get("confidence") or "medium")

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -63,20 +63,21 @@ class SecurityResponseRepository:
 
     def get_or_create_from_event(self, event: dict[str, Any]) -> dict[str, Any]:
         response_action = _response_action_from_event(event)
+        event_id = event.get("event_id")
         fingerprint = event.get("event_fingerprint")
 
         with SessionLocal.begin() as session:
             response = None
-            if fingerprint:
+            if event_id:
                 stmt = select(SecurityResponse).where(
-                    SecurityResponse.source_event_fingerprint == fingerprint,
+                    SecurityResponse.source_event_id == event_id,
                     SecurityResponse.response_action == response_action,
                 )
                 response = session.execute(stmt).scalar_one_or_none()
 
             if response is None:
                 response = SecurityResponse(
-                    source_event_id=event.get("event_id"),
+                    source_event_id=event_id,
                     source_event_fingerprint=fingerprint,
                     analyzer_id=event["analyzer_id"],
                     attack_category=event.get("attack_category"),
@@ -95,4 +96,25 @@ class SecurityResponseRepository:
                 session.add(response)
                 session.flush()
 
+            return _to_dict(response)
+
+    def link_flow_rule(
+        self,
+        response_id: str,
+        flow_rule: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        with SessionLocal.begin() as session:
+            response = session.get(SecurityResponse, response_id)
+            if response is None:
+                return None
+
+            response.response_payload = {
+                **(response.response_payload or {}),
+                "flow_rule_id": flow_rule.get("id"),
+                "flow_rule_reused": bool(flow_rule.get("flow_rule_reused")),
+                "flow_rule_action": flow_rule.get("action"),
+                "flow_rule_switch_id": flow_rule.get("switch_id"),
+                "flow_rule_match": flow_rule.get("match"),
+            }
+            response.updated_at = datetime.now(timezone.utc)
             return _to_dict(response)

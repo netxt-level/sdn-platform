@@ -5,9 +5,25 @@ class FlowService:
     def __init__(self, flow_repository: FlowRepository | None = None):
         self.flow_repository = flow_repository or FlowRepository()
 
-    def get_flows(self, src_ip: str | None = None) -> dict:
+    def get_flows(
+        self,
+        src_ip: str | None = None,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        items = self.flow_repository.list_flows(
+            src_ip,
+            limit=limit,
+            offset=offset,
+        )
+        total = self.flow_repository.count_flows(src_ip)
         return {
-            "items": self.flow_repository.list_flows(src_ip),
+            "items": items,
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+            "has_more": offset + len(items) < total,
         }
 
     def create_flow(self, data: dict) -> dict:

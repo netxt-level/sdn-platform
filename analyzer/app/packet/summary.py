@@ -3,6 +3,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+ALLOWED_PROTOCOLS = {"TCP", "UDP", "ICMP", "ARP", "OTHER"}
+
+
 # 일정 시간 동안 수집한 패킷 정보를 요약하는 클래스
 class PacketSummaryBuilder:
     def __init__(
@@ -29,7 +32,7 @@ class PacketSummaryBuilder:
 
         # 프로토콜별 패킷 수 계산
         total_packets = len(packets)
-        
+
         # 프로토콜별 비트 수 계산
         total_bits = sum(
             packet.get("packet_size", 0) * 8
@@ -37,7 +40,7 @@ class PacketSummaryBuilder:
         )
 
         protocol_stats = Counter(
-            packet.get("protocol", "UNKNOWN")
+            _normalize_protocol(packet.get("protocol"))
             for packet in packets
         )
 
@@ -75,8 +78,7 @@ class PacketSummaryBuilder:
         for packet in packets:
             src_ip = packet.get("src_ip")
             dst_ip = packet.get("dst_ip")
-            dst_port = packet.get("dst_port")
-            protocol = packet.get("protocol", "UNKNOWN")
+            protocol = _normalize_protocol(packet.get("protocol"))
 
             # 출발지 IP 또는 목적지 IP가 없으면 호스트 통계에서 제외
             if not src_ip or not dst_ip:
@@ -94,14 +96,8 @@ class PacketSummaryBuilder:
 
             host_map[key]["src_host"] = packet.get("src_host")
             host_map[key]["src_ip"] = src_ip
-            # src_port는 임시 포트라 연결마다 값이 쉽게 바뀐다.
-            # 집계 키에서는 제외하고, 참고용 대표값만 보관해 통계 행 폭증을 줄인다.
-            if host_map[key]["src_port"] is None:
-                host_map[key]["src_port"] = packet.get("src_port")
             host_map[key]["dst_host"] = packet.get("dst_host")
             host_map[key]["dst_ip"] = dst_ip
-            if host_map[key]["dst_port"] is None:
-                host_map[key]["dst_port"] = dst_port
             host_map[key]["protocol"] = protocol
             host_map[key]["packet_count"] += 1
             host_map[key]["bit_count"] += packet_bits
@@ -115,3 +111,10 @@ class PacketSummaryBuilder:
         )
 
         return host_stats[:self.max_host_stats]
+
+
+def _normalize_protocol(protocol: Any) -> str:
+    protocol_name = str(protocol or "OTHER").upper()
+    if protocol_name in ALLOWED_PROTOCOLS:
+        return protocol_name
+    return "OTHER"

@@ -65,6 +65,9 @@ from(bucket: "{settings.influxdb_bucket}")
   |> filter(fn: (r) => r["_measurement"] == "traffic_summary")
   |> filter(fn: (r) => r["_field"] == "total_packets" or r["_field"] == "total_bits")
   |> aggregateWindow(every: {bucket_value}, fn: sum, createEmpty: false)
+  |> group(columns: ["_time", "_field"])
+  |> sum(column: "_value")
+  |> group()
   |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"])
 '''
@@ -116,7 +119,7 @@ from(bucket: "{settings.influxdb_bucket}")
                 packet_count = int(record.get_value() or 0)
                 total_packets += packet_count
                 protocol_counts.append({
-                    "protocol": record.values.get("protocol", "UNKNOWN"),
+                    "protocol": record.values.get("protocol", "OTHER"),
                     "packet_count": packet_count,
                 })
 
@@ -156,7 +159,7 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
     ]
 
     # measurement: protocol_stats
-    # TCP, UDP, UNKNOWN 같은 프로토콜별 패킷 수를 각각 별도 point로 저장
+    # TCP, UDP, ARP, OTHER 같은 프로토콜별 패킷 수를 각각 별도 point로 저장
     for protocol, packet_count in summary.get("protocol_stats", {}).items():
         points.append(
             Point("protocol_stats")
@@ -167,7 +170,7 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
         )
 
     # measurement: host_traffic
-    # 출발지/목적지/프로토콜 단위로 합산하고 대표 포트는 field로 남긴다.
+    # 출발지/목적지/프로토콜 단위로 합산한다.
     for host_stat in summary.get("host_stats", []):
         point = (
             Point("host_traffic")
@@ -179,7 +182,7 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
         )
 
         # src_ip와 dst_ip는 필터링에 자주 쓰이므로 tag로 둔다.
-        # port는 값 종류가 많아 tag 대신 field로 저장한다.
+        # 과거 payload에 port가 포함된 경우에도 tag가 아니라 field로만 저장한다.
         if host_stat.get("src_ip"):
             point = point.tag("src_ip", host_stat["src_ip"])
 

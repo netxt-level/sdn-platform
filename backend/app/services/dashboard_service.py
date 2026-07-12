@@ -63,7 +63,9 @@ class DashboardService:
         }
 
     def get_suspicious_hosts(self, range_value: str) -> dict[str, Any]:
-        items = self.security_event_repository.list_suspicious_hosts()
+        items = self.security_event_repository.list_suspicious_hosts(
+            range_value=range_value,
+        )
 
         return {
             "range": range_value,

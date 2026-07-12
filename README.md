@@ -78,8 +78,10 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - UDP pps/bps 기반 UDP Flood 탐지. 목적지 포트별 기준과 출발지-목적지 합산 기준을 함께 사용
 - 단일/다중 서비스 SYN Flood 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
+- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 비연속 bucket은 지속 공격으로 누적하지 않음
 - 분석 서버 상태 주기적 보고
 - 백엔드 전송 실패, timeout, HTTP 오류 처리
+- 보안 이벤트 400/413/422 응답 시 batch 크기 축소 재전송
 - 분석 루프와 백엔드 전송 루프 분리
 - 분석 지연 시 패킷 버퍼 최대 크기 제한과 초과 로그 처리
 - 분석 루프/상태 전송 루프 예외 발생 시 오류 상태 기록 후 루프 유지
@@ -91,11 +93,16 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 트래픽 상태 요약 수신 및 InfluxDB 저장
 - 보안 이벤트 수신 및 Elasticsearch bulk 저장
 - 대시보드 조회 API 제공
+- 대시보드 트래픽은 여러 Analyzer 값을 시간 bucket 기준으로 합산
+- 의심 호스트 조회는 `range` 파라미터를 Elasticsearch 시간 범위에 반영
 - 보안 이벤트 조회 API 제공
 - 보안 이벤트와 수동 Flow Rule 입력 검증
-- Flow 목록 조회 및 수동 Flow Rule 생성 API 제공
+- Flow 목록 조회 pagination, 전체 개수, 다음 페이지 여부 제공
+- 수동 Flow Rule 생성 API 제공
 - 경로 제어 상태 조회 API 제공
 - 보안 대응 내역과 flow rule 후보를 PostgreSQL에 저장
+- 동일한 보안 이벤트 재전송 시 Elasticsearch 문서 중복 저장 방지
+- 오래된 `PENDING` Flow Rule 무한 재사용 방지
 - WebSocket으로 분석 이벤트 실시간 병렬 broadcast
 
 ### 프론트엔드
@@ -112,7 +119,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - 보안 이벤트 목록/상세 화면을 실제 보안 이벤트 API에 연결
 - 처리 완료/긴급 처리 필터와 미처리 high 이상 이벤트 알림 표시
 - 경로 제어 화면을 백엔드 경로 상태 API에 연결
-- Flow Rule 화면을 실제 조회/수동 생성 API에 연결
+- Flow Rule 화면을 실제 조회 API에 연결
+- 수동 Flow Rule 생성 화면은 로그인/관리자 권한 기능이 연결될 때까지 비활성화
 
 ## 화면 구성
 
@@ -143,7 +151,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `GET` | `/api/dashboard/protocols` | 프로토콜 통계 조회 |
 | `GET` | `/api/dashboard/suspicious-hosts` | 의심 호스트 조회 |
 | `GET` | `/api/flows` | Flow 목록 조회 |
-| `POST` | `/api/flows` | 수동 Flow Rule 생성 |
+| `POST` | `/api/flows` | 수동 Flow Rule 생성. 백엔드 관리자 API용이며 프론트 화면에서는 비활성화 |
 | `GET` | `/api/path/status` | 경로 제어 상태 조회 |
 | `GET` | `/api/security/events` | 보안 이벤트 조회 |
 | `GET` | `/api/security/responses` | 보안 대응 내역 조회 |
@@ -176,8 +184,9 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 cp .env.example .env
 ```
 
-기본값은 Docker Compose 실행 기준으로 작성되어 있다. 분석 서버가 캡처할 인터페이스는 환경에 맞게 수정해야 한다.
+`.env.example`은 Docker Compose 실행에 필요한 예시값을 담고 있다. `docker compose`는 주요 비밀번호와 API Key가 없으면 시작하지 않으므로, 먼저 `.env`를 만들고 예시값을 개인 값으로 바꾼다. 분석 서버가 캡처할 인터페이스도 환경에 맞게 수정해야 한다.
 개인 `.env`에는 실제 비밀번호나 토큰이 들어갈 수 있으므로 Git이나 ZIP 결과물에 포함하지 않는다.
+`FRONTEND_BACKEND_INTERNAL_URL`과 `NEXT_PUBLIC_WS_URL`은 프론트엔드 Docker build 시점에도 사용된다. 주소를 바꾼 뒤에는 `docker compose up --build`로 다시 빌드해야 한다.
 
 ```env
 ANALYZER_INTERFACE=eth0
@@ -198,8 +207,8 @@ docker compose up --build
 | 프론트엔드 | `http://localhost:3000` |
 | 백엔드 API | `http://localhost:8000` |
 | FastAPI Docs | `http://localhost:8000/docs` |
-| InfluxDB | `http://localhost:8086` |
-| Elasticsearch | `http://localhost:9200` |
+| InfluxDB | `http://127.0.0.1:8086` |
+| Elasticsearch | `http://127.0.0.1:9200` |
 
 ### 3. 백엔드 상태 확인
 
@@ -266,12 +275,12 @@ tcpdump -i <analyzer-interface> -n icmp
 |---|---|---|
 | `POSTGRES_DB` | `sdn_platform` | PostgreSQL DB 이름 |
 | `POSTGRES_USER` | `sdn_user` | PostgreSQL 사용자 |
-| `POSTGRES_PASSWORD` | `change_me_postgres_password` | PostgreSQL 예시 비밀번호. 실제 값은 개인 `.env`에서 변경 |
-| `POSTGRES_HOST_PORT` | `5433` | 호스트에서 접근할 PostgreSQL 포트 |
+| `POSTGRES_PASSWORD` | `change_me_postgres_password` | PostgreSQL 예시 비밀번호. Compose 실행 전에 개인 `.env`에서 변경. `@`, `:`, `/`, `#` 같은 특수문자도 URL 안전 형식으로 처리 |
+| `POSTGRES_HOST_PORT` | `5433` | 호스트에서 접근할 PostgreSQL 포트. 기본 바인딩은 `127.0.0.1` |
 | `INFLUXDB_ORG` | `sdn_org` | InfluxDB organization |
 | `INFLUXDB_BUCKET` | `sdn_metrics` | InfluxDB bucket |
-| `INFLUXDB_TOKEN` | `change_me_influx_token` | InfluxDB 예시 admin token. 실제 값은 개인 `.env`에서 변경 |
-| `ELASTICSEARCH_HTTP_PORT` | `9200` | Elasticsearch HTTP 포트 |
+| `INFLUXDB_TOKEN` | `change_me_influx_token` | InfluxDB 예시 admin token. Compose 실행 전에 개인 `.env`에서 변경 |
+| `ELASTICSEARCH_HTTP_PORT` | `9200` | Elasticsearch HTTP 포트. 기본 바인딩은 `127.0.0.1` |
 | `ANALYZER_ID` | `analyzer-1` | 분석 서버 ID |
 | `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
@@ -313,9 +322,14 @@ tcpdump -i <analyzer-interface> -n icmp
 | `SECURITY_EVENT_QUEUE_MAX_SIZE` | `500` | 백엔드 전송 실패 시 보안 이벤트를 보관할 최대 개수 |
 | `SECURITY_EVENT_SEND_BATCH_SIZE` | `100` | 대기 중인 보안 이벤트를 한 번에 재전송할 개수 |
 | `BACKEND_BASE_URL` | `http://backend:8000` | 분석 서버가 호출할 백엔드 주소 |
+| `ANALYZER_API_KEY` | `change_me_analyzer_api_key` | 백엔드가 Analyzer 전송 API를 검증할 때 쓰는 키. Compose 실행 전에 개인 `.env`에서 변경 |
+| `BACKEND_API_KEY` | `change_me_analyzer_api_key` | Analyzer가 백엔드로 보낼 `X-API-Key` 값 |
+| `ADMIN_API_KEY` | `change_me_admin_api_key` | 수동 Flow Rule 생성 API 관리자 키. Compose 실행 전에 개인 `.env`에서 변경 |
 | `FRONTEND_PORT` | `3000` | 프론트엔드 호스트 포트 |
-| `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite가 사용할 내부 백엔드 주소 |
-| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8000/ws/analyzer` | 브라우저 WebSocket 주소 |
+| `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite와 서버 route가 사용할 내부 백엔드 주소. Docker build argument로도 전달됨 |
+| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8000/ws/analyzer` | 브라우저 WebSocket 주소. Docker build argument로도 전달됨 |
+
+HTTPS 환경에서는 브라우저가 `ws://` 연결을 차단할 수 있다. 프론트엔드는 HTTPS 페이지에서 `ws://`를 `wss://`로 보정하지만, 실제 배포에서는 reverse proxy 기준의 `wss://.../ws/analyzer` 주소를 `NEXT_PUBLIC_WS_URL`에 넣는 편이 가장 명확하다.
 
 ## 데이터 저장 구조
 
@@ -323,7 +337,7 @@ tcpdump -i <analyzer-interface> -n icmp
 |---|---|
 | PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
 | InfluxDB | 트래픽 시계열, 프로토콜 통계, 상위 host traffic, 네트워크 상태 |
-| Elasticsearch | 보안 이벤트 문서, `sdn-security-events` |
+| Elasticsearch | 보안 이벤트 문서, `sdn-security-events`. evidence 세부 key는 mapping 폭증 방지를 위해 인덱싱하지 않고 `_source`에만 보관 |
 
 Alembic migration은 `migrations/`에 있다.
 
@@ -334,26 +348,36 @@ Alembic migration은 `migrations/`에 있다.
 | `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
 | `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
 | `migrations/versions/005_add_analyzer_runtime_metrics.py` | Analyzer 런타임 큐/드롭 메트릭 컬럼 추가 |
+| `migrations/versions/006_relax_response_and_flow_history_uniqueness.py` | 보안 대응 이력은 event_id 기준으로 남기고 flow rule은 활성 정책 기준으로 재사용하도록 index 조정 |
 
 ## 현재 제한 사항
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
 - `/api/security/events`는 `event_id`를 Elasticsearch 문서 ID로 사용해 보안 이벤트를 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
-- `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다.
-- 보안 이벤트와 Flow Rule 입력은 현재 구현 범위에 맞게 IPv4, 허용 프로토콜, 허용 action, OpenFlow match 필드를 검증한다.
+- `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 API를 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다. 프론트엔드 화면의 수동 생성은 로그인/관리자 권한 기능이 연결될 때까지 비활성화한다.
+- 같은 Flow Rule은 활성 상태이고 `switch_id`, `match`, `target`이 같으며 기존 action, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 강한 제한으로 본다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `PENDING`과 `APPROVED`는 10분, `APPLYING`은 5분을 넘으면 적용이 멈춘 후보로 보고 재사용하지 않는다. `APPLIED`인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙도 재사용하지 않는다.
+- 보안 이벤트와 Flow Rule 입력은 현재 구현 범위에 맞게 IPv4, 허용 프로토콜, 허용 action, OpenFlow match 필드를 검증한다. 보안 이벤트는 batch 크기, 주요 문자열 길이, evidence 크기, 전체 요청 크기, 요청 `analyzer_id`와 이벤트 `analyzer_id` 일치 여부도 확인한다.
+- Analyzer 전송 API와 수동 Flow Rule 생성 API는 각각 `ANALYZER_API_KEY`, `ADMIN_API_KEY`를 요구한다. 키가 비어 있으면 기본적으로 설정 오류로 처리하며, 로컬 개발에서만 `ALLOW_INSECURE_DEV_AUTH=true`로 인증 비활성화를 명시할 수 있다. 프론트엔드 proxy에서는 사용자 권한 검증이 없으므로 POST를 차단한다.
+- 조회 API와 WebSocket은 현재 로그인 기반 권한 관리를 적용하지 않는다. 공용 서버 배포 전에는 사용자 인증과 역할 분리가 추가로 필요하다.
 - Analyzer 상태에는 보안 이벤트 대기열 수, 드롭된 이벤트 수, 패킷 버퍼 드롭 수, 마지막 보안 이벤트 전송 실패 시각을 함께 저장한다.
-- host traffic은 `src_port`와 `dst_port`를 집계 키에서 제외하고 출발지/목적지/프로토콜 단위로 합산한다. InfluxDB에서는 대표 포트를 tag가 아니라 field로 저장한다.
-- `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
+- Analyzer에서 보안 이벤트는 별도 대기 큐에 보관하고, 대시보드용 packet summary/traffic stats는 작은 큐로 최신 값 위주로 전송한다.
+- host traffic은 `src_port`와 `dst_port`를 제외하고 출발지/목적지/프로토콜 단위로 합산한다. 포트 정보는 보안 이벤트 evidence에서 확인한다.
+- `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다. 오래된 `PENDING` 후보는 우회 경로 판단에서 제외한다.
 - 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
 - 패킷 캡처는 OS/컨테이너 권한과 네트워크 인터페이스 설정에 영향을 받는다.
 
 ## 테스트
 
-Analyzer 보안 탐지 명세 단위 테스트는 표준 라이브러리 `unittest`로 실행한다.
+현재 검증은 Analyzer와 Backend 테스트를 함께 실행한다.
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/sdn-platform-pycache python3 -m unittest discover -s analyzer/tests -v
+python -m compileall -q analyzer/app analyzer/tests backend/app backend/tests migrations
+python -m pytest analyzer/tests backend/tests -q
+npm --prefix frontend run lint
+npm --prefix frontend run build
+docker compose --env-file .env.example config --quiet
+git diff --check
 ```
 
 ## 성능 확인 및 테스트 다음 단계

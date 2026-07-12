@@ -38,6 +38,7 @@
 
 | 상황 | Status | 형식 |
 |---|---:|---|
+| 요청 본문 크기 제한 초과 | 413 | `{"detail": "요청 본문 크기는 최대 ... bytes까지 허용됩니다."}` |
 | Pydantic body/query 검증 실패 | 422 | FastAPI 기본 validation error |
 | 잘못된 duration 값 | 400 | `{"detail": "Duration must look like 5s, 1m, 2h, 1d, or 1w"}` |
 | 저장소 연결/처리 오류 | 500 | FastAPI 기본 internal server error |
@@ -60,7 +61,7 @@ GET /health/live
 GET /health/ready
 ```
 
-`/health`와 `/health/live`는 백엔드 프로세스가 살아 있는지 확인한다. `/health/ready`는 PostgreSQL, InfluxDB, Elasticsearch 연결 가능 여부를 함께 확인한다.
+`/health`와 `/health/live`는 백엔드 프로세스가 살아 있는지 확인한다. `/health/ready`는 PostgreSQL, InfluxDB, Elasticsearch 연결 가능 여부와 `sdn-security-events` 인덱스 존재 여부를 함께 확인한다.
 
 ### Response Body
 
@@ -139,7 +140,7 @@ POST /api/analyzer/status
 
 - PostgreSQL `sdn_controller.analyzer`에 upsert한다.
 - WebSocket으로 `{"type":"analyzer_status","data":...}` 메시지를 broadcast한다.
-- PostgreSQL에는 기존 분석 서버 상태 컬럼을 저장하고, 보안 이벤트 대기 수처럼 실시간 확인용 성격이 강한 런타임 지표는 WebSocket payload로 전달한다.
+- PostgreSQL에는 분석 서버 상태와 보안 이벤트 대기 수, 드롭 수, 패킷 버퍼 드롭 수, 마지막 보안 이벤트 전송 실패 시각을 함께 저장한다. 같은 payload는 WebSocket으로도 전달한다.
 
 ### 2.3 패킷 요약 수신
 
@@ -159,7 +160,7 @@ POST /api/analyzer/packet-summary
 
 ### Side Effects
 
-- InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다. `host_traffic`은 `src_ip`, `dst_ip`, `protocol` 기준으로 합산하고, 대표 `src_port`와 `dst_port`는 field로 저장한다.
+- InfluxDB `traffic_summary`, `protocol_stats`, `host_traffic` measurement에 저장한다. `host_traffic`은 `src_ip`, `dst_ip`, `protocol` 기준으로 합산한다.
 - WebSocket으로 `{"type":"packet_summary","data":...}` 메시지를 broadcast한다.
 
 ### 2.4 탐지 요약 수신
@@ -213,7 +214,7 @@ InfluxDB `traffic_summary` measurement의 최근 5분 데이터를 기반으로 
 GET /api/dashboard/traffic
 ```
 
-InfluxDB `traffic_summary` measurement에서 트래픽 시계열을 조회한다.
+InfluxDB `traffic_summary` measurement에서 트래픽 시계열을 조회한다. 여러 Analyzer가 같은 시간대에 값을 보내면 `_time` bucket 기준으로 합산해 전체 네트워크 트래픽으로 반환한다.
 
 ### Query Parameters
 
@@ -280,13 +281,13 @@ InfluxDB `protocol_stats` measurement에서 프로토콜별 패킷 수를 조회
 GET /api/dashboard/suspicious-hosts
 ```
 
-Elasticsearch `sdn-security-events` 인덱스의 최신 보안 이벤트에서 의심 호스트 목록을 파생해 조회한다.
+Elasticsearch `sdn-security-events` 인덱스의 보안 이벤트에서 의심 호스트 목록을 파생해 조회한다.
 
 ### Query Parameters
 
 | 이름 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---:|---|---|
-| `range` | `duration` | X | `1w` | 과거 클라이언트 호환용 파라미터. 현재 응답은 최신 보안 이벤트 기준 |
+| `range` | `duration` | X | `1w` | Elasticsearch `@timestamp` 기준 조회 기간. 예: `1h`, `1d`, `1w` |
 
 ### Response Body
 
@@ -329,11 +330,17 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
 | 이름 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---:|---|---|
 | `src_ip` | `string` | X | 없음 | `match.ipv4_src` 기준 필터 |
+| `limit` | `integer` | X | `100` | `1 <= limit <= 500` |
+| `offset` | `integer` | X | `0` | `offset >= 0` |
 
 ### Response Body
 
 ```json
 {
+  "limit": 100,
+  "offset": 0,
+  "total": 1,
+  "has_more": false,
   "items": [
     {
       "id": "rule-uuid-001",
@@ -377,7 +384,9 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
 POST /api/flows
 ```
 
-운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL `sdn_controller.flow_rules`에 `PENDING` 상태로 저장한다. 현재 구현은 DB 생성까지이며 SDN 컨트롤러 실제 설치는 수행하지 않는다.
+관리자 권한을 가진 호출자가 전달한 rule을 PostgreSQL `sdn_controller.flow_rules`에 `PENDING` 상태로 저장한다. 현재 구현은 DB 생성까지이며 SDN 컨트롤러 실제 설치는 수행하지 않는다. 프론트엔드 Flow Rule 화면은 로그인/관리자 권한 확인 기능이 없으므로 이 생성 기능을 호출하지 않고 조회 전용으로 동작한다.
+
+요청 본문은 최대 64KB까지 허용한다.
 
 ### Request Body
 
@@ -466,7 +475,7 @@ GET /api/path/status
 }
 ```
 
-현재 `active_path`는 네트워크 상태와 `PENDING` 대응 flow rule 존재 여부를 기반으로 파생한다. 실제 컨트롤러 경로 전환 상태와 동기화하는 기능은 아직 연결되어 있지 않다.
+현재 `active_path`는 네트워크 상태와 재사용 가능한 `PENDING` 대응 flow rule 존재 여부를 기반으로 파생한다. 10분이 지난 `PENDING` 후보는 경로 우회 판단에서 제외한다. 실제 컨트롤러 경로 전환 상태와 동기화하는 기능은 아직 연결되어 있지 않다.
 
 ## 6. Security API
 
@@ -484,14 +493,18 @@ POST /api/security/events
 
 ### Side Effects
 
-- Elasticsearch `sdn-security-events` 인덱스에 `event_id`를 문서 `_id`로 사용해 bulk 저장한다. 같은 이벤트가 재전송되면 새 문서를 만들지 않고 기존 문서를 갱신한다.
+- Elasticsearch `sdn-security-events` 인덱스에 `event_id`를 문서 `_id`로 사용해 bulk 저장한다. 같은 이벤트가 재전송되면 새 문서를 만들지 않고 기존 문서를 갱신한다. `evidence`는 `_source`에는 저장하지만 세부 key를 인덱싱하지 않는다.
 - PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
-- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다. 기존 후보는 `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `APPLIED` 상태인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙은 재사용하지 않는다. 기존 후보를 재사용한 경우에도 해당 `security_response`의 `response_payload`에 `flow_rule_id`, `flow_rule_reused`, `flow_rule_action`, `flow_rule_switch_id`, `flow_rule_match`를 남긴다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 
-`SecurityEvent`는 현재 구현된 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`와 IPv4 주소만 허용한다. `security_responses`는 `event_fingerprint + response_action`, `flow_rules`는 `event_fingerprint + action` 기준으로 중복 생성을 방지한다. 같은 match에 이미 더 강하거나 같은 수준의 flow rule 후보가 있으면 새 후보를 추가하지 않고 기존 후보를 재사용한다.
+`SecurityEvent`는 현재 구현된 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`와 IPv4 주소만 허용한다. 보안 이벤트 batch는 최대 100개이며, 요청 전체의 `analyzer_id`와 이벤트 내부 `analyzer_id`가 다르면 거부한다. `evidence`는 중첩 깊이, 문자열 길이, 리스트 길이, key 길이를 제한하고, `/api/security/events` 요청 본문은 최대 1MB로 제한한다.
+
+`security_responses`는 `event_id + response_action` 기준으로 같은 이벤트 재전송 중복을 방지한다. 같은 fingerprint라도 새로운 `event_id`로 들어오면 별도 대응 이력으로 남긴다. `flow_rules`는 현재 재사용 가능한 상태이고 `switch_id`, `match`, `target`이 같으며 기존 action이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 더 강한 제한으로 본다. `PENDING`과 `APPROVED` 상태가 10분을 넘거나 `APPLYING` 상태가 5분을 넘으면 적용이 멈춘 후보로 보고 재사용하지 않는다.
 
 수동 Flow Rule 생성 요청은 `switch_id`가 필요하다. `DROP`과 `RATE_LIMIT`은 `eth_type`이나 `ip_proto`만 있는 넓은 match를 허용하지 않고, IP 주소, 포트, ICMP 타입 중 하나 이상의 구체적인 조건이 있어야 한다.
+
+Analyzer 입력 API와 수동 Flow Rule 생성 API는 각각 `ANALYZER_API_KEY`, `ADMIN_API_KEY`를 요구한다. 키가 비어 있으면 기본적으로 서버 설정 오류로 처리하며, 로컬 개발에서만 `ALLOW_INSECURE_DEV_AUTH=true`를 명시해 인증을 비활성화할 수 있다. 프론트엔드의 `/api/flows` POST route는 사용자 로그인/권한 확인이 없으므로 현재 403을 반환한다.
 
 ### 보안 이벤트 목록 조회
 
@@ -608,7 +621,9 @@ PostgreSQL `sdn_controller.security_responses`에 저장된 최신 보안 대응
 WS /ws/analyzer
 ```
 
-백엔드가 분석 서버 수신 API에서 받은 이벤트를 실시간으로 broadcast한다. 여러 클라이언트에는 병렬로 전송하며, 전송 실패가 발생한 연결만 정리한다. 클라이언트가 보낸 text message는 현재 별도 처리 없이 receive loop 유지에만 사용된다.
+백엔드가 분석 서버 수신 API에서 받은 이벤트를 실시간으로 broadcast한다. 여러 클라이언트에는 병렬로 전송하며, 전송 실패가 발생한 연결만 정리한다. 연결 종료와 예외는 logger에 남긴다. 클라이언트가 보낸 text message는 현재 별도 처리 없이 receive loop 유지에만 사용된다.
+
+현재 WebSocket은 로그인 기반 인증을 적용하지 않는다. 공용 서버에 배포하려면 조회 API와 함께 Viewer/Operator/Admin 권한 모델을 추가해야 한다.
 
 ### Server -> Client Messages
 

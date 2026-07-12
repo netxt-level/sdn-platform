@@ -14,6 +14,7 @@ from app.db.elasticsearch import create_elasticsearch_indices
 from app.db.elasticsearch import is_elasticsearch_ready
 from app.db.influxdb import is_influxdb_ready
 from app.db.postgres import is_postgres_ready
+from app.middleware.body_size import RequestBodySizeLimitMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ app = FastAPI(
     title="SDN Platform API",
     lifespan=lifespan,
 )
+app.add_middleware(RequestBodySizeLimitMiddleware)
 
 app.include_router(analyzer_router)
 app.include_router(

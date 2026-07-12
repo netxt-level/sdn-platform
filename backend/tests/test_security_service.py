@@ -34,6 +34,16 @@ class StubSecurityResponseRepository:
     def list_responses(self, limit):
         return [{"id": "response-1", "limit": limit}]
 
+    def link_flow_rule(self, response_id, flow_rule):
+        return {
+            "id": response_id,
+            "event_id": response_id.replace("response-", ""),
+            "response_payload": {
+                "flow_rule_id": flow_rule["id"],
+                "flow_rule_reused": flow_rule.get("flow_rule_reused", False),
+            },
+        }
+
 
 class StubFlowRepository:
     def __init__(self):
@@ -46,6 +56,7 @@ class StubFlowRepository:
         return {
             "id": f"flow-{event['event_id']}",
             "security_response_id": security_response_id,
+            "flow_rule_reused": False,
         }
 
 
@@ -98,12 +109,17 @@ def test_security_service_stores_events_and_broadcasts_response_context(
                     {
                         "id": "response-evt-rate-limit",
                         "event_id": "evt-rate-limit",
+                        "response_payload": {
+                            "flow_rule_id": "flow-evt-rate-limit",
+                            "flow_rule_reused": False,
+                        },
                     },
                 ],
                 "flow_rules": [
                     {
                         "id": "flow-evt-rate-limit",
                         "security_response_id": "response-evt-rate-limit",
+                        "flow_rule_reused": False,
                     }
                 ],
             },

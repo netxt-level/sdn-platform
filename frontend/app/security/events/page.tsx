@@ -258,7 +258,12 @@ export default function SecurityEventsPage() {
                   <span className="text-faint">발생 시간</span>
                   <strong>{formatDateTime(selectedEvent.occurred_at)}</strong>
                 </div>
-                {selectedEvent.severity === "critical" ? (
+                {isCompletedEvent(selectedEvent) ? (
+                  <div className="flex items-center justify-between rounded border border-green bg-[var(--green-dim)] px-3 py-2 text-green">
+                    <span>처리 완료</span>
+                    <StatusBadge value={selectedEvent.status} tone="normal" />
+                  </div>
+                ) : selectedEvent.severity === "critical" ? (
                   <button
                     type="button"
                     disabled
@@ -267,11 +272,6 @@ export default function SecurityEventsPage() {
                   >
                     처리 확인
                   </button>
-                ) : isCompletedEvent(selectedEvent) ? (
-                  <div className="flex items-center justify-between rounded border border-green bg-[var(--green-dim)] px-3 py-2 text-green">
-                    <span>처리 완료</span>
-                    <StatusBadge value={selectedEvent.status} tone="normal" />
-                  </div>
                 ) : (
                   <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
                     <button

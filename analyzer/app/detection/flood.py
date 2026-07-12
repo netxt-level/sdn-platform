@@ -4,6 +4,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
+from .common import current_time, packet_time
 from .common import clamp_score, score_policy, to_int, to_ip, to_port
 
 
@@ -53,15 +54,20 @@ class FloodDetector:
         )
         self.window_index = 0
         self.last_seen_window: dict[tuple[str, str, str, int | None], int] = {}
+        self.last_seen_bucket: dict[tuple[str, str, str, int | None], int] = {}
 
     def detect(
         self,
         packets: list[dict[str, Any]],
         window_sec: int | float,
     ) -> list[dict[str, Any]]:
-        self.window_index += 1
-        grouped = defaultdict(_new_flood_stats)
-        pair_grouped = defaultdict(_new_flood_stats)
+        fallback_time = current_time()
+        use_packet_time_bucket = any(
+            packet.get("timestamp") is not None
+            for packet in packets
+        )
+        grouped_by_bucket = defaultdict(lambda: defaultdict(_new_flood_stats))
+        pair_grouped_by_bucket = defaultdict(lambda: defaultdict(_new_flood_stats))
 
         for packet in packets:
             if packet.get("protocol") != self.protocol:
@@ -83,31 +89,57 @@ class FloodDetector:
 
             packet_size = max(to_int(packet.get("packet_size")) or 0, 0)
             key = (src_ip, dst_ip, dst_port if self.group_by_dst_port else None)
-            _add_flood_packet(grouped[key], packet_size, dst_port)
+            bucket_key = None
+            if use_packet_time_bucket:
+                bucket_key = int(packet_time(packet, fallback_time).timestamp())
+
+            _add_flood_packet(
+                grouped_by_bucket[bucket_key][key],
+                packet_size,
+                dst_port,
+            )
             if self.group_by_dst_port:
                 _add_flood_packet(
-                    pair_grouped[(src_ip, dst_ip, None)],
+                    pair_grouped_by_bucket[bucket_key][(src_ip, dst_ip, None)],
                     packet_size,
                     dst_port,
                 )
 
-        alerts = []
+        alerts_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
         divisor = float(window_sec) if window_sec and window_sec > 0 else 1.0
+        bucket_divisor = 1.0 if use_packet_time_bucket else divisor
 
-        for (src_ip, dst_ip, dst_port), stats in grouped.items():
-            alert = self._build_alert(
-                scope="service",
-                src_ip=src_ip,
-                dst_ip=dst_ip,
-                dst_port=dst_port,
-                stats=stats,
-                divisor=divisor,
-            )
-            if alert is not None:
-                alerts.append(alert)
+        bucket_keys = _sorted_bucket_keys(grouped_by_bucket, pair_grouped_by_bucket)
+        if not bucket_keys:
+            self.window_index += 1
+            self._cleanup_state()
+            return []
 
-        if self.group_by_dst_port:
-            for (src_ip, dst_ip, dst_port), stats in pair_grouped.items():
+        for bucket_start_epoch in bucket_keys:
+            self.window_index += 1
+
+            for (src_ip, dst_ip, dst_port), stats in grouped_by_bucket[
+                bucket_start_epoch
+            ].items():
+                alert = self._build_alert(
+                    scope="service",
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    stats=stats,
+                    divisor=bucket_divisor,
+                    analysis_window_seconds=divisor,
+                    bucket_start_epoch=bucket_start_epoch,
+                )
+                if alert is not None:
+                    _remember_alert(alerts_by_key, alert)
+
+            if not self.group_by_dst_port:
+                continue
+
+            for (src_ip, dst_ip, dst_port), stats in pair_grouped_by_bucket[
+                bucket_start_epoch
+            ].items():
                 if len(stats["ports"]) <= 1:
                     continue
                 alert = self._build_alert(
@@ -116,13 +148,15 @@ class FloodDetector:
                     dst_ip=dst_ip,
                     dst_port=dst_port,
                     stats=stats,
-                    divisor=divisor,
+                    divisor=bucket_divisor,
+                    analysis_window_seconds=divisor,
+                    bucket_start_epoch=bucket_start_epoch,
                 )
                 if alert is not None:
-                    alerts.append(alert)
+                    _remember_alert(alerts_by_key, alert)
 
         self._cleanup_state()
-        return alerts
+        return list(alerts_by_key.values())
 
     def _build_alert(
         self,
@@ -133,6 +167,8 @@ class FloodDetector:
         dst_port: int | None,
         stats: dict[str, Any],
         divisor: float,
+        analysis_window_seconds: float,
+        bucket_start_epoch: int | None,
     ) -> dict[str, Any] | None:
         packet_count = stats["packets"]
         pps = packet_count / divisor
@@ -145,11 +181,25 @@ class FloodDetector:
         # 중간에 빈 구간이 있으면 연속 공격으로 이어 붙이지 않는다.
         key = (scope, src_ip, dst_ip, dst_port)
         history = self.history[key]
-        last_seen = self.last_seen_window.get(key)
-        if last_seen is not None and last_seen < self.window_index - 1:
+        last_seen_window = self.last_seen_window.get(key)
+        last_seen_bucket = self.last_seen_bucket.get(key)
+        if bucket_start_epoch is not None:
+            if (
+                last_seen_bucket is not None
+                and bucket_start_epoch - last_seen_bucket > 1
+            ):
+                history.clear()
+        elif (
+            last_seen_window is not None
+            and last_seen_window < self.window_index - 1
+        ):
             history.clear()
         history.append(exceeded)
         self.last_seen_window[key] = self.window_index
+        if bucket_start_epoch is not None:
+            self.last_seen_bucket[key] = bucket_start_epoch
+        else:
+            self.last_seen_bucket.pop(key, None)
         exceeded_windows = sum(history)
 
         # Critical 급증도 첫 대응은 Rate Limit 후보로 두고, 지속될 때 Drop 후보로 올린다.
@@ -214,6 +264,9 @@ class FloodDetector:
             "drop_allowed": sustained,
             "mitigation_stage": "escalated" if sustained else "initial",
         }
+        if bucket_start_epoch is not None:
+            evidence["bucket_start_epoch"] = bucket_start_epoch
+            evidence["analysis_window_seconds"] = analysis_window_seconds
         if immediate_critical and not sustained:
             evidence["escalation_reason"] = "critical rate observed once"
         elif sustained:
@@ -263,6 +316,7 @@ class FloodDetector:
         for key in stale_keys:
             self.history.pop(key, None)
             self.last_seen_window.pop(key, None)
+            self.last_seen_bucket.pop(key, None)
 
 
 def _new_flood_stats() -> dict[str, Any]:
@@ -284,6 +338,38 @@ def _add_flood_packet(
     if dst_port is not None:
         stats["ports"].add(dst_port)
         stats["port_counts"][dst_port] += 1
+
+
+def _sorted_bucket_keys(*grouped_maps) -> list[int | None]:
+    keys = set()
+    for grouped_map in grouped_maps:
+        keys.update(grouped_map.keys())
+    return sorted(keys, key=lambda value: -1 if value is None else value)
+
+
+def _remember_alert(
+    alerts_by_key: dict[tuple[Any, ...], dict[str, Any]],
+    alert: dict[str, Any],
+) -> None:
+    key = (
+        alert["detection_rule"],
+        alert["src_ip"],
+        alert["dst_ip"],
+        alert["evidence"].get("destination_port"),
+        alert["evidence"].get("aggregation_scope"),
+    )
+    current = alerts_by_key.get(key)
+    if current is None or _alert_rank(alert) >= _alert_rank(current):
+        alerts_by_key[key] = alert
+
+
+def _alert_rank(alert: dict[str, Any]) -> tuple[int, int, int]:
+    evidence = alert.get("evidence") or {}
+    return (
+        int(alert.get("score") or 0),
+        int(evidence.get("exceeded_windows") or 0),
+        int(evidence.get("bucket_start_epoch") or 0),
+    )
 
 
 class IcmpFloodDetector(FloodDetector):

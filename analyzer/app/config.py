@@ -13,6 +13,7 @@ class AnalyzerConfig:
     status_interval_sec: int
     packet_buffer_max_size: int
     backend_base_url: str
+    backend_api_key: str
     port_scan_window_sec: int
     port_scan_unique_dst_port_threshold: int
     port_scan_syn_count_threshold: int
@@ -104,6 +105,7 @@ def load_config() -> AnalyzerConfig:
             100_000,
         ),
         backend_base_url=os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000"),
+        backend_api_key=os.getenv("BACKEND_API_KEY", "").strip(),
         port_scan_window_sec=get_int_env("PORT_SCAN_WINDOW_SEC", 5),
         port_scan_unique_dst_port_threshold=get_int_env(
             "PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD",
@@ -189,6 +191,8 @@ def validate_config(config: AnalyzerConfig) -> None:
     _require_text("ANALYZER_ID", config.analyzer_id)
     _require_text("ANALYZER_INTERFACE", config.interface)
     _require_text("BACKEND_BASE_URL", config.backend_base_url)
+    _require_max_length("ANALYZER_ID", config.analyzer_id, 30)
+    _require_max_length("ANALYZER_INTERFACE", config.interface, 30)
     _require_positive("ANALYZER_WINDOW_SEC", config.window_sec)
     _require_positive("ANALYZER_STATUS_INTERVAL_SEC", config.status_interval_sec)
     _require_positive(
@@ -302,6 +306,11 @@ def validate_config(config: AnalyzerConfig) -> None:
 def _require_text(name: str, value: str) -> None:
     if not value.strip():
         raise RuntimeError(f"{name} must not be empty")
+
+
+def _require_max_length(name: str, value: str, max_length: int) -> None:
+    if len(value) > max_length:
+        raise RuntimeError(f"{name} must be {max_length} characters or less")
 
 
 def _require_positive(name: str, value: int | float) -> None:

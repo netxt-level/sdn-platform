@@ -21,7 +21,11 @@ class StubTrafficRepository:
 
 
 class StubSecurityEventRepository:
-    def list_suspicious_hosts(self):
+    def __init__(self):
+        self.suspicious_host_calls = []
+
+    def list_suspicious_hosts(self, *, range_value=None):
+        self.suspicious_host_calls.append(range_value)
         return [{"ip": "10.0.0.2", "attack_type": "PORT_SCAN"}]
 
 
@@ -68,6 +72,7 @@ def test_dashboard_service_delegates_history_queries(load_service_module):
     }
     assert traffic_repository.traffic_calls == [("5m", "5s")]
     assert traffic_repository.protocol_calls == ["1m"]
+    assert security_repository.suspicious_host_calls == ["1w"]
 
 
 def test_dashboard_summary_has_expected_metric_shape(load_service_module):

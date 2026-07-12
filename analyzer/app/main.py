@@ -36,7 +36,10 @@ STATUS_INTERVAL_SEC = config.status_interval_sec
 PACKET_BUFFER_MAX_SIZE = config.packet_buffer_max_size
 BACKEND_BASE_URL = config.backend_base_url
 SECURITY_EVENT_SEND_BATCH_SIZE = config.security_event_send_batch_size
-BACKEND_SEND_QUEUE_MAX_SIZE = max(10, config.security_event_queue_max_size)
+# 보안 이벤트는 별도 큐에서 재전송하고, 통계 요약은 최신 상태가 더 중요하므로
+# 오래된 대시보드용 요약이 많이 밀리지 않게 작은 큐로 제한한다.
+BACKEND_SEND_QUEUE_MAX_SIZE = 5
+SECURITY_EVENT_SPLIT_STATUSES = {400, 413, 422}
 
 # 아래 객체들은 캡처, 분석, 전송 루프가 공유하는 런타임 구성요소다.
 # 캡처 스레드가 쌓고 분석 스레드가 비우는 공유 패킷 버퍼
@@ -76,6 +79,7 @@ security_event_builder = SecurityEventBuilder(
 backend_client = BackendClient(
     base_url=BACKEND_BASE_URL,
     timeout_sec=3.0,
+    api_key=config.backend_api_key,
 )
 
 # 분석 서버의 캡처 상태, 백엔드 연결 상태, 최근 처리 시각을 관리
@@ -172,13 +176,20 @@ def queue_security_events(events):
 
 
 def send_pending_security_events(timestamp):
+    return _send_pending_security_events(
+        timestamp,
+        SECURITY_EVENT_SEND_BATCH_SIZE,
+    )
+
+
+def _send_pending_security_events(timestamp, batch_size):
     """전송 실패로 남아 있는 보안 이벤트를 다음 분석 주기에 다시 전송한다."""
 
     with pending_security_events_lock:
         if len(pending_security_events) == 0:
             return True
 
-        batch = pending_security_events.peek_batch(SECURITY_EVENT_SEND_BATCH_SIZE)
+        batch = pending_security_events.peek_batch(batch_size)
         payload = pending_security_events.payload(
             timestamp=timestamp,
             analyzer_id=ANALYZER_ID,
@@ -186,21 +197,47 @@ def send_pending_security_events(timestamp):
         )
 
     try:
-        sent = backend_client.send_security_events(payload)
+        result = backend_client.send_security_events(payload)
     except Exception as exc:
         analyzer_status.mark_backend_failed("failed to send security events")
         analyzer_status.mark_security_event_send_failed()
         logger.exception("security events 전송 중 예외가 발생했습니다: %s", exc)
         return False
 
-    if sent:
+    if result.success:
         with pending_security_events_lock:
             pending_security_events.remove_sent(batch)
+        return True
+
+    status_code = result.status_code
+    if status_code in SECURITY_EVENT_SPLIT_STATUSES and len(batch) > 1:
+        smaller_batch_size = max(1, len(batch) // 2)
+        logger.warning(
+            "보안 이벤트 batch가 HTTP %s 응답을 받아 %d개에서 %d개로 줄여 다시 전송합니다.",
+            status_code,
+            len(batch),
+            smaller_batch_size,
+        )
+        return _send_pending_security_events(timestamp, smaller_batch_size)
+
+    if status_code in SECURITY_EVENT_SPLIT_STATUSES:
+        _discard_pending_security_events(batch, f"HTTP {status_code}")
         return True
 
     analyzer_status.mark_backend_failed("failed to send security events")
     analyzer_status.mark_security_event_send_failed()
     return False
+
+
+def _discard_pending_security_events(events, reason):
+    with pending_security_events_lock:
+        pending_security_events.remove_sent(events)
+    security_event_builder.forget_events(events)
+    logger.warning(
+        "보안 이벤트 %d개를 재시도 큐에서 제거했습니다: %s",
+        len(events),
+        reason,
+    )
 
 
 def enqueue_backend_result(result):
@@ -288,11 +325,12 @@ def analysis_loop():
                     "security_events_timestamp": security_events["timestamp"],
                 }
             )
+            analyzer_status.mark_analysis_succeeded()
 
         except Exception as exc:
             # 탐지 로직 예외로 분석 스레드가 죽지 않도록 오류 상태를 남기고 다음 윈도우로 넘어간다.
             error_message = f"analysis loop failed: {exc}"
-            analyzer_status.mark_backend_failed(error_message)
+            analyzer_status.mark_analysis_failed(error_message)
             logger.exception(error_message)
 
 
@@ -300,17 +338,21 @@ def backend_sender_loop():
     while True:
         result = backend_send_queue.get()
         try:
-            packet_summary_sent = backend_client.send_packet_summary(
-                result["packet_summary"]
-            )
-            traffic_stats_sent = backend_client.send_traffic_stats(
-                result["traffic_stats"]
-            )
             security_events_sent = send_pending_security_events(
                 result["security_events_timestamp"]
             )
+            packet_summary_result = backend_client.send_packet_summary(
+                result["packet_summary"]
+            )
+            traffic_stats_result = backend_client.send_traffic_stats(
+                result["traffic_stats"]
+            )
 
-            if packet_summary_sent and traffic_stats_sent and security_events_sent:
+            if (
+                packet_summary_result.success
+                and traffic_stats_result.success
+                and security_events_sent
+            ):
                 analyzer_status.mark_summary_sent()
             else:
                 analyzer_status.mark_backend_failed(
@@ -338,11 +380,11 @@ def status_loop():
                 dropped_security_event_count=dropped_event_count,
                 packet_buffer_dropped_count=packet_buffer_dropped_count,
             )
-            status_sent = backend_client.send_analyzer_status(
+            status_result = backend_client.send_analyzer_status(
                 analyzer_status.to_dict()
             )
 
-            if not status_sent:
+            if not status_result.success:
                 # 상태 전송 실패도 다음 상태 보고에 반영되도록 백엔드 연결 실패로 표시한다.
                 analyzer_status.mark_backend_failed(
                     "failed to send analyzer status"

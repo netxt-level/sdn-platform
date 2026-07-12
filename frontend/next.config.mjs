@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    cpus: 1
+  },
   async rewrites() {
     const backendUrl =
       process.env.BACKEND_INTERNAL_URL ?? "http://localhost:8000";

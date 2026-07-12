@@ -10,16 +10,18 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-sdn_platform}
       POSTGRES_USER: ${POSTGRES_USER:-sdn_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_postgres_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       INFLUXDB_HOST: influxdb
       INFLUXDB_PORT: 8086
       INFLUXDB_ORG: ${INFLUXDB_ORG:-sdn_org}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sdn_metrics}
-      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-change_me_influx_token}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:?INFLUXDB_TOKEN is required}
       ELASTICSEARCH_HOST: elasticsearch
       ELASTICSEARCH_HTTP_PORT: 9200
+      ANALYZER_API_KEY: ${ANALYZER_API_KEY:?ANALYZER_API_KEY is required}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY is required}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -49,12 +51,12 @@ services:
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-sdn_platform}
       POSTGRES_USER: ${POSTGRES_USER:-sdn_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_postgres_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       INFLUXDB_HOST: influxdb
       INFLUXDB_PORT: 8086
       INFLUXDB_ORG: ${INFLUXDB_ORG:-sdn_org}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sdn_metrics}
-      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-change_me_influx_token}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:?INFLUXDB_TOKEN is required}
       ELASTICSEARCH_HOST: elasticsearch
       ELASTICSEARCH_HTTP_PORT: 9200
     depends_on:
@@ -109,6 +111,7 @@ services:
       SECURITY_EVENT_QUEUE_MAX_SIZE: ${SECURITY_EVENT_QUEUE_MAX_SIZE:-500}
       SECURITY_EVENT_SEND_BATCH_SIZE: ${SECURITY_EVENT_SEND_BATCH_SIZE:-100}
       BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://backend:8000}
+      BACKEND_API_KEY: ${ANALYZER_API_KEY:?ANALYZER_API_KEY is required}
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -120,6 +123,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        BACKEND_INTERNAL_URL: ${FRONTEND_BACKEND_INTERNAL_URL:-http://backend:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/ws/analyzer}
     container_name: sdn-frontend
     restart: unless-stopped
     ports:
@@ -138,9 +144,9 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sdn_platform}
       POSTGRES_USER: ${POSTGRES_USER:-sdn_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_postgres_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -160,12 +166,12 @@ services:
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:-sdn_user}
-      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-change_me_influx_password}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?INFLUXDB_PASSWORD is required}
       DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-sdn_org}
       DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET:-sdn_metrics}
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-change_me_influx_token}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:?INFLUXDB_TOKEN is required}
     ports:
-      - "${INFLUXDB_PORT:-8086}:8086"
+      - "127.0.0.1:${INFLUXDB_PORT:-8086}:8086"
     volumes:
       - influxdb_data:/var/lib/influxdb2
       - influxdb_config:/etc/influxdb2
@@ -188,8 +194,8 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
     ports:
-      - "${ELASTICSEARCH_HTTP_PORT:-9200}:9200"
-      - "${ELASTICSEARCH_TRANSPORT_PORT:-9300}:9300"
+      - "127.0.0.1:${ELASTICSEARCH_HTTP_PORT:-9200}:9200"
+      - "127.0.0.1:${ELASTICSEARCH_TRANSPORT_PORT:-9300}:9300"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     healthcheck:

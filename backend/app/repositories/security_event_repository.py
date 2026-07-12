@@ -12,5 +12,12 @@ class SecurityEventRepository:
     def list_security_events(self, limit: int = 50) -> list[dict[str, Any]]:
         return search_security_events(limit)
 
-    def list_suspicious_hosts(self, limit: int = 100) -> list[dict[str, Any]]:
-        return query_suspicious_hosts_from_security_events(limit)
+    def list_suspicious_hosts(
+        self,
+        limit: int = 100,
+        range_value: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return query_suspicious_hosts_from_security_events(
+            limit,
+            range_value=range_value,
+        )

@@ -12,7 +12,7 @@ encoders_stub.jsonable_encoder = lambda value: value
 sys.modules.setdefault("fastapi", fastapi_stub)
 sys.modules.setdefault("fastapi.encoders", encoders_stub)
 
-from app.core.websocket import WebSocketManager
+from app.core.websocket import WebSocketManager  # noqa: E402
 
 
 class StubWebSocket:

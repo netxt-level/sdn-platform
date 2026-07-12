@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import URL
 
 load_dotenv()
 
@@ -22,7 +23,14 @@ class Settings:
         user = get_env("POSTGRES_USER")
         password = get_env("POSTGRES_PASSWORD")
         database = get_env("POSTGRES_DB")
-        return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{database}"
+        return URL.create(
+            drivername="postgresql+psycopg",
+            username=user,
+            password=password,
+            host=host,
+            port=int(port),
+            database=database,
+        ).render_as_string(hide_password=False)
 
     @property
     def influxdb_url(self) -> str:
@@ -47,6 +55,22 @@ class Settings:
         host = get_env("ELASTICSEARCH_HOST", "localhost")
         port = get_env("ELASTICSEARCH_HTTP_PORT", "9200")
         return f"http://{host}:{port}"
+
+    @property
+    def analyzer_api_key(self) -> str:
+        return os.getenv("ANALYZER_API_KEY", "").strip()
+
+    @property
+    def admin_api_key(self) -> str:
+        return os.getenv("ADMIN_API_KEY", "").strip()
+
+    @property
+    def allow_insecure_dev_auth(self) -> bool:
+        return os.getenv("ALLOW_INSECURE_DEV_AUTH", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
 
 
 settings = Settings()

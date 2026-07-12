@@ -13,6 +13,18 @@ alembic downgrade -1
 alembic upgrade head --sql
 ```
 
+현재 revision 흐름
+------------------
+
+```text
+001_init_schema
+  -> 002_create_sdn_tables
+  -> 003_create_flow_rules
+  -> 004_create_security_responses
+  -> 005_add_analyzer_runtime_metrics
+  -> 006_relax_response_and_flow_history_uniqueness
+```
+
 Docker Compose 실행
 -------------------
 

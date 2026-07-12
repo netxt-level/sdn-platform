@@ -51,6 +51,43 @@ def correlate_detections(detections: list[dict[str, Any]]) -> list[dict[str, Any
             conditions.append("같은 흐름의 Port Scan 탐지를 SYN Flood 근거로 병합")
             syn_detection["matched_conditions"] = conditions
 
+    for pair_index, pair_detection in enumerate(correlated):
+        if pair_index in suppressed_indexes or not _is_udp_pair_flood(pair_detection):
+            continue
+
+        related_service_detections = []
+        for service_index, service_detection in enumerate(correlated):
+            if service_index == pair_index or service_index in suppressed_indexes:
+                continue
+            if not _is_udp_service_flood(service_detection):
+                continue
+            if _flow_key(service_detection) != _flow_key(pair_detection):
+                continue
+            if _response_rank(service_detection) > _response_rank(pair_detection):
+                continue
+
+            related_service_detections.append(
+                _related_udp_service_detection(service_detection)
+            )
+            suppressed_indexes.add(service_index)
+
+        if related_service_detections:
+            evidence = dict(pair_detection.get("evidence") or {})
+            existing_related = list(evidence.get("related_service_detections") or [])
+            evidence["related_service_detections"] = (
+                existing_related + related_service_detections
+            )
+            evidence["suppressed_detection_count"] = (
+                int(evidence.get("suppressed_detection_count") or 0)
+                + len(related_service_detections)
+            )
+            evidence["correlation_policy"] = "udp_pair_total_over_service_ports"
+            pair_detection["evidence"] = evidence
+
+            conditions = list(pair_detection.get("matched_conditions") or [])
+            conditions.append("같은 UDP 흐름의 서비스별 탐지를 pair 기준 근거로 병합")
+            pair_detection["matched_conditions"] = conditions
+
     return [
         detection
         for index, detection in enumerate(correlated)
@@ -79,6 +116,22 @@ def _is_multi_service_syn_flood(detection: dict[str, Any]) -> bool:
     )
 
 
+def _is_udp_pair_flood(detection: dict[str, Any]) -> bool:
+    evidence = detection.get("evidence") or {}
+    return (
+        detection.get("attack_type") == "UDP_FLOOD"
+        and evidence.get("aggregation_scope") == "pair"
+    )
+
+
+def _is_udp_service_flood(detection: dict[str, Any]) -> bool:
+    evidence = detection.get("evidence") or {}
+    return (
+        detection.get("attack_type") == "UDP_FLOOD"
+        and evidence.get("aggregation_scope") == "service"
+    )
+
+
 def _response_rank(detection: dict[str, Any]) -> int:
     response_level = str(detection.get("response_level") or "L0")
     return {
@@ -101,4 +154,20 @@ def _related_detection(detection: dict[str, Any]) -> dict[str, Any]:
         "scan_type": evidence.get("scan_type"),
         "unique_dst_port_count": evidence.get("unique_dst_port_count"),
         "target_count": evidence.get("target_count"),
+    }
+
+
+def _related_udp_service_detection(detection: dict[str, Any]) -> dict[str, Any]:
+    evidence = detection.get("evidence") or {}
+    return {
+        "attack_type": detection.get("attack_type"),
+        "detection_rule": detection.get("detection_rule"),
+        "score": detection.get("score"),
+        "severity": detection.get("severity"),
+        "response_level": detection.get("response_level"),
+        "recommended_action": detection.get("recommended_action"),
+        "destination_port": evidence.get("destination_port"),
+        "packet_count": evidence.get("packet_count"),
+        "pps": evidence.get("pps"),
+        "bps": evidence.get("bps"),
     }

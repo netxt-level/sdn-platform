@@ -81,6 +81,56 @@ def test_packet_summary_accepts_actual_float_window_seconds():
     assert request.window_sec == 2.5
 
 
+def test_packet_summary_accepts_arp_and_other_protocols():
+    request = PacketSummaryRequest.model_validate({
+        "timestamp": "2026-07-11T08:00:00+00:00",
+        "analyzer_id": "analyzer-1",
+        "window_sec": 1,
+        "total_packets": 2,
+        "total_bits": 1600,
+        "protocol_stats": {"ARP": 1, "OTHER": 1},
+        "host_stats": [
+            {
+                "src_ip": "10.0.0.2",
+                "dst_ip": "10.0.0.4",
+                "protocol": "ARP",
+                "packet_count": 1,
+                "bit_count": 800,
+            },
+            {
+                "src_ip": "10.0.0.3",
+                "dst_ip": "10.0.0.5",
+                "protocol": "OTHER",
+                "packet_count": 1,
+                "bit_count": 800,
+            },
+        ],
+    })
+
+    assert request.protocol_stats == {"ARP": 1, "OTHER": 1}
+
+
+def test_packet_summary_rejects_unknown_host_stat_protocol():
+    with pytest.raises(ValidationError):
+        PacketSummaryRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "window_sec": 1,
+            "total_packets": 1,
+            "total_bits": 800,
+            "protocol_stats": {"OTHER": 1},
+            "host_stats": [
+                {
+                    "src_ip": "10.0.0.2",
+                    "dst_ip": "10.0.0.4",
+                    "protocol": "UNKNOWN",
+                    "packet_count": 1,
+                    "bit_count": 800,
+                }
+            ],
+        })
+
+
 def test_analyzer_status_accepts_runtime_security_metrics():
     request = AnalyzerStatusRequest.model_validate({
         "timestamp": "2026-07-11T08:00:00+00:00",
@@ -269,6 +319,19 @@ def test_analyzer_payload_rejects_negative_counts():
         })
 
 
+def test_packet_summary_request_rejects_unknown_protocol_stat_key():
+    with pytest.raises(ValidationError):
+        PacketSummaryRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "window_sec": 1,
+            "total_packets": 1,
+            "total_bits": 800,
+            "protocol_stats": {"TCP_UNEXPECTED_LONG_NAME": 1},
+            "host_stats": [],
+        })
+
+
 def test_analyzer_status_rejects_negative_runtime_metrics():
     with pytest.raises(ValidationError):
         AnalyzerStatusRequest.model_validate({
@@ -279,4 +342,87 @@ def test_analyzer_status_rejects_negative_runtime_metrics():
             "capture_active": True,
             "backend_connected": True,
             "pending_security_event_count": -1,
+        })
+
+
+def test_security_events_request_rejects_too_large_batch():
+    with pytest.raises(ValidationError):
+        SecurityEventsRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "events": [
+                _security_event(event_id=f"evt-{index}")
+                for index in range(101)
+            ],
+        })
+
+
+def test_security_events_request_rejects_mismatched_analyzer_id():
+    with pytest.raises(ValidationError):
+        SecurityEventsRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "events": [_security_event(analyzer_id="analyzer-2")],
+        })
+
+
+def test_security_event_request_rejects_oversized_evidence_string():
+    with pytest.raises(ValidationError):
+        SecurityEventsRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "events": [
+                _security_event(evidence={"blob": "x" * 4097})
+            ],
+        })
+
+
+def test_security_event_request_rejects_oversized_evidence_list():
+    target_ips = [f"10.0.0.{index}" for index in range(101)]
+
+    with pytest.raises(ValidationError):
+        SecurityEventsRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "events": [
+                _security_event(evidence={"target_ips": target_ips})
+            ],
+        })
+
+
+def test_security_event_request_rejects_values_longer_than_db_columns():
+    with pytest.raises(ValidationError):
+        SecurityEventsRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "events": [
+                _security_event(
+                    event_id="e" * 81,
+                    event_fingerprint="f" * 129,
+                    dedup_key="d" * 129,
+                    detection_rule="r" * 129,
+                )
+            ],
+        })
+
+
+def test_packet_summary_request_rejects_too_many_host_stats():
+    with pytest.raises(ValidationError):
+        PacketSummaryRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "window_sec": 1,
+            "total_packets": 101,
+            "total_bits": 80800,
+            "protocol_stats": {"TCP": 101},
+            "host_stats": [
+                {
+                    "src_ip": "10.0.0.2",
+                    "dst_ip": f"10.0.1.{index + 1}",
+                    "protocol": "TCP",
+                    "packet_count": 1,
+                    "bit_count": 800,
+                }
+                for index in range(101)
+            ],
         })

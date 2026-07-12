@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.flow_rule import FlowRule
+from app.policies.flow_rule_policy import is_compatible_flow_rule
 
 
 def _to_dict(flow_rule: FlowRule) -> dict[str, Any]:
@@ -59,24 +60,41 @@ def _optional_int(value: Any) -> int | None:
     return int(value)
 
 
-def _action_rank(action: str | None) -> int:
+def _mark_reuse(flow_rule: dict[str, Any], reused: bool) -> dict[str, Any]:
     return {
-        "DROP": 3,
-        "RATE_LIMIT": 2,
-        "FORWARD": 1,
-    }.get(str(action or "").upper(), 0)
+        **flow_rule,
+        "reused": reused,
+        "flow_rule_reused": reused,
+    }
 
 
 class FlowRepository:
-    def list_flows(self, src_ip: str | None = None) -> list[dict[str, Any]]:
+    def list_flows(
+        self,
+        src_ip: str | None = None,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        limit = min(max(limit, 1), 500)
+        offset = max(offset, 0)
         stmt = select(FlowRule).order_by(FlowRule.created_at.desc())
         if src_ip:
             stmt = stmt.where(FlowRule.match["ipv4_src"].as_string() == src_ip)
+        stmt = stmt.limit(limit).offset(offset)
 
         with SessionLocal() as session:
             flow_rules = session.execute(stmt).scalars().all()
 
         return [_to_dict(flow_rule) for flow_rule in flow_rules]
+
+    def count_flows(self, src_ip: str | None = None) -> int:
+        stmt = select(func.count()).select_from(FlowRule)
+        if src_ip:
+            stmt = stmt.where(FlowRule.match["ipv4_src"].as_string() == src_ip)
+
+        with SessionLocal() as session:
+            return int(session.execute(stmt).scalar_one())
 
     def create_manual_flow(
         self,
@@ -123,25 +141,47 @@ class FlowRepository:
         fingerprint = event.get("event_fingerprint")
         match = mitigation.get("match") or {}
         switch_id = mitigation.get("switch_id")
+        target = mitigation.get("target", "flow")
 
         with SessionLocal.begin() as session:
             flow_rule = None
             if fingerprint:
-                stmt = select(FlowRule).where(
-                    FlowRule.source_event_fingerprint == fingerprint,
-                    FlowRule.action == action,
+                stmt = (
+                    select(FlowRule)
+                    .where(
+                        FlowRule.source_event_fingerprint == fingerprint,
+                        FlowRule.action == action,
+                    )
+                    .order_by(FlowRule.created_at.desc())
                 )
-                flow_rule = session.execute(stmt).scalar_one_or_none()
+                fingerprint_rules = session.execute(stmt).scalars().all()
+                for candidate_rule in fingerprint_rules:
+                    if is_compatible_flow_rule(
+                        candidate_rule,
+                        mitigation,
+                        requested_action=action,
+                    ):
+                        flow_rule = candidate_rule
+                        break
 
             if flow_rule is None:
-                stmt = select(FlowRule).where(
-                    FlowRule.match == match,
-                    FlowRule.switch_id == switch_id,
+                stmt = (
+                    select(FlowRule)
+                    .where(
+                        FlowRule.match == match,
+                        FlowRule.switch_id == switch_id,
+                        FlowRule.target == target,
+                    )
+                    .order_by(FlowRule.created_at.desc())
                 )
                 same_match_rules = session.execute(stmt).scalars().all()
                 for existing_rule in same_match_rules:
-                    if _action_rank(existing_rule.action) >= _action_rank(action):
-                        return _to_dict(existing_rule)
+                    if is_compatible_flow_rule(
+                        existing_rule,
+                        mitigation,
+                        requested_action=action,
+                    ):
+                        return _mark_reuse(_to_dict(existing_rule), True)
 
             if flow_rule is None:
                 flow_rule = FlowRule(
@@ -150,7 +190,7 @@ class FlowRepository:
                     security_response_id=security_response_id,
                     analyzer_id=event["analyzer_id"],
                     switch_id=switch_id,
-                    target=mitigation.get("target", "flow"),
+                    target=target,
                     action=action,
                     match=match,
                     priority=int(mitigation["priority"]),
@@ -161,7 +201,7 @@ class FlowRepository:
                 session.add(flow_rule)
                 session.flush()
 
-            return _to_dict(flow_rule)
+            return _mark_reuse(_to_dict(flow_rule), flow_rule.security_response_id != security_response_id)
 
     def update_status(
         self,
@@ -185,5 +225,6 @@ class FlowRepository:
             flow_rule.error_message = error_message
             flow_rule.requested_at = requested_at
             flow_rule.applied_at = applied_at
+            flow_rule.updated_at = datetime.now(timezone.utc)
 
             return _to_dict(flow_rule)

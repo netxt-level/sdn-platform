@@ -5,8 +5,8 @@ import sys
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 sys.path.append(str(BACKEND_DIR))
 
-from app.db.influxdb import write_detection_summary
-from app.db.elasticsearch import index_security_event
+from app.db.influxdb import write_detection_summary  # noqa: E402
+from app.db.elasticsearch import index_security_event  # noqa: E402
 
 
 def build_dummy_detection_summary() -> dict:

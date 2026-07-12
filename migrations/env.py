@@ -2,10 +2,10 @@ from logging.config import fileConfig
 import os
 from pathlib import Path
 import sys
-from urllib.parse import quote_plus
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from sqlalchemy.engine import URL
 
 from alembic import context
 
@@ -14,8 +14,8 @@ BACKEND_PATH = PROJECT_ROOT / "backend"
 if str(BACKEND_PATH) not in sys.path:
     sys.path.insert(0, str(BACKEND_PATH))
 
-from app.models.base import Base
-import app.models
+from app.models.base import Base  # noqa: E402
+import app.models  # noqa: E402,F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -60,11 +60,18 @@ def set_database_url_from_env() -> None:
     if not all([db_name, user, password]):
         return
 
-    database_url = (
-        f"postgresql+psycopg://{quote_plus(user)}:{quote_plus(password)}"
-        f"@{host}:{port}/{db_name}"
+    database_url = URL.create(
+        drivername="postgresql+psycopg",
+        username=user,
+        password=password,
+        host=host,
+        port=int(port),
+        database=db_name,
     )
-    config.set_main_option("sqlalchemy.url", database_url)
+    config.set_main_option(
+        "sqlalchemy.url",
+        database_url.render_as_string(hide_password=False),
+    )
 
 
 set_database_url_from_env()

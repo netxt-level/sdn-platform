@@ -7,6 +7,34 @@ from elasticsearch.helpers import bulk
 from app.core.config import settings
 
 
+SECURITY_EVENTS_INDEX = "sdn-security-events"
+SECURITY_EVENTS_MAPPING = {
+    "properties": {
+        "@timestamp": {"type": "date"},
+        "event_id": {"type": "keyword"},
+        "event_fingerprint": {"type": "keyword"},
+        "dedup_key": {"type": "keyword"},
+        "timestamp": {"type": "date"},
+        "analyzer_id": {"type": "keyword"},
+        "attack_category": {"type": "keyword"},
+        "attack_type": {"type": "keyword"},
+        "severity": {"type": "keyword"},
+        "confidence": {"type": "keyword"},
+        "status": {"type": "keyword"},
+        "src_ip": {"type": "ip"},
+        "dst_ip": {"type": "ip"},
+        "protocol": {"type": "keyword"},
+        "detection_rule": {"type": "keyword"},
+        "recommended_action": {"type": "keyword"},
+        "response_level": {"type": "keyword"},
+        # evidence는 화면 상세 확인용 원문으로 보관하고, 임의 key가
+        # Elasticsearch field를 계속 늘리지 않도록 인덱싱하지 않는다.
+        "evidence": {"type": "object", "enabled": False},
+        "mitigation": {"type": "object", "enabled": True},
+    }
+}
+
+
 def get_elasticsearch_client() -> Elasticsearch:
     return Elasticsearch(
         settings.elasticsearch_url,
@@ -16,7 +44,9 @@ def get_elasticsearch_client() -> Elasticsearch:
 def is_elasticsearch_ready() -> bool:
     es = get_elasticsearch_client()
     try:
-        return bool(es.ping())
+        return bool(es.ping()) and bool(
+            es.indices.exists(index=SECURITY_EVENTS_INDEX)
+        )
     except Exception:
         return False
     finally:
@@ -39,35 +69,17 @@ def create_elasticsearch_indices() -> None:
         else:
             raise RuntimeError("Elasticsearch is not ready")
 
-        if not es.indices.exists(index="sdn-security-events"):
-            es.indices.create(
-                index="sdn-security-events",
-                mappings={
-                    "properties": {
-                        "@timestamp": {"type": "date"},
-                        "event_id": {"type": "keyword"},
-                        "event_fingerprint": {"type": "keyword"},
-                        "dedup_key": {"type": "keyword"},
-                        "timestamp": {"type": "date"},
-                        "analyzer_id": {"type": "keyword"},
-                        "attack_category": {"type": "keyword"},
-                        "attack_type": {"type": "keyword"},
-                        "severity": {"type": "keyword"},
-                        "confidence": {"type": "keyword"},
-                        "status": {"type": "keyword"},
-                        "src_ip": {"type": "ip"},
-                        "dst_ip": {"type": "ip"},
-                        "protocol": {"type": "keyword"},
-                        "detection_rule": {"type": "keyword"},
-                        "recommended_action": {"type": "keyword"},
-                        "response_level": {"type": "keyword"},
-                        "evidence": {"type": "object", "enabled": True},
-                        "mitigation": {"type": "object", "enabled": True},
-                    }
-                },
-            )
+        _ensure_security_events_index(es)
     finally:
         es.close()
+
+
+def _ensure_security_events_index(es: Elasticsearch) -> None:
+    if not es.indices.exists(index=SECURITY_EVENTS_INDEX):
+        es.indices.create(
+            index=SECURITY_EVENTS_INDEX,
+            mappings=SECURITY_EVENTS_MAPPING,
+        )
 
 
 def index_security_events(events: list[dict[str, Any]]) -> None:
@@ -76,10 +88,11 @@ def index_security_events(events: list[dict[str, Any]]) -> None:
 
     es = get_elasticsearch_client()
     try:
+        _ensure_security_events_index(es)
         actions = [
             {
                 "_op_type": "index",
-                "_index": "sdn-security-events",
+                "_index": SECURITY_EVENTS_INDEX,
                 "_id": event["event_id"],
                 "_source": {
                     **event,
@@ -97,18 +110,39 @@ def index_security_event(payload: dict[str, Any]) -> None:
     index_security_events([payload])
 
 
-def search_security_events(limit: int = 50) -> list[dict]:
+def search_security_events(
+    limit: int = 50,
+    range_value: str | None = None,
+) -> list[dict]:
+    query: dict[str, Any]
+    if range_value:
+        query = {
+            "bool": {
+                "filter": [
+                    {
+                        "range": {
+                            "@timestamp": {
+                                "gte": f"now-{range_value}",
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    else:
+        query = {
+            "match_all": {},
+        }
+
     es = get_elasticsearch_client()
     try:
         response = es.search(
-            index="sdn-security-events",
+            index=SECURITY_EVENTS_INDEX,
             size=limit,
             sort=[
                 {"@timestamp": {"order": "desc"}},
             ],
-            query={
-                "match_all": {},
-            },
+            query=query,
         )
 
         items = []
@@ -149,8 +183,9 @@ def _pps_from_evidence(evidence: dict) -> float:
 
 def query_suspicious_hosts_from_security_events(
     limit: int = 100,
+    range_value: str | None = None,
 ) -> list[dict]:
-    events = search_security_events(limit)
+    events = search_security_events(limit, range_value=range_value)
     hosts: dict[tuple[str, str, str], dict] = {}
 
     for event in events:

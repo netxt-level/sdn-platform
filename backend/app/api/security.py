@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.core.auth import require_analyzer_api_key
 from app.schemas.security import SecurityEventsRequest
 from app.services.security_service import SecurityService
 
@@ -21,7 +22,7 @@ def get_security_responses(
     return security_service.get_responses(limit)
 
 
-@router.post("/events")
+@router.post("/events", dependencies=[Depends(require_analyzer_api_key)])
 async def receive_security_events(payload: SecurityEventsRequest):
     data = payload.model_dump(mode="json")
     await security_service.receive_events(data)

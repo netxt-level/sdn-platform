@@ -37,11 +37,22 @@ class AnalyzerStatus:
     def mark_summary_sent(self):
         self.backend_connected = True
         self.last_summary_sent_at = self._now_iso()
-        self.error_message = None
+        if self._is_backend_error(self.error_message):
+            self.error_message = None
 
     def mark_backend_failed(self, error_message: str):
         self.backend_connected = False
+        if not self._is_analysis_error(self.error_message):
+            self.error_message = error_message
+
+    def mark_analysis_failed(self, error_message: str):
+        self.status = "error"
         self.error_message = error_message
+
+    def mark_analysis_succeeded(self):
+        if self._is_analysis_error(self.error_message):
+            self.status = "running"
+            self.error_message = None
 
     def mark_security_event_send_failed(self):
         self.last_security_event_send_failure = self._now_iso()
@@ -78,3 +89,19 @@ class AnalyzerStatus:
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def _is_analysis_error(self, error_message: str | None) -> bool:
+        return bool(
+            error_message
+            and error_message.startswith("analysis loop failed")
+        )
+
+    def _is_backend_error(self, error_message: str | None) -> bool:
+        if not error_message:
+            return False
+
+        return error_message.startswith((
+            "failed to send",
+            "backend sender loop failed",
+            "status loop failed",
+        ))

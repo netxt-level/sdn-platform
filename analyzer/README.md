@@ -46,6 +46,7 @@ app/packet/capture.py
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 전송 주기 |
 | `ANALYZER_PACKET_BUFFER_MAX_SIZE` | `100000` | 분석 지연 시 메모리에 보관할 최대 패킷 수 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API 주소 |
+| `BACKEND_API_KEY` | `` | 백엔드가 API Key를 요구할 때 Analyzer가 보낼 `X-API-Key` 값 |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
 | `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `15` | Port Scan 고유 목적지 포트 임계값 |
 | `PORT_SCAN_SYN_COUNT_THRESHOLD` | `30` | Port Scan SYN 시도 수 보조 조건 기준 |
@@ -115,10 +116,16 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 - 분석 서버는 컨트롤러에 직접 대응 요청을 보내지 않는다.
 - 자동 대응에 필요한 payload는 `mitigation`으로만 제안한다. 실제 승인, 저장, 컨트롤러 적용 여부는 백엔드/컨트롤러 쪽 책임이다.
 - 대응 후보는 현재 IPv4 OpenFlow match 기준으로 만들기 때문에 IPv6 주소는 보안 이벤트 변환에서 제외한다.
+- `ANALYZER_ID`와 `ANALYZER_INTERFACE`는 백엔드 스키마와 맞춰 최대 30자로 제한한다.
 - `total_bps`, `total_pps`는 윈도우 내 누적 값을 `window_sec`로 나눈 초당 값이다.
+- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 중간에 빈 초가 있으면 지속 공격 history를 초기화한다. timestamp가 없으면 실제 분석 윈도우를 사용한다.
 - 분석 루프와 상태 전송 루프는 예외가 발생해도 오류 상태를 기록하고 계속 실행된다.
+- 분석 루프 오류는 다음 정상 분석이 완료되면 `running` 상태로 복구한다. 백엔드 전송 성공만으로 분석 오류 메시지를 지우지는 않는다.
 - 백엔드 전송 실패는 로그로 남기고 해당 전송은 실패 처리한다.
-- 보안 이벤트 전송이 실패하면 메모리 대기 큐에 남겨 다음 분석 구간에서 설정된 배치 크기만큼 다시 전송한다.
+- 보안 이벤트 전송이 실패하면 메모리 대기 큐에 남겨 다음 분석 구간에서 설정된 배치 크기만큼 다시 전송한다. 400/413/422 응답이면 batch 크기를 줄여 재시도하고, 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트만 큐에서 제거한다.
+- 백엔드는 Analyzer POST 요청 본문 크기를 제한한다. 상태 보고는 64KB, 패킷 요약은 512KB, 탐지 요약은 128KB, 보안 이벤트는 1MB까지 허용한다.
+- 보안 이벤트는 packet summary와 traffic stats보다 먼저 백엔드로 전송한다.
+- packet summary와 traffic stats는 최신 값이 중요하므로 작은 전송 큐를 사용한다. 큐가 가득 차면 오래된 요약을 버리고 최신 요약을 우선 전송한다.
 - 패킷 버퍼가 설정된 최대 크기를 넘으면 가장 오래된 패킷부터 제거하고 로그로 남긴다.
 - 패킷 캡처에는 OS/컨테이너 권한이 필요할 수 있다.
 

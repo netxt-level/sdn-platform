@@ -15,7 +15,9 @@ from analyzer.app.detection.security_events import (
     SecurityEventBuilder,
 )
 from analyzer.app.detection.syn_flood import SynFloodDetector
+from analyzer.app.packet.parser import parse_packet
 from analyzer.app.packet.summary import PacketSummaryBuilder
+from scapy.layers.l2 import ARP, Ether
 
 
 def tcp_syn_packets(
@@ -148,7 +150,8 @@ class PacketSummaryPolicyTest(unittest.TestCase):
 
         self.assertEqual(len(summary["host_stats"]), 1)
         self.assertEqual(summary["host_stats"][0]["packet_count"], 100)
-        self.assertEqual(summary["host_stats"][0]["dst_port"], 80)
+        self.assertIsNone(summary["host_stats"][0]["src_port"])
+        self.assertIsNone(summary["host_stats"][0]["dst_port"])
 
     def test_packet_summary_groups_destination_ports_for_host_traffic(self):
         builder = PacketSummaryBuilder(max_host_stats=50)
@@ -182,6 +185,34 @@ class PacketSummaryPolicyTest(unittest.TestCase):
             [item["packet_count"] for item in summary["host_stats"]],
             [5, 4, 3],
         )
+
+    def test_packet_summary_normalizes_unknown_protocol_to_other(self):
+        builder = PacketSummaryBuilder(max_host_stats=50)
+        summary = builder.build_packet_summary([
+            {
+                "protocol": "UNKNOWN",
+                "src_ip": "10.0.0.2",
+                "dst_ip": "10.0.0.4",
+                "packet_size": 100,
+            }
+        ])
+
+        self.assertEqual(summary["protocol_stats"], {"OTHER": 1})
+        self.assertEqual(summary["host_stats"][0]["protocol"], "OTHER")
+
+    def test_parser_marks_arp_packets_as_arp(self):
+        packet = Ether() / ARP(
+            psrc="10.0.0.2",
+            pdst="10.0.0.4",
+            hwsrc="00:00:00:00:00:02",
+            hwdst="00:00:00:00:00:04",
+        )
+
+        metadata = parse_packet(packet)
+
+        self.assertEqual(metadata["protocol"], "ARP")
+        self.assertEqual(metadata["src_ip"], "10.0.0.2")
+        self.assertEqual(metadata["dst_ip"], "10.0.0.4")
 
 
 class DetectionCorrelationPolicyTest(unittest.TestCase):
@@ -255,6 +286,61 @@ class DetectionCorrelationPolicyTest(unittest.TestCase):
         correlated = correlate_detections([port_scan, syn_flood])
 
         self.assertEqual(len(correlated), 2)
+
+    def test_udp_pair_flood_suppresses_weaker_service_alerts(self):
+        service_dns = {
+            "src_ip": "10.0.0.1",
+            "dst_ip": "10.0.0.2",
+            "protocol": "UDP",
+            "attack_type": "UDP_FLOOD",
+            "detection_rule": "udp_flood_rate_threshold",
+            "response_level": "L3",
+            "recommended_action": "drop",
+            "score": 90,
+            "evidence": {
+                "aggregation_scope": "service",
+                "destination_port": 53,
+                "pps": 1600,
+                "bps": 1000000,
+                "packet_count": 1600,
+            },
+        }
+        service_ntp = {
+            **service_dns,
+            "evidence": {
+                **service_dns["evidence"],
+                "destination_port": 123,
+            },
+        }
+        pair_total = {
+            "src_ip": "10.0.0.1",
+            "dst_ip": "10.0.0.2",
+            "protocol": "UDP",
+            "attack_type": "UDP_FLOOD",
+            "detection_rule": "udp_flood_rate_threshold_pair_total",
+            "response_level": "L3",
+            "recommended_action": "drop",
+            "score": 90,
+            "matched_conditions": ["여러 목적지 포트 합산 기준 초과"],
+            "evidence": {
+                "aggregation_scope": "pair",
+                "unique_dst_port_count": 2,
+                "sample_dst_ports": [53, 123],
+            },
+        }
+
+        correlated = correlate_detections([service_dns, service_ntp, pair_total])
+
+        self.assertEqual(len(correlated), 1)
+        self.assertEqual(correlated[0]["detection_rule"], "udp_flood_rate_threshold_pair_total")
+        self.assertEqual(
+            correlated[0]["evidence"]["correlation_policy"],
+            "udp_pair_total_over_service_ports",
+        )
+        self.assertEqual(
+            [item["destination_port"] for item in correlated[0]["evidence"]["related_service_detections"]],
+            [53, 123],
+        )
 
 
 class PortScanDetectionPolicyTest(unittest.TestCase):
@@ -495,6 +581,70 @@ class FloodDetectionPolicyTest(unittest.TestCase):
         self.assertEqual(second[0]["recommended_action"], "alert")
         self.assertIn("여러 분석 구간에서 반복 초과", second[0]["matched_conditions"])
 
+    def test_one_second_flood_survives_delayed_analysis(self):
+        detector = IcmpFloodDetector(
+            FloodThresholds(
+                pps=5,
+                high_pps=20,
+                critical_pps=50,
+                minimum_packets=5,
+                required_exceeded_windows=1,
+            )
+        )
+        timestamp = datetime.now(timezone.utc)
+        packets = icmp_packets(6)
+        for packet in packets:
+            packet["timestamp"] = timestamp
+
+        alerts = detector.detect(packets, window_sec=10)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["evidence"]["window_seconds"], 1.0)
+        self.assertEqual(alerts[0]["evidence"]["analysis_window_seconds"], 10.0)
+        self.assertEqual(alerts[0]["evidence"]["packet_count"], 6)
+
+    def test_delayed_snapshot_processes_all_flood_buckets(self):
+        detector = IcmpFloodDetector(
+            FloodThresholds(
+                pps=5,
+                high_pps=20,
+                critical_pps=50,
+                minimum_packets=5,
+            )
+        )
+        first_second = datetime.now(timezone.utc)
+        second_second = first_second + timedelta(seconds=1)
+        packets = icmp_packets(5) + icmp_packets(5)
+        for packet in packets[:5]:
+            packet["timestamp"] = first_second
+        for packet in packets[5:]:
+            packet["timestamp"] = second_second
+
+        alerts = detector.detect(packets, window_sec=10)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["evidence"]["exceeded_windows"], 2)
+        self.assertEqual(alerts[0]["recommended_action"], "alert")
+
+    def test_non_adjacent_icmp_buckets_do_not_form_sustained_attack(self):
+        detector = IcmpFloodDetector(
+            FloodThresholds(
+                pps=5,
+                high_pps=20,
+                critical_pps=50,
+                minimum_packets=5,
+            )
+        )
+        first_second = datetime.now(timezone.utc)
+        later_second = first_second + timedelta(seconds=10)
+        packets = icmp_packets(5) + icmp_packets(5)
+        for packet in packets[:5]:
+            packet["timestamp"] = first_second
+        for packet in packets[5:]:
+            packet["timestamp"] = later_second
+
+        self.assertEqual(detector.detect(packets, window_sec=10), [])
+
     def test_icmp_flood_ignores_non_echo_request_messages(self):
         detector = IcmpFloodDetector(
             FloodThresholds(
@@ -632,6 +782,25 @@ class FloodDetectionPolicyTest(unittest.TestCase):
         self.assertNotIn("destination_port", pair_alert["evidence"])
         self.assertEqual(pair_alert["evidence"]["unique_dst_port_count"], 2)
 
+    def test_non_adjacent_udp_buckets_do_not_form_sustained_attack(self):
+        detector = UdpFloodDetector(
+            FloodThresholds(
+                pps=3,
+                high_pps=10,
+                critical_pps=20,
+                minimum_packets=3,
+            )
+        )
+        first_second = datetime.now(timezone.utc)
+        later_second = first_second + timedelta(seconds=10)
+        packets = udp_packets(3) + udp_packets(3)
+        for packet in packets[:3]:
+            packet["timestamp"] = first_second
+        for packet in packets[3:]:
+            packet["timestamp"] = later_second
+
+        self.assertEqual(detector.detect(packets, window_sec=10), [])
+
 
 class SynFloodDetectionPolicyTest(unittest.TestCase):
     def test_multi_service_syn_flood_is_not_missed_between_scan_thresholds(self):
@@ -755,6 +924,66 @@ class SynFloodDetectionPolicyTest(unittest.TestCase):
         packets = tcp_syn_packets(ports=range(1, 6))
 
         self.assertEqual(detector.detect(packets, window_sec=1), [])
+
+    def test_syn_flood_uses_packet_timestamp_buckets(self):
+        detector = SynFloodDetector(
+            pps_threshold=3,
+            high_pps_threshold=10,
+            critical_pps_threshold=20,
+            minimum_syn_count=3,
+        )
+        first_second = datetime.now(timezone.utc)
+        second_second = first_second + timedelta(seconds=1)
+        packets = tcp_syn_same_service(4) + tcp_syn_same_service(4)
+        for packet in packets[:4]:
+            packet["timestamp"] = first_second
+        for packet in packets[4:]:
+            packet["timestamp"] = second_second
+
+        alerts = detector.detect(packets, window_sec=10)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["attack_type"], "SYN_FLOOD")
+        self.assertEqual(alerts[0]["evidence"]["window_seconds"], 1.0)
+        self.assertEqual(alerts[0]["evidence"]["analysis_window_seconds"], 10.0)
+        self.assertEqual(alerts[0]["evidence"]["exceeded_windows"], 2)
+
+    def test_non_adjacent_syn_buckets_do_not_form_sustained_attack(self):
+        detector = SynFloodDetector(
+            pps_threshold=3,
+            high_pps_threshold=10,
+            critical_pps_threshold=20,
+            minimum_syn_count=3,
+        )
+        first_second = datetime.now(timezone.utc)
+        later_second = first_second + timedelta(seconds=10)
+        packets = tcp_syn_same_service(4) + tcp_syn_same_service(4)
+        for packet in packets[:4]:
+            packet["timestamp"] = first_second
+        for packet in packets[4:]:
+            packet["timestamp"] = later_second
+
+        self.assertEqual(detector.detect(packets, window_sec=10), [])
+
+    def test_syn_burst_is_not_diluted_by_long_analysis_window(self):
+        detector = SynFloodDetector(
+            pps_threshold=120,
+            high_pps_threshold=400,
+            critical_pps_threshold=800,
+            minimum_syn_count=30,
+            required_exceeded_windows=1,
+        )
+        timestamp = datetime.now(timezone.utc)
+        packets = tcp_syn_same_service(1000)
+        for packet in packets:
+            packet["timestamp"] = timestamp
+
+        alerts = detector.detect(packets, window_sec=10)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["evidence"]["syn_pps"], 1000)
+        self.assertEqual(alerts[0]["evidence"]["window_seconds"], 1.0)
+        self.assertEqual(alerts[0]["severity"], "critical")
 
 
 class SecurityEventBuilderTest(unittest.TestCase):
@@ -888,6 +1117,26 @@ class SecurityEventBuilderTest(unittest.TestCase):
             "severity": "high",
             "confidence": "high",
             "detection_rule": "udp_flood_rate_threshold",
+            "recommended_action": "rate_limit",
+            "response_level": "L2",
+            "score": 80,
+        }
+
+        events = builder.build_security_events({"window_sec": 1}, [detection])
+
+        self.assertEqual(events["events"], [])
+
+    def test_unsupported_protocol_is_not_converted_to_security_event(self):
+        builder = SecurityEventBuilder()
+        detection = {
+            "src_ip": "10.0.0.2",
+            "dst_ip": "10.0.0.4",
+            "protocol": "ARP",
+            "attack_category": "FLOOD",
+            "attack_type": "UDP_FLOOD",
+            "severity": "high",
+            "confidence": "high",
+            "detection_rule": "unsupported_protocol_guard",
             "recommended_action": "rate_limit",
             "response_level": "L2",
             "score": 80,
@@ -1043,6 +1292,20 @@ class ConfigValidationTest(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(RuntimeError, "ANALYZER_PACKET_BUFFER_MAX_SIZE"):
+                load_config()
+
+    def test_too_long_analyzer_id_is_rejected(self):
+        with patch.dict("os.environ", {"ANALYZER_ID": "a" * 31}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "ANALYZER_ID"):
+                load_config()
+
+    def test_too_long_interface_name_is_rejected(self):
+        with patch.dict(
+            "os.environ",
+            {"ANALYZER_INTERFACE": "eth" + "x" * 30},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ANALYZER_INTERFACE"):
                 load_config()
 
 

@@ -129,6 +129,9 @@ function getWebsocketUrl() {
     if (isLoopbackHost(url.hostname) && !isLoopbackHost(pageHost)) {
       url.hostname = pageHost;
     }
+    if (window.location.protocol === "https:" && url.protocol === "ws:") {
+      url.protocol = "wss:";
+    }
 
     return url.toString();
   } catch {
@@ -289,8 +292,9 @@ function toHistoryTrafficSample(item: DashboardTrafficItem): TrafficSample {
 
 function toProtocolStats(items: DashboardProtocolItem[]): Record<string, number> {
   return items.reduce<Record<string, number>>((stats, item) => {
-    stats[item.protocol || "UNKNOWN"] =
-      (stats[item.protocol || "UNKNOWN"] ?? 0) + (item.packet_count ?? 0);
+    const protocol = item.protocol || "OTHER";
+
+    stats[protocol] = (stats[protocol] ?? 0) + (item.packet_count ?? 0);
 
     return stats;
   }, {});
@@ -306,7 +310,7 @@ function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
   return items.map((host) => ({
     host: host.host ?? null,
     ip: host.ip,
-    protocol: host.protocol ?? "UNKNOWN",
+    protocol: host.protocol ?? "OTHER",
     bps: host.bps ?? 0,
     pps: host.pps ?? 0,
     attack_type: normalizeAttackType(host.attack_type),
@@ -459,7 +463,7 @@ function normalizeSecurityEvent(event: RawSecurityEvent): SecurityEvent {
     src_port: numericPort(event.src_port),
     dst_port: numericPort(event.dst_port),
     port_summary: portSummaryFromSecurityEvent(event),
-    protocol: event.protocol ?? "UNKNOWN",
+    protocol: event.protocol ?? "OTHER",
     detection_rule: event.detection_rule,
     recommended_action: event.recommended_action,
     response_level: event.response_level,
@@ -770,7 +774,7 @@ function normalizeDetectionSummary(
         .map((talker) => ({
           host: talker.host ?? null,
           ip: talker.ip,
-          protocol: talker.protocol ?? "UNKNOWN",
+          protocol: talker.protocol ?? "OTHER",
           bps: talker.bps,
           pps: talker.pps,
           attack_type: "DOS",

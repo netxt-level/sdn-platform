@@ -74,6 +74,12 @@ class SecurityService:
                 security_response_id=response["id"],
             )
             if flow_rule is not None:
+                linked_response = self.security_response_repository.link_flow_rule(
+                    response["id"],
+                    flow_rule,
+                )
+                if linked_response is not None:
+                    responses[-1] = linked_response
                 flow_rules.append(flow_rule)
 
         return responses, flow_rules
