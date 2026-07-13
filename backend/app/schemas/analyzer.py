@@ -1,4 +1,5 @@
 from datetime import datetime
+from ipaddress import IPv4Address
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -27,10 +28,10 @@ class AnalyzerStatusRequest(BaseModel):
 
 class HostStat(BaseModel):
     src_host: Optional[str] = Field(default=None, max_length=255)
-    src_ip: Optional[str] = None
+    src_ip: Optional[IPv4Address] = None
     src_port: Optional[int] = Field(default=None, ge=1, le=65535)
     dst_host: Optional[str] = Field(default=None, max_length=255)
-    dst_ip: Optional[str] = None
+    dst_ip: Optional[IPv4Address] = None
     dst_port: Optional[int] = Field(default=None, ge=1, le=65535)
     protocol: Literal["TCP", "UDP", "ICMP", "ARP", "OTHER"]
     packet_count: int = Field(ge=0)

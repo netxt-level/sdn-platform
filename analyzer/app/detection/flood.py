@@ -55,6 +55,10 @@ class FloodDetector:
         self.window_index = 0
         self.last_seen_window: dict[tuple[str, str, str, int | None], int] = {}
         self.last_seen_bucket: dict[tuple[str, str, str, int | None], int] = {}
+        self.last_bucket_stats: dict[
+            tuple[str, str, str, int | None],
+            dict[str, Any],
+        ] = {}
 
     def detect(
         self,
@@ -140,8 +144,6 @@ class FloodDetector:
             for (src_ip, dst_ip, dst_port), stats in pair_grouped_by_bucket[
                 bucket_start_epoch
             ].items():
-                if len(stats["ports"]) <= 1:
-                    continue
                 alert = self._build_alert(
                     scope="pair",
                     src_ip=src_ip,
@@ -170,42 +172,62 @@ class FloodDetector:
         analysis_window_seconds: float,
         bucket_start_epoch: int | None,
     ) -> dict[str, Any] | None:
+        # 중간에 빈 구간이 있으면 연속 공격으로 이어 붙이지 않는다.
+        # 같은 1초 bucket이 다음 분석 호출에서 다시 들어오면 기존 집계와 합산하되
+        # history에는 한 번만 반영해 같은 초를 여러 분석 구간처럼 세지 않는다.
+        key = (scope, src_ip, dst_ip, dst_port)
+        history = self.history[key]
+        last_seen_window = self.last_seen_window.get(key)
+        last_seen_bucket = self.last_seen_bucket.get(key)
+        same_bucket = False
+        if bucket_start_epoch is not None:
+            if last_seen_bucket is not None:
+                if bucket_start_epoch < last_seen_bucket:
+                    return None
+                if bucket_start_epoch == last_seen_bucket:
+                    same_bucket = True
+                    stats = _merge_flood_stats(
+                        self.last_bucket_stats.get(key),
+                        stats,
+                    )
+                elif bucket_start_epoch - last_seen_bucket > 1:
+                    history.clear()
+            if not same_bucket:
+                stats = _clone_flood_stats(stats)
+        elif (
+            last_seen_window is not None
+            and last_seen_window < self.window_index - 1
+        ):
+            history.clear()
+
         packet_count = stats["packets"]
         pps = packet_count / divisor
         bps = (stats["bytes"] * 8) / divisor
 
         pps_exceeded = pps >= self.thresholds.pps
         bps_exceeded = self.thresholds.bps > 0 and bps >= self.thresholds.bps
-        exceeded = pps_exceeded or bps_exceeded
+        pair_has_multiple_ports = scope != "pair" or len(stats["ports"]) > 1
+        exceeded = (pps_exceeded or bps_exceeded) and pair_has_multiple_ports
 
-        # 중간에 빈 구간이 있으면 연속 공격으로 이어 붙이지 않는다.
-        key = (scope, src_ip, dst_ip, dst_port)
-        history = self.history[key]
-        last_seen_window = self.last_seen_window.get(key)
-        last_seen_bucket = self.last_seen_bucket.get(key)
-        if bucket_start_epoch is not None:
-            if (
-                last_seen_bucket is not None
-                and bucket_start_epoch - last_seen_bucket > 1
-            ):
-                history.clear()
-        elif (
-            last_seen_window is not None
-            and last_seen_window < self.window_index - 1
-        ):
-            history.clear()
+        if same_bucket and history:
+            history.pop()
         history.append(exceeded)
         self.last_seen_window[key] = self.window_index
         if bucket_start_epoch is not None:
             self.last_seen_bucket[key] = bucket_start_epoch
+            self.last_bucket_stats[key] = stats
         else:
             self.last_seen_bucket.pop(key, None)
+            self.last_bucket_stats.pop(key, None)
         exceeded_windows = sum(history)
 
         # Critical 급증도 첫 대응은 Rate Limit 후보로 두고, 지속될 때 Drop 후보로 올린다.
-        immediate_critical = pps >= self.thresholds.critical_pps or (
-            self.thresholds.critical_bps > 0
-            and bps >= self.thresholds.critical_bps
+        immediate_critical = pair_has_multiple_ports and (
+            pps >= self.thresholds.critical_pps
+            or (
+                self.thresholds.critical_bps > 0
+                and bps >= self.thresholds.critical_bps
+            )
         )
         sustained = (
             exceeded
@@ -317,6 +339,7 @@ class FloodDetector:
             self.history.pop(key, None)
             self.last_seen_window.pop(key, None)
             self.last_seen_bucket.pop(key, None)
+            self.last_bucket_stats.pop(key, None)
 
 
 def _new_flood_stats() -> dict[str, Any]:
@@ -338,6 +361,28 @@ def _add_flood_packet(
     if dst_port is not None:
         stats["ports"].add(dst_port)
         stats["port_counts"][dst_port] += 1
+
+
+def _clone_flood_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "packets": int(stats.get("packets") or 0),
+        "bytes": int(stats.get("bytes") or 0),
+        "ports": set(stats.get("ports") or set()),
+        "port_counts": defaultdict(int, stats.get("port_counts") or {}),
+    }
+
+
+def _merge_flood_stats(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    merged = _clone_flood_stats(previous or _new_flood_stats())
+    merged["packets"] += int(current.get("packets") or 0)
+    merged["bytes"] += int(current.get("bytes") or 0)
+    merged["ports"].update(current.get("ports") or set())
+    for port, count in (current.get("port_counts") or {}).items():
+        merged["port_counts"][port] += count
+    return merged
 
 
 def _sorted_bucket_keys(*grouped_maps) -> list[int | None]:

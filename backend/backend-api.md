@@ -494,13 +494,13 @@ POST /api/security/events
 ### Side Effects
 
 - Elasticsearch `sdn-security-events` 인덱스에 `event_id`를 문서 `_id`로 사용해 bulk 저장한다. 같은 이벤트가 재전송되면 새 문서를 만들지 않고 기존 문서를 갱신한다. `evidence`는 `_source`에는 저장하지만 세부 key를 인덱싱하지 않는다.
-- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
-- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다. 기존 후보는 `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `APPLIED` 상태인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙은 재사용하지 않는다. 기존 후보를 재사용한 경우에도 해당 `security_response`의 `response_payload`에 `flow_rule_id`, `flow_rule_reused`, `flow_rule_action`, `flow_rule_switch_id`, `flow_rule_match`를 남긴다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 저장한다. 실제 Flow 조치가 없는 LOG/ALERT 계열은 `RECORDED`, `RATE_LIMIT`과 `DROP`은 `PENDING` 상태로 저장한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다. 기존 후보는 `analyzer_id`, `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. 최근 여부를 판단할 시간이 없거나 `APPLIED` 상태인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙은 재사용하지 않는다. 기존 후보를 재사용한 경우에도 해당 `security_response`의 `response_payload`에 `flow_rule_id`, `flow_rule_reused`, `flow_rule_action`, `flow_rule_switch_id`, `flow_rule_match`를 남긴다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 
 `SecurityEvent`는 현재 구현된 `PORT_SCAN`, `ICMP_FLOOD`, `UDP_FLOOD`, `SYN_FLOOD`와 IPv4 주소만 허용한다. 보안 이벤트 batch는 최대 100개이며, 요청 전체의 `analyzer_id`와 이벤트 내부 `analyzer_id`가 다르면 거부한다. `evidence`는 중첩 깊이, 문자열 길이, 리스트 길이, key 길이를 제한하고, `/api/security/events` 요청 본문은 최대 1MB로 제한한다.
 
-`security_responses`는 `event_id + response_action` 기준으로 같은 이벤트 재전송 중복을 방지한다. 같은 fingerprint라도 새로운 `event_id`로 들어오면 별도 대응 이력으로 남긴다. `flow_rules`는 현재 재사용 가능한 상태이고 `switch_id`, `match`, `target`이 같으며 기존 action이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 더 강한 제한으로 본다. `PENDING`과 `APPROVED` 상태가 10분을 넘거나 `APPLYING` 상태가 5분을 넘으면 적용이 멈춘 후보로 보고 재사용하지 않는다.
+`security_responses`는 `event_id + response_action` 기준으로 같은 이벤트 재전송 중복을 방지한다. 같은 fingerprint라도 새로운 `event_id`로 들어오면 별도 대응 이력으로 남긴다. `flow_rules`는 현재 재사용 가능한 상태이고 `analyzer_id`, `switch_id`, `match`, `target`이 같으며 기존 action이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 더 강한 제한으로 본다. `PENDING`과 `APPROVED` 상태가 10분을 넘거나 `APPLYING` 상태가 5분을 넘으면 적용이 멈춘 후보로 보고 재사용하지 않는다.
 
 수동 Flow Rule 생성 요청은 `switch_id`가 필요하다. `DROP`과 `RATE_LIMIT`은 `eth_type`이나 `ip_proto`만 있는 넓은 match를 허용하지 않고, IP 주소, 포트, ICMP 타입 중 하나 이상의 구체적인 조건이 있어야 한다.
 

@@ -32,7 +32,7 @@ Port Scan은 정상 점검과 비슷하게 보일 수 있으므로 Critical 수�
 
 ICMP Flood는 ICMP Echo Request만 본다. Echo Reply, Destination Unreachable, Time Exceeded 같은 메시지는 진단 또는 오류 알림일 수 있으므로 집계하지 않는다.
 
-ICMP/UDP Flood와 SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리한다. 분석 루프가 잠깐 늦어 한 번에 여러 초의 패킷이 들어와도 실제로 이어진 bucket은 지속 초과로 누적하고, 중간에 빈 초가 있으면 history를 초기화해 떨어진 burst를 지속 공격으로 묶지 않는다. 순간 Flood도 긴 분석 윈도우 평균으로 희석되지 않는다. timestamp가 없는 입력은 기존처럼 실제 분석 윈도우 시간을 사용한다.
+ICMP/UDP Flood와 SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리한다. 분석 루프가 잠깐 늦어 한 번에 여러 초의 패킷이 들어와도 실제로 이어진 bucket은 지속 초과로 누적하고, 중간에 빈 초가 있으면 history를 초기화해 떨어진 burst를 지속 공격으로 묶지 않는다. 같은 1초 bucket이 여러 분석 호출에 나뉘어 들어오면 기존 bucket 집계와 합산하되 history는 한 번만 갱신한다. 순간 Flood도 긴 분석 윈도우 평균으로 희석되지 않는다. timestamp가 없는 입력은 기존처럼 실제 분석 윈도우 시간을 사용한다.
 
 | 기준 | 기본값 |
 |---|---:|
@@ -70,7 +70,7 @@ UDP Flood는 PPS와 BPS를 함께 본다. 작은 패킷을 많이 보내는 공�
 
 ## SYN Flood
 
-SYN Flood는 SYN 요청이 몰리고 SYN/ACK 응답이 부족한 상황을 본다. 기본은 특정 목적지 IP와 포트에 집중되는 단일 서비스 패턴이다. 다만 여러 포트로 나뉜 SYN이 Port Scan처럼 보이더라도 전체 SYN 양이 크고 응답이 부족하면 다중 서비스 SYN Flood로 묶어 탐지한다.
+SYN Flood는 SYN 요청이 몰리고 연결이 끝까지 완료되지 않는 상황을 본다. 기본은 특정 목적지 IP와 포트에 집중되는 단일 서비스 패턴이다. 다만 여러 포트로 나뉜 SYN이 Port Scan처럼 보이더라도 전체 SYN 양이 크고 연결 완료율이 낮으면 다중 서비스 SYN Flood로 묶어 탐지한다.
 
 | 기준 | 기본값 |
 |---|---:|
@@ -80,7 +80,7 @@ SYN Flood는 SYN 요청이 몰리고 SYN/ACK 응답이 부족한 상황을 본�
 | `SYN_CRITICAL_PPS_THRESHOLD` | 800 |
 | `SYN_MAX_UNIQUE_PORTS` | 5 |
 
-응답 계산에는 서버가 보내는 SYN/ACK만 사용한다. 최종 ACK는 정상 연결 하나를 두 번 계산할 수 있어 응답 수에 넣지 않는다.
+서버가 보내는 SYN/ACK는 응답 수로 따로 기록하고, 클라이언트의 최종 ACK는 3-way handshake 완료 수로 따로 기록한다. 그래서 서버가 SYN/ACK를 잘 보내는 환경에서도 최종 ACK가 거의 없으면 half-open 흐름으로 보고 SYN Flood 근거에 포함한다. 단, SYN/ACK 부족과 최종 ACK 부족이 같은 의미로 동시에 잡힌 경우에는 점수를 중복해서 크게 올리지 않는다.
 
 다중 서비스 SYN Flood와 Port Scan이 같은 출발지, 목적지, 프로토콜에서 동시에 잡히면 같은 흐름에 대응 후보가 두 개 생길 수 있다. 이 경우 Analyzer는 더 강한 대응 후보인 SYN Flood를 유지하고 Port Scan 근거는 `related_detections` evidence로 붙인다.
 
@@ -106,6 +106,8 @@ Port Scan은 TCP SYN 패킷을 기준으로 수직 스캔과 수평 스캔을 �
 
 관리 호스트는 수평 스캔 기준을 완전히 면제하지 않고 완화만 한다. 작은 토폴로지에서는 대상 수만으로는 탐지가 어려울 수 있어, `PORT_SCAN_SYN_COUNT_THRESHOLD` 이상의 반복 SYN이면 관리 호스트도 탐지한다.
 
+Port Scan은 패킷 처리 시각이 아니라 패킷 timestamp 기준으로 윈도우를 유지한다. 분석 루프가 늦어져도 같은 시간대에 발생한 스캔이 처리 지연 때문에 사라지지 않도록 하기 위한 처리다. 이미 한 번 알림을 만든 오래된 버킷은 다시 재생하지 않는다.
+
 ## 이벤트 안정성
 
 - 같은 이벤트는 fingerprint로 중복 억제한다.
@@ -113,7 +115,8 @@ Port Scan은 TCP SYN 패킷을 기준으로 수직 스캔과 수평 스캔을 �
 - 위험도나 대응 단계가 올라가면 중복 억제 중이어도 다시 전송한다.
 - 백엔드 전송 실패 이벤트는 메모리 대기 큐에 저장한다.
 - 큐는 기본 500개까지 보관하고, 기본 100개씩 배치 전송한다.
-- 백엔드가 400/413/422를 반환하면 batch 크기를 줄여 재전송한다. 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트만 큐에서 제거해 뒤의 정상 이벤트가 막히지 않게 한다.
+- 백엔드가 400/413/422를 반환하면 batch 크기를 줄여 재전송한다. 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트를 dead letter로 이동해 같은 fingerprint가 계속 재전송되지 않게 하고, 뒤의 정상 이벤트가 막히지 않게 한다.
+- dead letter는 기본 1시간 TTL과 최대 1000개 제한을 둔다. 일시적인 API 불일치가 해결된 뒤 같은 fingerprint 공격이 영구적으로 막히는 상황을 줄이기 위한 기준이다.
 - 큐가 가득 차면 오래된 이벤트를 제거하고 중복 억제 기록도 해제한다.
 - packet summary와 traffic stats는 보안 이벤트와 별도 전송 큐를 사용한다. 대시보드 통계는 오래된 값보다 최신 값이 중요하므로 큐 크기를 작게 유지하고, 가득 찬 경우 오래된 요약을 제거한다.
 - 패킷 요약의 알 수 없는 프로토콜은 `OTHER`로 정규화하고, ARP 패킷은 보안 이벤트가 아니라 프로토콜 통계로만 전달한다.
@@ -128,10 +131,10 @@ Port Scan은 TCP SYN 패킷을 기준으로 수직 스캔과 수평 스캔을 �
 - FIN/NULL/XMAS/UDP Scan은 아직 탐지하지 않는다.
 - 실제 Controller Flow Rule 설치와 자동 해제는 아직 구현 범위 밖이다.
 - Elasticsearch에는 `event_id`를 문서 ID로 사용해 저장하므로, Analyzer가 같은 이벤트를 재전송해도 중복 문서가 쌓이지 않는다.
-- Security Response는 `event_id + response_action` 기준으로 재전송 중복을 막고, 같은 fingerprint라도 새 event_id면 새 이력으로 남긴다.
-- Flow Rule은 실패/만료된 과거 규칙을 재사용하지 않고, 현재 활성 상태이며 `switch_id`, `match`, `target`이 같고 기존 action, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 더 강한 제한으로 본다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `APPLIED` 상태인데 `applied_at`이 없거나 남은 `hard_timeout`이 새 요청보다 짧으면 재사용하지 않는다.
+- Security Response는 `event_id + response_action` 기준으로 재전송 중복을 막고, 같은 fingerprint라도 새 event_id면 새 이력으로 남긴다. 실제 Flow 조치가 없는 `LOG`, `ALERT`, `MONITOR` 계열은 `RECORDED`로 저장하고, `RATE_LIMIT`과 `DROP`만 적용 대기 상태인 `PENDING`으로 남긴다.
+- Flow Rule은 실패/만료된 과거 규칙을 재사용하지 않고, 현재 활성 상태이며 `analyzer_id`, `switch_id`, `match`, `target`이 같고 기존 action, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 더 강한 제한으로 본다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `APPLIED` 상태인데 `applied_at`이 없거나 남은 `hard_timeout`이 새 요청보다 짧으면 재사용하지 않는다.
 - `PENDING` Flow Rule은 10분이 지나면 재사용하지 않는다. Controller 적용이 멈춘 후보가 계속 정상 후보처럼 남는 상황을 막기 위한 기준이다.
-- `APPROVED` Flow Rule은 10분, `APPLYING` Flow Rule은 5분이 지나면 재사용하지 않는다.
+- `APPROVED` Flow Rule은 10분, `APPLYING` Flow Rule은 5분이 지나면 재사용하지 않는다. 생성/요청/수정 시각이 없어 최근 후보인지 판단할 수 없는 Rule도 재사용하지 않는다.
 - 경로 상태 화면도 같은 재사용 정책을 사용하므로 오래된 `PENDING` 후보는 우회 경로 판단에 사용하지 않는다.
 - Analyzer 수신 API는 `ANALYZER_API_KEY`가 설정된 경우 `X-API-Key`를 검사한다.
 - 보안 이벤트 batch는 최대 100개로 제한한다.
@@ -158,12 +161,14 @@ git diff --check
 - Port Scan과 다중 서비스 SYN Flood가 같은 흐름에서 동시에 잡히면 더 강한 SYN Flood 이벤트만 전송하고, Port Scan은 관련 근거로 묶는다.
 - UDP pair 전체 Flood가 서비스별 UDP Flood보다 같거나 강한 대응 단계로 잡히면 pair 이벤트 하나만 전송하고 서비스별 포트 근거는 related evidence로 묶는다.
 - Port Scan은 패킷을 계속 보관하지 않고 초 단위 버킷에 필요한 집계만 저장한다. 장시간 실행 시 메모리 증가를 줄이기 위한 처리다.
+- Port Scan 수직 스캔도 패킷 처리 시각이 아니라 event time watermark 기준으로 판단해, 분석이 몇 초 늦어진 패킷 묶음도 원래 발생 시각 기준으로 탐지한다.
 - Port Scan의 수평 스캔은 대상 IP 수만으로 판단하지 않고 최소 SYN 시도 수를 함께 확인한다. 작은 Mininet 토폴로지에서 대상 3개에 1회씩 접근한 정상 점검 트래픽이 바로 알림으로 잡히는 문제를 줄이기 위한 기준이다.
 - Port Scan 쿨다운은 같은 수준의 반복 알림은 막지만, 점수나 위험도가 올라간 경우에는 새 알림을 허용한다. 이전 알림보다 위험해진 상황이 묻히지 않도록 하기 위한 처리다.
 - Flow Rule 입력은 `switch_id`를 필수로 받고, IPv4 match에 `eth_type=2048`을 요구한다. TCP/UDP/ICMP 조건은 각각 맞는 `ip_proto`가 있을 때만 허용하며, `DROP`/`RATE_LIMIT`은 IP, 포트, ICMP 타입 중 하나 이상의 구체적인 match가 있어야 한다.
 - 프론트엔드는 `DROP`과 `RATE_LIMIT` 대응을 구분해서 표시하고, `packet_count`를 그대로 PPS로 보지 않고 `window_seconds`와 함께 계산한다.
 - Analyzer는 고정 `ANALYZER_WINDOW_SEC`가 아니라 실제 스냅샷 간격을 `window_sec`에 담아 Flood PPS 계산과 트래픽 요약에 사용한다.
 - 패킷 요약의 host 통계는 포트 값을 제외하고 출발지/목적지/프로토콜 단위로 합산한다. 포트별 근거는 보안 이벤트 evidence에 남긴다.
+- 패킷 요약의 host 통계 IP는 IPv4 형식으로 검증해 잘못된 주소나 과도하게 긴 tag 값이 InfluxDB에 들어가지 않게 한다.
 - Analyzer 분석 루프와 백엔드 HTTP 전송 루프를 분리했다. 백엔드가 잠시 느려져도 패킷 분석 주기가 바로 막히지 않도록 하기 위한 구조다.
 - 백엔드 전송 큐에서는 보안 이벤트를 packet summary와 traffic stats보다 먼저 전송한다.
 - Analyzer 런타임 메트릭은 PostgreSQL에도 저장한다. 보안 이벤트 대기열 수, 드롭된 이벤트 수, 패킷 버퍼 드롭 수, 마지막 보안 이벤트 전송 실패 시각이 새로고침 뒤에도 유지된다.
@@ -171,3 +176,11 @@ git diff --check
 - Next.js Docker build 시 `BACKEND_INTERNAL_URL`과 `NEXT_PUBLIC_WS_URL`을 build argument로 전달한다. Docker 환경에서 rewrite가 `localhost`로 고정되는 문제를 막기 위한 처리다.
 - 수동 Flow Rule 생성은 백엔드 관리자 API에만 남기고, 프론트엔드 proxy에서는 사용자 권한 검증이 없으므로 POST 요청을 차단한다.
 - 패킷 파서는 ARP를 `ARP`로, 그 외 미분류 프로토콜을 `OTHER`로 정규화한다. 보안 이벤트는 백엔드 스키마와 맞는 `ICMP`, `UDP`, `TCP` 탐지만 전송한다.
+- Scapy IPv6 초기화 오류가 테스트 순서에 따라 발생하지 않도록 packet 패키지 초기화 단계에서 IPv6 기능을 먼저 비활성화한다.
+- SYN Flood는 SYN/ACK 응답 수와 최종 ACK 완료 수를 분리해 기록한다. SYN cookie처럼 서버 응답은 충분하지만 연결 완료가 거의 없는 경우도 half-open SYN Flood 근거로 탐지한다.
+- 보안 이벤트 dead letter는 TTL과 최대 크기 제한을 둬 잘못된 이벤트 하나가 같은 fingerprint의 미래 이벤트를 영구적으로 막지 않게 했다.
+- 캡처가 시작 중 실패하거나 예외 없이 중단되면 Analyzer가 실패 상태를 백엔드에 동기 전송하고 비정상 종료한다.
+- 프론트엔드는 packet summary나 detection summary만으로 Analyzer 오류 상태를 정상 상태로 덮어쓰지 않고, Analyzer 상태 메시지를 상태 판단 기준으로 유지한다.
+- Flow Rule 재사용 조회에 `analyzer_id`를 포함하고, 최근 여부를 판단할 시간이 없는 PENDING/APPROVED/APPLYING 후보는 재사용하지 않도록 했다.
+- 실제 Flow 조치가 없는 Security Response는 `RECORDED`로 남기고, `RATE_LIMIT`과 `DROP`만 `PENDING`으로 저장한다.
+- Alembic migration URL은 ConfigParser 보간 문제를 피하도록 `%`를 이스케이프해, PostgreSQL 비밀번호에 `@`, `:`, `/`, `#` 같은 특수문자가 있어도 offline/compose migration이 실패하지 않게 한다.

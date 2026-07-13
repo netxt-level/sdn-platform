@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from .common import clamp_score, current_time, packet_time, score_policy, to_ip, to_port
@@ -45,9 +45,11 @@ class PortScanDetector:
         # 패킷을 하나씩 오래 들고 있지 않고, 초 단위 버킷에 필요한 집계만 보관한다.
         self.buckets: dict[int, dict[str, Any]] = {}
         self.last_alert_at: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self.last_event_time: datetime | None = None
 
     def detect(self, packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         now = current_time()
+        latest_packet_time = None
 
         for packet in packets:
             if not self._is_syn_probe(packet):
@@ -59,7 +61,11 @@ class PortScanDetector:
             if not src_ip or not dst_ip or dst_port is None:
                 continue
 
-            bucket = self._bucket_for(packet_time(packet, now))
+            event_time = packet_time(packet, now)
+            if latest_packet_time is None or event_time > latest_packet_time:
+                latest_packet_time = event_time
+
+            bucket = self._bucket_for(event_time)
             pair = (src_ip, dst_ip)
             vertical_stats = bucket["vertical"][pair]
             vertical_stats["ports"].add(dst_port)
@@ -70,10 +76,11 @@ class PortScanDetector:
             horizontal_stats["targets"].add(dst_ip)
             horizontal_stats["syn_count"] += 1
 
-        self._expire_old_buckets(now)
-        self._cleanup_alert_cache(now)
-        vertical_alerts = self._build_vertical_alerts(now)
-        horizontal_alerts = self._build_horizontal_alerts(now)
+        analysis_time = self._advance_event_time(latest_packet_time, now)
+        self._expire_old_buckets(analysis_time)
+        self._cleanup_alert_cache(analysis_time)
+        vertical_alerts = self._build_vertical_alerts(analysis_time)
+        horizontal_alerts = self._build_horizontal_alerts(analysis_time)
         return vertical_alerts + horizontal_alerts
 
     def _is_syn_probe(self, packet: dict[str, Any]) -> bool:
@@ -329,6 +336,19 @@ class PortScanDetector:
         ]
         for key in stale_keys:
             self.last_alert_at.pop(key, None)
+
+    def _advance_event_time(
+        self,
+        latest_packet_time: datetime | None,
+        fallback_time: datetime,
+    ) -> datetime:
+        if latest_packet_time is None:
+            return self.last_event_time or fallback_time
+
+        if self.last_event_time is None or latest_packet_time > self.last_event_time:
+            self.last_event_time = latest_packet_time
+
+        return self.last_event_time
 
     def _horizontal_threshold(self, src_ip: str) -> int:
         if src_ip in self.trusted_source_ips:

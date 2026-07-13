@@ -131,6 +131,12 @@ def udp_packets(
     ]
 
 
+def packets_at(packets, timestamp):
+    for packet in packets:
+        packet["timestamp"] = timestamp
+    return packets
+
+
 class PacketSummaryPolicyTest(unittest.TestCase):
     def test_packet_summary_uses_actual_window_seconds(self):
         builder = PacketSummaryBuilder()
@@ -455,6 +461,35 @@ class PortScanDetectionPolicyTest(unittest.TestCase):
 
         self.assertEqual(alert["evidence"]["scan_type"], "vertical")
 
+    def test_delayed_vertical_scan_uses_event_time(self):
+        detector = PortScanDetector(
+            window_sec=5,
+            unique_port_threshold=15,
+            syn_count_threshold=15,
+        )
+        delayed_timestamp = datetime.now(timezone.utc) - timedelta(seconds=20)
+        packets = packets_at(tcp_syn_packets(), delayed_timestamp)
+
+        alerts = detector.detect(packets)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["evidence"]["scan_type"], "vertical")
+        self.assertEqual(alerts[0]["evidence"]["syn_count"], 15)
+
+    def test_old_vertical_scan_is_not_replayed_from_event_time_bucket(self):
+        detector = PortScanDetector(
+            window_sec=5,
+            unique_port_threshold=15,
+            syn_count_threshold=15,
+        )
+        delayed_timestamp = datetime.now(timezone.utc) - timedelta(seconds=20)
+
+        first = detector.detect(packets_at(tcp_syn_packets(), delayed_timestamp))
+        second = detector.detect([])
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+
     def test_port_scan_ignores_invalid_ports(self):
         detector = PortScanDetector(
             unique_port_threshold=1,
@@ -645,6 +680,47 @@ class FloodDetectionPolicyTest(unittest.TestCase):
 
         self.assertEqual(detector.detect(packets, window_sec=10), [])
 
+    def test_same_icmp_bucket_split_across_calls_is_counted_once(self):
+        detector = IcmpFloodDetector(
+            FloodThresholds(
+                pps=5,
+                high_pps=20,
+                critical_pps=50,
+                minimum_packets=5,
+            )
+        )
+        timestamp = datetime.now(timezone.utc)
+
+        first = detector.detect(packets_at(icmp_packets(5), timestamp), window_sec=10)
+        second = detector.detect(packets_at(icmp_packets(5), timestamp), window_sec=10)
+        third = detector.detect(
+            packets_at(icmp_packets(5), timestamp + timedelta(seconds=1)),
+            window_sec=10,
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(third[0]["evidence"]["exceeded_windows"], 2)
+
+    def test_split_icmp_bucket_packets_are_aggregated_before_threshold_check(self):
+        detector = IcmpFloodDetector(
+            FloodThresholds(
+                pps=6,
+                high_pps=20,
+                critical_pps=50,
+                minimum_packets=6,
+                required_exceeded_windows=1,
+            )
+        )
+        timestamp = datetime.now(timezone.utc)
+
+        first = detector.detect(packets_at(icmp_packets(3), timestamp), window_sec=10)
+        second = detector.detect(packets_at(icmp_packets(3), timestamp), window_sec=10)
+
+        self.assertEqual(first, [])
+        self.assertEqual(second[0]["evidence"]["packet_count"], 6)
+        self.assertEqual(second[0]["evidence"]["exceeded_windows"], 1)
+
     def test_icmp_flood_ignores_non_echo_request_messages(self):
         detector = IcmpFloodDetector(
             FloodThresholds(
@@ -801,6 +877,54 @@ class FloodDetectionPolicyTest(unittest.TestCase):
 
         self.assertEqual(detector.detect(packets, window_sec=10), [])
 
+    def test_same_udp_bucket_split_across_calls_is_counted_once(self):
+        detector = UdpFloodDetector(
+            FloodThresholds(
+                pps=3,
+                high_pps=10,
+                critical_pps=20,
+                minimum_packets=3,
+            )
+        )
+        timestamp = datetime.now(timezone.utc)
+
+        first = detector.detect(packets_at(udp_packets(3), timestamp), window_sec=10)
+        second = detector.detect(packets_at(udp_packets(3), timestamp), window_sec=10)
+        third = detector.detect(
+            packets_at(udp_packets(3), timestamp + timedelta(seconds=1)),
+            window_sec=10,
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(third[0]["evidence"]["exceeded_windows"], 2)
+
+    def test_split_udp_pair_bucket_is_aggregated_across_ports(self):
+        detector = UdpFloodDetector(
+            FloodThresholds(
+                pps=4,
+                high_pps=10,
+                critical_pps=20,
+                minimum_packets=4,
+                required_exceeded_windows=1,
+            )
+        )
+        timestamp = datetime.now(timezone.utc)
+
+        first = detector.detect(
+            packets_at(udp_packets(2, dst_port=9999), timestamp),
+            window_sec=10,
+        )
+        second = detector.detect(
+            packets_at(udp_packets(2, dst_port=8888), timestamp),
+            window_sec=10,
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second[0]["evidence"]["aggregation_scope"], "pair")
+        self.assertEqual(second[0]["evidence"]["packet_count"], 4)
+        self.assertEqual(second[0]["evidence"]["unique_dst_port_count"], 2)
+
 
 class SynFloodDetectionPolicyTest(unittest.TestCase):
     def test_multi_service_syn_flood_is_not_missed_between_scan_thresholds(self):
@@ -912,6 +1036,33 @@ class SynFloodDetectionPolicyTest(unittest.TestCase):
         self.assertEqual(alert["evidence"]["response_count"], 1)
         self.assertEqual(alert["evidence"]["syn_response_ratio"], 4)
 
+    def test_synack_without_final_ack_is_still_half_open(self):
+        detector = SynFloodDetector(
+            pps_threshold=120,
+            high_pps_threshold=400,
+            critical_pps_threshold=800,
+            minimum_syn_count=30,
+            required_exceeded_windows=1,
+        )
+        packets = tcp_syn_same_service(1000)
+        for index in range(1000):
+            packets.append({
+                "protocol": "TCP",
+                "tcp_flags": "SA",
+                "src_ip": "10.0.0.4",
+                "dst_ip": "10.0.0.2",
+                "src_port": 80,
+                "dst_port": 40000 + index,
+            })
+
+        alert = detector.detect(packets, window_sec=1)[0]
+
+        self.assertEqual(alert["severity"], "critical")
+        self.assertEqual(alert["evidence"]["response_count"], 1000)
+        self.assertEqual(alert["evidence"]["completed_count"], 0)
+        self.assertTrue(alert["evidence"]["completion_shortage"])
+        self.assertIn("최종 ACK 완료율 부족", alert["matched_conditions"])
+
     def test_syn_flood_does_not_replace_port_scan(self):
         detector = SynFloodDetector(
             pps_threshold=3,
@@ -964,6 +1115,57 @@ class SynFloodDetectionPolicyTest(unittest.TestCase):
             packet["timestamp"] = later_second
 
         self.assertEqual(detector.detect(packets, window_sec=10), [])
+
+    def test_same_syn_bucket_split_across_calls_is_counted_once(self):
+        detector = SynFloodDetector(
+            pps_threshold=3,
+            high_pps_threshold=10,
+            critical_pps_threshold=20,
+            minimum_syn_count=3,
+        )
+        timestamp = datetime.now(timezone.utc)
+
+        first = detector.detect(
+            packets_at(tcp_syn_same_service(4), timestamp),
+            window_sec=10,
+        )
+        second = detector.detect(
+            packets_at(tcp_syn_same_service(4), timestamp),
+            window_sec=10,
+        )
+        third = detector.detect(
+            packets_at(tcp_syn_same_service(4), timestamp + timedelta(seconds=1)),
+            window_sec=10,
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(third[0]["evidence"]["exceeded_windows"], 2)
+
+    def test_split_syn_multi_service_bucket_is_aggregated_across_ports(self):
+        detector = SynFloodDetector(
+            pps_threshold=4,
+            high_pps_threshold=20,
+            critical_pps_threshold=50,
+            max_unique_ports=2,
+            minimum_syn_count=4,
+            required_exceeded_windows=1,
+        )
+        timestamp = datetime.now(timezone.utc)
+        first_packets = []
+        second_packets = []
+        for dst_port in (80, 443):
+            first_packets.extend(tcp_syn_same_service(2, dst_port=dst_port))
+        for dst_port in (8080, 8443):
+            second_packets.extend(tcp_syn_same_service(2, dst_port=dst_port))
+
+        first = detector.detect(packets_at(first_packets, timestamp), window_sec=10)
+        second = detector.detect(packets_at(second_packets, timestamp), window_sec=10)
+
+        self.assertEqual(first, [])
+        self.assertEqual(second[0]["detection_rule"], "tcp_syn_multi_service_rate")
+        self.assertEqual(second[0]["evidence"]["syn_count"], 8)
+        self.assertEqual(second[0]["evidence"]["unique_dst_port_count"], 4)
 
     def test_syn_burst_is_not_diluted_by_long_analysis_window(self):
         detector = SynFloodDetector(
@@ -1245,6 +1447,47 @@ class SecurityEventBuilderTest(unittest.TestCase):
 
         queue.clear()
         self.assertEqual(len(queue), 0)
+
+    def test_dead_letter_event_is_not_requeued(self):
+        queue = PendingSecurityEventQueue(max_size=10)
+        failed = {
+            "event_id": "evt-1",
+            "event_fingerprint": "fingerprint-1",
+            "dedup_key": "fingerprint-1",
+        }
+        regenerated = {
+            "event_id": "evt-2",
+            "event_fingerprint": "fingerprint-1",
+            "dedup_key": "fingerprint-1",
+        }
+
+        queue.add([failed])
+        queue.move_to_dead_letter([failed], "HTTP 422")
+        queue.add([regenerated])
+
+        self.assertEqual(len(queue), 0)
+        self.assertEqual(queue.dead_letter_count, 1)
+        self.assertEqual(queue.last_dead_letter_event_id, "evt-1")
+        self.assertEqual(queue.last_dead_letter_reason, "HTTP 422")
+
+    def test_dead_letter_event_can_be_requeued_after_ttl(self):
+        queue = PendingSecurityEventQueue(max_size=10, dead_letter_ttl_sec=0)
+        failed = {
+            "event_id": "evt-1",
+            "event_fingerprint": "fingerprint-1",
+            "dedup_key": "fingerprint-1",
+        }
+        regenerated = {
+            "event_id": "evt-2",
+            "event_fingerprint": "fingerprint-1",
+            "dedup_key": "fingerprint-1",
+        }
+
+        queue.add([failed])
+        queue.move_to_dead_letter([failed], "HTTP 422")
+        queue.add([regenerated])
+
+        self.assertEqual(queue.payload(timestamp="t", analyzer_id="a")["events"], [regenerated])
 
 
 class ConfigValidationTest(unittest.TestCase):

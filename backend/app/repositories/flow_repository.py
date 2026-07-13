@@ -139,6 +139,7 @@ class FlowRepository:
 
         action = str(mitigation["action"]).upper()
         fingerprint = event.get("event_fingerprint")
+        analyzer_id = event["analyzer_id"]
         match = mitigation.get("match") or {}
         switch_id = mitigation.get("switch_id")
         target = mitigation.get("target", "flow")
@@ -151,6 +152,7 @@ class FlowRepository:
                     .where(
                         FlowRule.source_event_fingerprint == fingerprint,
                         FlowRule.action == action,
+                        FlowRule.analyzer_id == analyzer_id,
                     )
                     .order_by(FlowRule.created_at.desc())
                 )
@@ -171,6 +173,7 @@ class FlowRepository:
                         FlowRule.match == match,
                         FlowRule.switch_id == switch_id,
                         FlowRule.target == target,
+                        FlowRule.analyzer_id == analyzer_id,
                     )
                     .order_by(FlowRule.created_at.desc())
                 )
@@ -188,7 +191,7 @@ class FlowRepository:
                     source_event_id=event.get("event_id"),
                     source_event_fingerprint=fingerprint,
                     security_response_id=security_response_id,
-                    analyzer_id=event["analyzer_id"],
+                    analyzer_id=analyzer_id,
                     switch_id=switch_id,
                     target=target,
                     action=action,

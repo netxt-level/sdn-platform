@@ -68,9 +68,12 @@ def set_database_url_from_env() -> None:
         port=int(port),
         database=db_name,
     )
+    database_url_string = database_url.render_as_string(
+        hide_password=False,
+    ).replace("%", "%%")
     config.set_main_option(
         "sqlalchemy.url",
-        database_url.render_as_string(hide_password=False),
+        database_url_string,
     )
 
 

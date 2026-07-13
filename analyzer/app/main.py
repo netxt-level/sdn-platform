@@ -231,10 +231,9 @@ def _send_pending_security_events(timestamp, batch_size):
 
 def _discard_pending_security_events(events, reason):
     with pending_security_events_lock:
-        pending_security_events.remove_sent(events)
-    security_event_builder.forget_events(events)
+        pending_security_events.move_to_dead_letter(events, reason)
     logger.warning(
-        "보안 이벤트 %d개를 재시도 큐에서 제거했습니다: %s",
+        "보안 이벤트 %d개를 dead letter로 이동했습니다: %s",
         len(events),
         reason,
     )
@@ -419,7 +418,12 @@ if __name__ == "__main__":
 
         # 메인 스레드는 패킷 캡처를 실행하고, 수신 패킷은 handle_packet으로 전달
         start_capture(INTERFACE, handle_packet)
+        analyzer_status.mark_capture_failed("packet capture stopped unexpectedly")
+        backend_client.send_analyzer_status(analyzer_status.to_dict())
+        raise SystemExit(1)
 
     except PacketCaptureError as exc:
         analyzer_status.mark_capture_failed(str(exc))
         logger.error("packet capture failed: %s", exc)
+        backend_client.send_analyzer_status(analyzer_status.to_dict())
+        raise SystemExit(1) from exc

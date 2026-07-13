@@ -48,6 +48,14 @@ def _response_action_from_event(event: dict[str, Any]) -> str:
     return str(action).upper()
 
 
+def _initial_status_from_action(response_action: str) -> str:
+    """실제 Flow 조치가 없는 이벤트는 대기 상태로 남기지 않는다."""
+
+    if response_action in {"RATE_LIMIT", "DROP"}:
+        return "PENDING"
+    return "RECORDED"
+
+
 class SecurityResponseRepository:
     def list_responses(self, limit: int = 50) -> list[dict[str, Any]]:
         stmt = (
@@ -68,6 +76,8 @@ class SecurityResponseRepository:
 
         with SessionLocal.begin() as session:
             response = None
+            now = datetime.now(timezone.utc)
+            initial_status = _initial_status_from_action(response_action)
             if event_id:
                 stmt = select(SecurityResponse).where(
                     SecurityResponse.source_event_id == event_id,
@@ -86,12 +96,14 @@ class SecurityResponseRepository:
                     recommended_action=event.get("recommended_action"),
                     response_action=response_action,
                     response_level=event.get("response_level"),
+                    status=initial_status,
                     decision_reason=(
                         "created from analyzer security event recommendation"
                     ),
                     mitigation=event.get("mitigation"),
                     response_payload=None,
                     detected_at=_parse_datetime(event.get("timestamp")),
+                    completed_at=now if initial_status == "RECORDED" else None,
                 )
                 session.add(response)
                 session.flush()

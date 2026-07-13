@@ -31,8 +31,8 @@ def test_failed_flow_rule_is_not_reused():
     assert is_reusable_flow_rule(_flow_rule(status="FAILED")) is False
 
 
-def test_pending_flow_rule_is_reused():
-    assert is_reusable_flow_rule(_flow_rule(status="PENDING")) is True
+def test_pending_flow_rule_without_created_at_is_not_reused():
+    assert is_reusable_flow_rule(_flow_rule(status="PENDING")) is False
 
 
 def test_recent_pending_flow_rule_is_reused():
@@ -263,6 +263,7 @@ def test_permanent_timeout_rule_can_cover_finite_request():
         idle_timeout=0,
         hard_timeout=0,
         rate_limit_pps=100,
+        created_at=datetime.now(timezone.utc),
     )
 
     assert is_compatible_flow_rule(

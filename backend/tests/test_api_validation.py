@@ -131,6 +131,27 @@ def test_packet_summary_rejects_unknown_host_stat_protocol():
         })
 
 
+def test_packet_summary_rejects_invalid_host_stat_ip():
+    with pytest.raises(ValidationError):
+        PacketSummaryRequest.model_validate({
+            "timestamp": "2026-07-11T08:00:00+00:00",
+            "analyzer_id": "analyzer-1",
+            "window_sec": 1,
+            "total_packets": 1,
+            "total_bits": 800,
+            "protocol_stats": {"TCP": 1},
+            "host_stats": [
+                {
+                    "src_ip": "not-an-ip",
+                    "dst_ip": "10.0.0.4",
+                    "protocol": "TCP",
+                    "packet_count": 1,
+                    "bit_count": 800,
+                }
+            ],
+        })
+
+
 def test_analyzer_status_accepts_runtime_security_metrics():
     request = AnalyzerStatusRequest.model_validate({
         "timestamp": "2026-07-11T08:00:00+00:00",

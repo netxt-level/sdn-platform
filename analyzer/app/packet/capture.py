@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from scapy.all import sniff
+from scapy.sendrecv import sniff
 
 # 패킷을 처리하는 함수 타입 정의
 # 입력값으로 패킷 객체를 받고, 반환값은 없는 함수 형태

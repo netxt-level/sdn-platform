@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
 
@@ -14,19 +14,36 @@ SUPPORTED_SECURITY_EVENT_PROTOCOLS = {"ICMP", "UDP", "TCP"}
 class PendingSecurityEventQueue:
     """전송 실패로 보안 이벤트가 사라지지 않도록 메모리에 보관한다."""
 
-    def __init__(self, max_size: int = 500) -> None:
+    def __init__(
+        self,
+        max_size: int = 500,
+        dead_letter_ttl_sec: int = 3600,
+        max_dead_letter_size: int = 1000,
+    ) -> None:
         self.max_size = max_size
+        self.dead_letter_ttl_sec = dead_letter_ttl_sec
+        self.max_dead_letter_size = max_dead_letter_size
         self.events: deque[dict[str, Any]] = deque()
         self.event_ids: set[str] = set()
+        self.dead_letter_records: dict[str, dict[str, Any]] = {}
         self.dropped_count = 0
+        self.dead_letter_count = 0
+        self.last_dead_letter_event_id: str | None = None
+        self.last_dead_letter_reason: str | None = None
 
     def add(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """새 이벤트를 대기 큐에 넣고, 크기 제한 때문에 밀려난 이벤트를 돌려준다."""
 
+        self._cleanup_dead_letters()
         dropped_events = []
         for event in events:
             event_id = str(event.get("event_id") or "")
-            if not event_id or event_id in self.event_ids:
+            event_key = _event_retry_key(event)
+            if (
+                not event_id
+                or event_id in self.event_ids
+                or event_key in self.dead_letter_records
+            ):
                 continue
 
             self.events.append(event)
@@ -39,6 +56,40 @@ class PendingSecurityEventQueue:
                 self.dropped_count += 1
 
         return dropped_events
+
+    def move_to_dead_letter(self, events: list[dict[str, Any]], reason: str) -> None:
+        """계속 재전송해도 실패할 이벤트를 큐에서 빼고 fingerprint를 기억한다."""
+
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=max(self.dead_letter_ttl_sec, 0))
+        self.remove_sent(events)
+        for event in events:
+            event_key = _event_retry_key(event)
+            if not event_key:
+                continue
+            current_record = self.dead_letter_records.get(event_key)
+            first_failed_at = (
+                current_record["first_failed_at"]
+                if current_record is not None
+                else now
+            )
+            failure_count = (
+                int(current_record["failure_count"]) + 1
+                if current_record is not None
+                else 1
+            )
+            self.dead_letter_records[event_key] = {
+                "first_failed_at": first_failed_at,
+                "last_failed_at": now,
+                "failure_count": failure_count,
+                "last_reason": reason,
+                "last_event_id": str(event.get("event_id") or ""),
+                "expires_at": expires_at,
+            }
+            self.dead_letter_count += 1
+            self.last_dead_letter_event_id = str(event.get("event_id") or "")
+            self.last_dead_letter_reason = reason
+        self._trim_dead_letters()
 
     def peek_batch(self, size: int) -> list[dict[str, Any]]:
         batch_size = max(1, size)
@@ -76,9 +127,37 @@ class PendingSecurityEventQueue:
     def clear(self) -> None:
         self.events.clear()
         self.event_ids.clear()
+        self.dead_letter_records.clear()
 
     def __len__(self) -> int:
         return len(self.events)
+
+    def _cleanup_dead_letters(self) -> None:
+        now = datetime.now(timezone.utc)
+        expired_keys = [
+            key
+            for key, record in self.dead_letter_records.items()
+            if record["expires_at"] <= now
+        ]
+        for key in expired_keys:
+            self.dead_letter_records.pop(key, None)
+
+    def _trim_dead_letters(self) -> None:
+        while len(self.dead_letter_records) > self.max_dead_letter_size:
+            oldest_key = min(
+                self.dead_letter_records,
+                key=lambda key: self.dead_letter_records[key]["first_failed_at"],
+            )
+            self.dead_letter_records.pop(oldest_key, None)
+
+
+def _event_retry_key(event: dict[str, Any]) -> str:
+    return str(
+        event.get("dedup_key")
+        or event.get("event_fingerprint")
+        or event.get("event_id")
+        or ""
+    )
 
 
 class SecurityEventBuilder:

@@ -1030,12 +1030,10 @@ export function useRealtime(): RealtimeState {
               ...prev,
               timestamp: nextPacketSummary.timestamp,
               analyzer_id: nextPacketSummary.analyzer_id,
-              status: "running",
-              capture_active: true,
-              backend_connected: true,
-              last_packet_at: nextPacketSummary.timestamp,
-              last_summary_sent_at: nextPacketSummary.timestamp,
-              error_message: null
+              last_packet_at: nextPacketSummary.total_packets > 0
+                ? nextPacketSummary.timestamp
+                : prev.last_packet_at,
+              last_summary_sent_at: nextPacketSummary.timestamp
             }));
           }
 
@@ -1064,10 +1062,7 @@ export function useRealtime(): RealtimeState {
               ...prev,
               timestamp: nextDetectionSummary.timestamp,
               analyzer_id: nextDetectionSummary.analyzer_id,
-              status: "running",
-              backend_connected: true,
-              last_summary_sent_at: nextDetectionSummary.timestamp,
-              error_message: null
+              last_summary_sent_at: nextDetectionSummary.timestamp
             }));
           }
 

@@ -96,7 +96,7 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 요청/응답 필드 상세는 `analyzer-backend-api.md`를 기준으로 한다.
 
-백엔드는 `POST /api/security/events`로 받은 이벤트를 Elasticsearch에 저장하고, 이벤트별 보안 대응 내역을 PostgreSQL `security_responses`에 생성한다. 이벤트에 `mitigation`이 있으면 PostgreSQL `flow_rules`에 `PENDING` 상태의 flow rule 후보도 생성한다.
+백엔드는 `POST /api/security/events`로 받은 이벤트를 Elasticsearch에 저장하고, 이벤트별 보안 대응 내역을 PostgreSQL `security_responses`에 생성한다. 실제 Flow 조치가 없는 LOG/ALERT 계열은 `RECORDED`로 저장하고, 이벤트에 `mitigation`이 있으면 PostgreSQL `flow_rules`에 `PENDING` 상태의 flow rule 후보도 생성한다.
 
 ## 현재 탐지 범위
 
@@ -107,7 +107,7 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 | Port Scan | `app/detection/port_scan.py` | TCP SYN 패턴으로 수직/수평 스캔 탐지 |
 | ICMP Flood | `app/detection/flood.py` | ICMP Echo Request가 반복적으로 기준 이상이면 탐지 |
 | UDP Flood | `app/detection/flood.py` | 목적지 포트별 UDP pps/bps와 출발지-목적지 합산 트래픽을 함께 보고 탐지 |
-| SYN Flood | `app/detection/syn_flood.py` | SYN 패킷 집중과 SYN/ACK 응답 부족을 단일/다중 서비스 기준으로 탐지 |
+| SYN Flood | `app/detection/syn_flood.py` | SYN 패킷 집중과 최종 연결 완료율 부족을 단일/다중 서비스 기준으로 탐지 |
 
 탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다. 탐지 조건과 대응 레벨 정책은 `README_SECURITY_DETECTION.md`를 기준으로 한다.
 
@@ -118,11 +118,11 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 - 대응 후보는 현재 IPv4 OpenFlow match 기준으로 만들기 때문에 IPv6 주소는 보안 이벤트 변환에서 제외한다.
 - `ANALYZER_ID`와 `ANALYZER_INTERFACE`는 백엔드 스키마와 맞춰 최대 30자로 제한한다.
 - `total_bps`, `total_pps`는 윈도우 내 누적 값을 `window_sec`로 나눈 초당 값이다.
-- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 중간에 빈 초가 있으면 지속 공격 history를 초기화한다. timestamp가 없으면 실제 분석 윈도우를 사용한다.
+- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 중간에 빈 초가 있으면 지속 공격 history를 초기화한다. 같은 1초 bucket이 여러 분석 호출에 나뉘면 집계는 합산하고 history는 한 번만 갱신한다. Port Scan도 패킷 timestamp 기반 watermark로 지연 처리된 스캔을 판단한다. timestamp가 없으면 실제 분석 윈도우를 사용한다.
 - 분석 루프와 상태 전송 루프는 예외가 발생해도 오류 상태를 기록하고 계속 실행된다.
 - 분석 루프 오류는 다음 정상 분석이 완료되면 `running` 상태로 복구한다. 백엔드 전송 성공만으로 분석 오류 메시지를 지우지는 않는다.
 - 백엔드 전송 실패는 로그로 남기고 해당 전송은 실패 처리한다.
-- 보안 이벤트 전송이 실패하면 메모리 대기 큐에 남겨 다음 분석 구간에서 설정된 배치 크기만큼 다시 전송한다. 400/413/422 응답이면 batch 크기를 줄여 재시도하고, 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트만 큐에서 제거한다.
+- 보안 이벤트 전송이 실패하면 메모리 대기 큐에 남겨 다음 분석 구간에서 설정된 배치 크기만큼 다시 전송한다. 400/413/422 응답이면 batch 크기를 줄여 재시도하고, 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트를 dead letter로 이동해 같은 fingerprint의 반복 재전송을 막는다. dead letter는 기본 1시간 뒤 다시 받을 수 있게 만료된다.
 - 백엔드는 Analyzer POST 요청 본문 크기를 제한한다. 상태 보고는 64KB, 패킷 요약은 512KB, 탐지 요약은 128KB, 보안 이벤트는 1MB까지 허용한다.
 - 보안 이벤트는 packet summary와 traffic stats보다 먼저 백엔드로 전송한다.
 - packet summary와 traffic stats는 최신 값이 중요하므로 작은 전송 큐를 사용한다. 큐가 가득 차면 오래된 요약을 버리고 최신 요약을 우선 전송한다.

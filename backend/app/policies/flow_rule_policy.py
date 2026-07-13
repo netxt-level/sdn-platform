@@ -144,7 +144,7 @@ def _is_recent_rule(
             break
 
     if base_time is None:
-        return True
+        return False
 
     current_time = _to_aware_datetime(now or datetime.now(timezone.utc))
     elapsed_seconds = (current_time - _to_aware_datetime(base_time)).total_seconds()

@@ -1,2 +1,2 @@
-scapy
-requests
+scapy==2.7.0
+requests==2.32.5

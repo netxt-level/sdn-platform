@@ -118,10 +118,10 @@ POST /api/analyzer/packet-summary
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---:|---|
 | `src_host` | `string \| null` | X | 출발지 호스트명 |
-| `src_ip` | `string \| null` | X | 출발지 IP |
+| `src_ip` | `string \| null` | X | 출발지 IPv4 |
 | `src_port` | `integer \| null` | X | 현재 Analyzer는 host 통계 집계에서 포트 값을 제외하므로 보통 `null` |
 | `dst_host` | `string \| null` | X | 목적지 호스트명 |
-| `dst_ip` | `string \| null` | X | 목적지 IP |
+| `dst_ip` | `string \| null` | X | 목적지 IPv4 |
 | `dst_port` | `integer \| null` | X | 현재 Analyzer는 host 통계 집계에서 포트 값을 제외하므로 보통 `null` |
 | `protocol` | `string` | O | 프로토콜 이름 |
 | `packet_count` | `integer` | O | 해당 호스트 쌍과 프로토콜의 패킷 수 |
@@ -377,11 +377,11 @@ POST /api/security/events
 | `PORT_SCAN` | `tcp_syn_port_scan` | `matched_conditions`, `window_seconds`, `scan_type`, `unique_dst_port_count`, `unique_dst_ports`, `target_count`, `target_ips`, `syn_count`, `score` |
 | `ICMP_FLOOD` | `icmp_flood_rate_threshold` | `matched_conditions`, `window_seconds`, `icmp_type`, `packet_count`, `pps`, `bps`, `pps_threshold`, `high_pps_threshold`, `critical_pps_threshold`, `exceeded_windows`, `score` |
 | `UDP_FLOOD` | `udp_flood_rate_threshold`, `udp_flood_rate_threshold_pair_total` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `bps`, `aggregation_scope`, `destination_port`, `unique_dst_port_count`, `sample_dst_ports`, `dominant_dst_port`, `dominant_port_ratio`, `pps_threshold`, `bps_threshold`, `exceeded_windows`, `mitigation_stage`, `escalation_reason`, `score` |
-| `SYN_FLOOD` | `tcp_syn_single_service_rate`, `tcp_syn_multi_service_rate` | `matched_conditions`, `window_seconds`, `destination_port`, `syn_count`, `response_count`, `syn_pps`, `syn_response_ratio`, `unique_dst_port_count`, `sample_dst_ports`, `related_detections`, `mitigation_stage`, `escalation_reason`, `score` |
+| `SYN_FLOOD` | `tcp_syn_single_service_rate`, `tcp_syn_multi_service_rate` | `matched_conditions`, `window_seconds`, `destination_port`, `syn_count`, `response_count`, `completed_count`, `syn_pps`, `syn_response_ratio`, `handshake_completion_ratio`, `response_shortage`, `completion_shortage`, `unique_dst_port_count`, `sample_dst_ports`, `related_detections`, `mitigation_stage`, `escalation_reason`, `score` |
 
 UDP Flood의 `aggregation_scope`가 `service`이면 특정 목적지 포트 기준 탐지이며 `destination_port`가 포함된다. `pair`이면 여러 목적지 포트로 분산된 UDP 트래픽을 출발지-목적지 기준으로 합산한 탐지라서 `destination_port`가 없을 수 있다. 같은 흐름에서 pair 탐지가 서비스별 탐지보다 같거나 강한 대응 단계라면 서비스별 탐지는 별도 이벤트로 보내지 않고 `related_service_detections`에 요약된다.
 
-SYN Flood의 `tcp_syn_multi_service_rate`는 여러 목적지 포트에 나뉜 SYN이 출발지-목적지 전체 기준으로 높을 때 생성된다. 같은 흐름에서 Port Scan도 함께 잡히면 Port Scan 이벤트는 별도 대응 후보로 보내지 않고 `related_detections`에 요약된다.
+SYN Flood의 `tcp_syn_multi_service_rate`는 여러 목적지 포트에 나뉜 SYN이 출발지-목적지 전체 기준으로 높을 때 생성된다. SYN/ACK 응답 수와 최종 ACK 완료 수는 분리해서 evidence에 남긴다. 같은 흐름에서 Port Scan도 함께 잡히면 Port Scan 이벤트는 별도 대응 후보로 보내지 않고 `related_detections`에 요약된다.
 
 ### 백엔드 처리
 
@@ -395,7 +395,7 @@ SYN Flood의 `tcp_syn_multi_service_rate`는 여러 목적지 포트에 나뉜 S
 - `evidence`는 중첩 깊이, 문자열 길이, 리스트 길이, key 길이를 제한한다.
 - `/api/security/events` 요청 본문은 최대 1MB다.
 - Elasticsearch `sdn-security-events` 인덱스에 `event_id`를 문서 `_id`로 사용해 bulk 저장한다. 같은 이벤트가 재전송되면 기존 문서를 갱신한다.
-- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 저장한다. 실제 Flow 조치가 없는 LOG/ALERT 계열은 `RECORDED`, `RATE_LIMIT`과 `DROP`은 `PENDING` 상태로 저장한다.
 - 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 병렬 broadcast한다.
 - 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
@@ -491,7 +491,7 @@ POST /api/analyzer/status
 
 백엔드는 Analyzer POST 요청의 본문 크기를 경로별로 제한한다. 상태 보고는 64KB, 패킷 요약은 512KB, 탐지 요약은 128KB, 보안 이벤트는 1MB를 넘으면 413으로 거부한다.
 
-보안 이벤트 전송이 실패하면 이미 만든 이벤트를 메모리 대기 큐에 남겨 다음 분석 구간에서 다시 전송한다. 재전송은 기본 100개씩 나누어 보내며, 큐는 기본 500개까지만 보관한다. 400/413/422 응답을 받으면 같은 batch를 그대로 반복하지 않고 절반 크기로 줄여 재시도한다. 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트만 큐에서 제거해 뒤의 정상 이벤트가 계속 밀리지 않게 한다. 그래서 Port Scan처럼 탐지기 내부 cooldown이 있는 항목도 백엔드 장애 때문에 이벤트가 바로 유실되지 않는다. 큐 크기를 넘어서 밀려난 이벤트는 로그로 남기고 중복 억제 기록에서 제거해 이후 분석 구간에서 다시 만들어질 수 있게 한다.
+보안 이벤트 전송이 실패하면 이미 만든 이벤트를 메모리 대기 큐에 남겨 다음 분석 구간에서 다시 전송한다. 재전송은 기본 100개씩 나누어 보내며, 큐는 기본 500개까지만 보관한다. 400/413/422 응답을 받으면 같은 batch를 그대로 반복하지 않고 절반 크기로 줄여 재시도한다. 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트를 dead letter로 이동해 같은 fingerprint가 계속 재전송되지 않게 하고, 뒤의 정상 이벤트가 계속 밀리지 않게 한다. dead letter는 기본 1시간 TTL과 최대 1000개 제한을 가진다. 큐 크기를 넘어서 밀려난 이벤트는 로그로 남기고 중복 억제 기록에서 제거해 이후 분석 구간에서 다시 만들어질 수 있게 한다.
 
 packet summary와 traffic stats는 보안 이벤트와 별도 전송 큐를 사용한다. 이 큐는 오래된 대시보드 요약이 많이 밀리지 않도록 작게 유지하며, 가득 찬 경우 오래된 요약을 제거하고 최신 요약을 우선한다.
 

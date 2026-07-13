@@ -10,7 +10,7 @@
 | ICMP Flood | `app/detection/flood.py` | ICMP Echo Request 증가가 반복되는지 탐지 |
 | UDP Flood | `app/detection/flood.py` | 목적지 포트별 집계와 출발지-목적지 합산 집계를 함께 보고 탐지 |
 | Port Scan | `app/detection/port_scan.py` | TCP SYN 패턴으로 수직 스캔과 수평 스캔을 탐지 |
-| SYN Flood | `app/detection/syn_flood.py` | 특정 서비스로 SYN 요청이 몰리고 SYN/ACK 응답이 부족한지 탐지 |
+| SYN Flood | `app/detection/syn_flood.py` | 특정 서비스로 SYN 요청이 몰리고 최종 연결 완료율이 낮은지 탐지 |
 | 보안 이벤트 변환 | `app/detection/security_events.py` | 탐지 결과를 백엔드 SecurityEvent 형식으로 변환 |
 | 실행 연결 | `app/main.py` | 분석 주기마다 각 탐지기를 실행하고 이벤트를 전송 |
 | 설정값 | `app/config.py` | 탐지 기준값을 환경변수로 조정 |
@@ -39,7 +39,7 @@ ARP Spoofing은 이번 구현에서 제외했다. ARP Spoofing은 IP-MAC Binding
 
 ICMP Flood는 ping 요청에 해당하는 ICMP Echo Request가 짧은 시간 안에 반복적으로 증가하는 상황을 본다. Echo Reply, Destination Unreachable 같은 다른 ICMP 메시지는 네트워크 진단이나 오류 알림일 수 있으므로 Flood 집계에서 제외한다.
 
-패킷에 timestamp가 있으면 ICMP/UDP/SYN Flood는 분석 루프 실행 간격이 아니라 패킷 timestamp 기준 1초 bucket을 시간 순서대로 모두 처리한다. 그래서 분석 루프가 잠깐 늦어 한 번에 여러 초의 패킷이 들어와도 실제로 이어진 bucket은 지속 초과로 누적하고, 중간에 빈 초가 있으면 history를 초기화해 떨어진 burst를 지속 공격으로 묶지 않는다. 실제로 1초 동안 몰린 Flood가 긴 분석 윈도우 평균으로 희석되어 사라지는 문제도 줄인다. timestamp가 없는 테스트 데이터나 특수 캡처 환경에서는 기존처럼 실제 분석 윈도우 시간을 사용한다.
+패킷에 timestamp가 있으면 ICMP/UDP/SYN Flood는 분석 루프 실행 간격이 아니라 패킷 timestamp 기준 1초 bucket을 시간 순서대로 모두 처리한다. 그래서 분석 루프가 잠깐 늦어 한 번에 여러 초의 패킷이 들어와도 실제로 이어진 bucket은 지속 초과로 누적하고, 중간에 빈 초가 있으면 history를 초기화해 떨어진 burst를 지속 공격으로 묶지 않는다. 같은 1초 bucket이 여러 분석 호출에 나뉘어 들어오면 기존 bucket 집계와 합산하되 history는 한 번만 갱신한다. 실제로 1초 동안 몰린 Flood가 긴 분석 윈도우 평균으로 희석되어 사라지는 문제도 줄인다. Port Scan도 처리 지연에 흔들리지 않도록 패킷 timestamp 기반 watermark로 윈도우를 정리한다. timestamp가 없는 테스트 데이터나 특수 캡처 환경에서는 기존처럼 실제 분석 윈도우 시간을 사용한다.
 
 | 기준 | 기본값 | 설명 |
 |---|---:|---|
@@ -85,7 +85,7 @@ Port Scan은 TCP SYN 패킷을 보고 판단한다. 한 대상 IP의 여러 포�
 
 ### SYN Flood
 
-SYN Flood는 SYN 패킷이 몰리고 SYN/ACK 응답이 부족한 상황을 본다. 단일 목적지 포트에 집중되는 경우를 기본으로 보고, 여러 포트로 나뉘어 들어오더라도 출발지-목적지 전체 SYN PPS가 높으면 다중 서비스 SYN Flood로 묶어 판단한다.
+SYN Flood는 SYN 패킷이 몰리고 연결이 끝까지 완료되지 않는 상황을 본다. 단일 목적지 포트에 집중되는 경우를 기본으로 보고, 여러 포트로 나뉘어 들어오더라도 출발지-목적지 전체 SYN PPS가 높고 연결 완료율이 낮으면 다중 서비스 SYN Flood로 묶어 판단한다.
 
 | 기준 | 기본값 | 설명 |
 |---|---:|---|
@@ -95,7 +95,7 @@ SYN Flood는 SYN 패킷이 몰리고 SYN/ACK 응답이 부족한 상황을 본�
 | `SYN_CRITICAL_PPS_THRESHOLD` | 800 | Critical로 보는 SYN PPS |
 | `SYN_MAX_UNIQUE_PORTS` | 5 | SYN Flood로 볼 수 있는 최대 목적지 포트 수 |
 
-SYN 대비 응답 비율은 단독 핵심 기준이 아니라 보조 판단으로 사용한다. 정상 TCP 연결처럼 SYN에 대한 SYN/ACK 흐름이 충분하면 SYN Flood로 판단하지 않도록 했다. 최종 ACK는 응답 수에 넣지 않아 정상 연결 하나가 두 번 계산되는 문제를 피한다.
+SYN 대비 SYN/ACK 비율은 보조 판단으로 사용하고, 최종 ACK는 별도 완료 수로 기록한다. 정상 TCP 연결처럼 SYN, SYN/ACK, 최종 ACK가 이어지면 SYN Flood로 보지 않는다. 반대로 SYN/ACK가 충분해도 최종 ACK가 거의 없으면 half-open 연결로 보고 SYN Flood 근거에 포함한다.
 
 다중 서비스 SYN Flood와 Port Scan이 같은 흐름에서 동시에 탐지되면 Analyzer는 더 강한 SYN Flood 이벤트를 유지하고, Port Scan은 `related_detections` evidence로 묶는다. 이렇게 하면 같은 출발지/목적지에 Rate Limit과 Drop 후보가 중복으로 만들어지는 상황을 줄일 수 있다.
 
@@ -121,7 +121,7 @@ SYN 대비 응답 비율은 단독 핵심 기준이 아니라 보조 판단으�
 
 백엔드는 `event_id`를 Elasticsearch 문서 ID로 사용해 저장한다. 그래서 Analyzer가 같은 이벤트를 재전송하더라도 보안 이벤트 문서가 중복으로 계속 쌓이지 않고 기존 문서가 갱신된다. evidence는 화면 상세 확인을 위해 `_source`에 남기지만, 임의 key가 Elasticsearch field를 계속 늘리지 않도록 세부 key는 인덱싱하지 않는다. 현재 큐는 프로세스 메모리 기반이므로, 장기 운영 단계에서는 파일이나 SQLite 기반 outbox로 확장할 수 있다.
 
-보안 이벤트 POST 요청은 최대 1MB까지 허용한다. 이 제한은 개별 evidence 값 제한과 별도로, 대형 JSON이 검증 전에 메모리에 크게 올라가는 상황을 줄이기 위한 백엔드 보호 장치다. Analyzer가 400/413/422 응답을 받으면 같은 batch를 계속 재시도하지 않고 batch 크기를 절반으로 줄여 다시 전송한다. 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나오면 해당 이벤트만 재시도 큐에서 제거해 뒤의 정상 이벤트가 막히지 않게 한다.
+보안 이벤트 POST 요청은 최대 1MB까지 허용한다. 이 제한은 개별 evidence 값 제한과 별도로, 대형 JSON이 검증 전에 메모리에 크게 올라가는 상황을 줄이기 위한 백엔드 보호 장치다. Analyzer가 400/413/422 응답을 받으면 같은 batch를 계속 재시도하지 않고 batch 크기를 절반으로 줄여 다시 전송한다. 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나오면 해당 이벤트를 dead letter로 이동해 같은 fingerprint가 계속 재전송되지 않게 하고, 뒤의 정상 이벤트가 막히지 않게 한다. dead letter는 기본 1시간 뒤 만료되며 최대 1000개까지만 유지한다.
 
 packet summary와 traffic stats는 보안 이벤트와 다르게 오래된 값을 모두 보낼 필요가 적다. 백엔드가 잠시 느려졌을 때 오래된 대시보드 요약이 길게 밀리면 화면이 뒤늦게 갱신되므로, 통계 전송 큐는 작게 유지하고 오래된 요약보다 최신 요약을 우선한다.
 
@@ -167,7 +167,7 @@ git diff --check
 - Port Scan 수평 스캔은 대상 IP 개수와 SYN 시도 수를 함께 본다. 대상 IP 수만으로 알림을 만들면 작은 실습 토폴로지에서 오탐이 쉽게 생기기 때문이다.
 - Port Scan 알림 쿨다운은 유지하되, 기존 알림보다 점수나 위험도가 올라가면 다시 알림을 만든다.
 - Flow Rule 대응 정보는 백엔드에서 한 번 더 검증한다. IPv4 조건은 `eth_type=2048`, TCP는 `ip_proto=6`, UDP는 `ip_proto=17`, ICMP는 `ip_proto=1`을 요구한다. 수동 Flow Rule은 `switch_id`가 필요하며, 차단/제한 계열 action은 너무 넓은 match로 생성되지 않도록 구체적인 IP, 포트, ICMP 타입 조건을 요구한다.
-- Flood PPS는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 빈 초가 있으면 지속 초과 history를 초기화한다. timestamp가 없으면 실제 분석 스냅샷 간격을 사용한다. 패킷 요약은 실제 분석 스냅샷 간격을 사용한다.
+- Flood PPS는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 빈 초가 있으면 지속 초과 history를 초기화한다. 같은 1초 bucket이 여러 분석 호출에 나뉘면 집계는 합산하고 history는 한 번만 갱신한다. timestamp가 없으면 실제 분석 스냅샷 간격을 사용한다. 패킷 요약은 실제 분석 스냅샷 간격을 사용한다.
 - 패킷 요약은 포트 값을 제외하고 출발지/목적지/프로토콜 단위로 합산한다. 포트별 근거는 보안 이벤트 evidence에서 확인한다.
 - Analyzer 분석 루프와 백엔드 HTTP 전송 루프를 분리해 전송 지연이 분석 주기를 직접 막지 않게 했다.
 - 백엔드 전송 큐에서는 보안 이벤트를 packet summary와 traffic stats보다 먼저 전송한다.
@@ -175,6 +175,7 @@ git diff --check
 - Analyzer 상태에는 보안 이벤트 대기열, 드롭 수, 패킷 버퍼 드롭 수, 마지막 전송 실패 시각을 포함하며 백엔드 DB에도 저장한다.
 - Analyzer 분석 루프 오류는 다음 정상 분석 뒤 복구되며, 백엔드 전송 성공만으로 분석 오류 메시지를 지우지 않는다.
 - 패킷 파서는 ARP를 `ARP`로, 그 외 미분류 프로토콜은 `OTHER`로 정리한다. 단, ARP와 OTHER는 패킷 요약 통계용이며 현재 보안 이벤트로는 전송하지 않는다.
+- Analyzer는 `scapy.all` 대신 필요한 캡처 함수만 import하고, 현재 검증된 Scapy 버전을 고정해 IPv4 중심 실습 환경의 재현성을 높인다.
 
 현재 테스트는 다음을 확인한다.
 
@@ -192,7 +193,7 @@ git diff --check
 - IPv6 주소는 현재 IPv4 대응 후보 범위와 맞지 않아 이벤트 변환 대상에서 제외함
 - ICMP Echo Reply와 Destination Unreachable은 Flood로 탐지하지 않음
 - ICMP Flood는 반복 초과 후 탐지함
-- timestamp가 있는 ICMP/UDP/SYN Flood는 분석이 지연되어도 1초 bucket을 시간 순서대로 처리하고, 비연속 bucket은 지속 공격으로 누적하지 않음
+- timestamp가 있는 ICMP/UDP/SYN Flood는 분석이 지연되어도 1초 bucket을 시간 순서대로 처리하고, 비연속 bucket이나 같은 bucket의 분할 입력을 지속 공격으로 잘못 누적하지 않음
 - ICMP Flood 대응 후보에는 `icmpv4_type=8`이 포함됨
 - Flood 상태 기록은 일정 시간이 지나면 정리됨
 - UDP Critical은 첫 탐지에서 Rate Limit, 지속 시 Drop으로 승격됨
@@ -201,7 +202,7 @@ git diff --check
 - UDP Flood는 특정 포트 탐지와 출발지-목적지 합산 탐지가 겹치면 더 강한 대응 흐름 하나로 정리함
 - 잘못된 패킷 크기와 `window_sec=0`을 안전하게 처리함
 - 정상 TCP handshake는 SYN Flood로 탐지하지 않음
-- SYN 응답 계산은 SYN/ACK만 사용하며 최종 ACK를 중복 응답으로 세지 않음
+- SYN 응답 계산은 SYN/ACK와 최종 ACK 완료 수를 분리해 half-open 연결을 판단함
 - SYN 응답 계산은 패킷 순서가 뒤집혀도 정상 연결을 공격으로 보지 않음
 - SYN Flood는 Port Scan과 역할이 겹치지 않음
 - 다중 서비스 SYN Flood와 Port Scan이 같은 흐름에서 동시에 잡히면 상관관계로 하나의 대응 후보만 유지함
@@ -212,7 +213,7 @@ git diff --check
 - 위험도가 상승한 이벤트는 중복 억제 중이어도 다시 전송됨
 - 전송 실패한 보안 이벤트는 메모리 대기 큐에 남아 다음 주기에 재전송 가능함
 - 보안 이벤트 대기 큐는 배치 전송, 크기 제한, 초과 이벤트 제거를 처리함
-- 백엔드가 400/413/422를 반환하면 보안 이벤트 batch 크기를 줄여 재전송할 수 있도록 요청별 HTTP 상태 코드를 반환함
+- 백엔드가 400/413/422를 반환하면 보안 이벤트 batch 크기를 줄여 재전송하고, 단일 이벤트까지 실패하면 dead letter로 이동함
 - 잘못된 환경변수 값과 임계값 순서 오류를 시작 시점에 차단함
 - 패킷 버퍼 최대 크기 설정이 잘못되면 시작 시점에 차단함
 

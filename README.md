@@ -36,8 +36,8 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 ### Analyzer
 
 - Python
-- Scapy
-- requests
+- Scapy 2.7.0
+- requests 2.32.5
 
 ### Backend
 
@@ -78,10 +78,10 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - UDP pps/bps 기반 UDP Flood 탐지. 목적지 포트별 기준과 출발지-목적지 합산 기준을 함께 사용
 - 단일/다중 서비스 SYN Flood 탐지
 - TCP SYN 패턴 기반 Port Scan 의심 탐지
-- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 비연속 bucket은 지속 공격으로 누적하지 않음
+- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리하고, 비연속 bucket이나 같은 bucket의 분할 입력은 지속 공격으로 잘못 누적하지 않음
 - 분석 서버 상태 주기적 보고
 - 백엔드 전송 실패, timeout, HTTP 오류 처리
-- 보안 이벤트 400/413/422 응답 시 batch 크기 축소 재전송
+- 보안 이벤트 400/413/422 응답 시 batch 크기 축소 재전송, 단일 이벤트 영구 실패 시 dead letter 처리
 - 분석 루프와 백엔드 전송 루프 분리
 - 분석 지연 시 패킷 버퍼 최대 크기 제한과 초과 로그 처리
 - 분석 루프/상태 전송 루프 예외 발생 시 오류 상태 기록 후 루프 유지
@@ -353,10 +353,11 @@ Alembic migration은 `migrations/`에 있다.
 ## 현재 제한 사항
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
-- `/api/security/events`는 `event_id`를 Elasticsearch 문서 ID로 사용해 보안 이벤트를 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
+- `/api/security/events`는 `event_id`를 Elasticsearch 문서 ID로 사용해 보안 이벤트를 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다. 실제 Flow 조치가 없는 LOG/ALERT 계열 대응 이력은 `RECORDED`로 남기고, `RATE_LIMIT`과 `DROP`만 적용 대기 상태인 `PENDING`으로 남긴다.
 - `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 API를 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다. 프론트엔드 화면의 수동 생성은 로그인/관리자 권한 기능이 연결될 때까지 비활성화한다.
-- 같은 Flow Rule은 활성 상태이고 `switch_id`, `match`, `target`이 같으며 기존 action, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 강한 제한으로 본다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `PENDING`과 `APPROVED`는 10분, `APPLYING`은 5분을 넘으면 적용이 멈춘 후보로 보고 재사용하지 않는다. `APPLIED`인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙도 재사용하지 않는다.
+- 같은 Flow Rule은 활성 상태이고 `analyzer_id`, `switch_id`, `match`, `target`이 같으며 기존 action, `priority`, `idle_timeout`, `hard_timeout`이 새 요청보다 같거나 강할 때만 재사용한다. `RATE_LIMIT`끼리는 `rate_limit_pps`가 더 낮거나 같을 때만 강한 제한으로 본다. timeout `0`은 영구 규칙으로 보고, 신규 요청이 `0`이면 기존 규칙도 `0`일 때만 재사용한다. `PENDING`과 `APPROVED`는 10분, `APPLYING`은 5분을 넘으면 적용이 멈춘 후보로 보고 재사용하지 않는다. 최근 후보인지 판단할 시각이 없는 Rule도 재사용하지 않는다. `APPLIED`인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙도 재사용하지 않는다.
 - 보안 이벤트와 Flow Rule 입력은 현재 구현 범위에 맞게 IPv4, 허용 프로토콜, 허용 action, OpenFlow match 필드를 검증한다. 보안 이벤트는 batch 크기, 주요 문자열 길이, evidence 크기, 전체 요청 크기, 요청 `analyzer_id`와 이벤트 `analyzer_id` 일치 여부도 확인한다.
+- 패킷 요약의 host traffic IP도 IPv4 형식으로 검증해 잘못된 InfluxDB tag가 저장되지 않게 한다.
 - Analyzer 전송 API와 수동 Flow Rule 생성 API는 각각 `ANALYZER_API_KEY`, `ADMIN_API_KEY`를 요구한다. 키가 비어 있으면 기본적으로 설정 오류로 처리하며, 로컬 개발에서만 `ALLOW_INSECURE_DEV_AUTH=true`로 인증 비활성화를 명시할 수 있다. 프론트엔드 proxy에서는 사용자 권한 검증이 없으므로 POST를 차단한다.
 - 조회 API와 WebSocket은 현재 로그인 기반 권한 관리를 적용하지 않는다. 공용 서버 배포 전에는 사용자 인증과 역할 분리가 추가로 필요하다.
 - Analyzer 상태에는 보안 이벤트 대기열 수, 드롭된 이벤트 수, 패킷 버퍼 드롭 수, 마지막 보안 이벤트 전송 실패 시각을 함께 저장한다.

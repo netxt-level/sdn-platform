@@ -17,7 +17,9 @@
 - UDP 목적지 포트별 Flood 탐지
 - UDP 출발지-목적지 합산 Flood 탐지
 - 단일/다중 서비스 SYN Flood 탐지
+- SYN/ACK 응답 수와 최종 ACK 완료율을 분리한 SYN Flood 판단
 - TCP SYN 기반 수직/수평 Port Scan 탐지
+- 패킷 timestamp 기반 Port Scan 윈도우 판단
 - 관리 호스트 수평 Port Scan 기준 완화와 반복 SYN 보조 탐지
 - 탐지 결과 점수화, 위험도 분류, 대응 후보 생성
 - 보안 이벤트 중복 억제
@@ -26,7 +28,8 @@
 - 400/413/422 응답 시 보안 이벤트 batch 크기 축소 재전송
 - 패킷 버퍼 최대 크기 제한과 초과 로그
 - IPv4 주소 검증
-- 백엔드 보안 이벤트 저장 및 대응 후보 `PENDING` 저장
+- 백엔드 보안 이벤트 저장 및 대응 후보 저장
+- LOG/ALERT 계열 Security Response `RECORDED` 저장
 - Elasticsearch `event_id` 기반 upsert와 bulk 저장
 - 보안 이벤트 API 입력 검증
 - Analyzer API Key 기반 입력 API 보호
@@ -38,7 +41,7 @@
 - 프론트엔드 Flow Rule 수동 생성 비활성화
 - Flow Rule 조회 기본 pagination
 - Flow Rule 조회 전체 개수와 다음 페이지 여부 반환
-- Flow Rule 재사용 시 `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, timeout 비교
+- Flow Rule 재사용 시 `analyzer_id`, `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, timeout 비교
 - 재사용된 Flow Rule과 새 보안 대응 이력 연결 정보 저장
 - 의심 호스트 조회 `range`를 Elasticsearch 시간 조건에 반영
 - 여러 Analyzer의 트래픽 시계열을 시간 bucket 기준으로 합산
@@ -49,7 +52,9 @@
 - Elasticsearch evidence 세부 key 인덱싱 비활성화
 - Frontend Docker production build와 build-time API/WebSocket 주소 주입
 - Analyzer 분석 오류 발생 후 다음 정상 분석 시 상태 복구
+- 패킷 캡처 실패 상태의 백엔드 최종 전송
 - 대시보드용 통계 전송 큐를 작게 유지해 오래된 요약 누적 방지
+- Packet Summary가 Analyzer 오류 상태를 정상 상태로 덮어쓰지 않도록 프론트 상태 갱신 분리
 
 ## 부분 구현
 
@@ -140,14 +145,17 @@ git diff --check
 - 10분이 지난 `PENDING`/`APPROVED` Flow Rule과 5분이 지난 `APPLYING` Flow Rule은 재사용하지 않도록 정책을 추가했다.
 - 오래된 `PENDING` Flow Rule은 Path 화면의 우회 경로 판단에서도 제외했다.
 - Flow Rule 조회에 기본 `limit=100`, 최대 `limit=500` pagination과 `total`, `has_more` 응답을 추가했다.
-- Flow Rule 재사용은 같은 fingerprint만 보지 않고 실제 `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, `idle_timeout`, `hard_timeout`을 함께 비교하도록 보강했다. `APPLIED`인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙은 재사용하지 않는다.
+- Flow Rule 재사용은 같은 fingerprint만 보지 않고 실제 `analyzer_id`, `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, `idle_timeout`, `hard_timeout`을 함께 비교하도록 보강했다. 최근 여부를 판단할 시간이 없거나 `APPLIED`인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙은 재사용하지 않는다.
 - 재사용된 Flow Rule도 새 보안 대응 이력의 `response_payload`에서 추적할 수 있도록 연결 정보를 남겼다.
 - 의심 호스트 조회의 `range` 파라미터를 Elasticsearch `@timestamp` 조건에 반영했다.
 - 여러 Analyzer가 같은 시간대에 보낸 트래픽 시계열은 InfluxDB 조회에서 시간 bucket 기준으로 합산하도록 조정했다.
 - ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리해 분석 지연으로 순간 Flood가 희석되거나 지속 초과 횟수가 누락되는 문제를 줄였다. 단, 중간에 빈 초가 있으면 history를 초기화해 떨어진 burst를 지속 공격으로 묶지 않는다.
-- 보안 이벤트 batch가 400/413/422로 거부되면 batch 크기를 줄여 재시도하고, 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트만 큐에서 제거하도록 했다.
+- Port Scan은 분석 처리 시각이 늦어져도 패킷 timestamp 기반 watermark로 수직 스캔 윈도우를 판단한다.
+- SYN Flood는 SYN/ACK 응답 수와 최종 ACK 완료 수를 분리해, 서버가 SYN/ACK를 보내더라도 연결이 완료되지 않는 half-open 흐름을 탐지 근거에 포함한다.
+- 보안 이벤트 batch가 400/413/422로 거부되면 batch 크기를 줄여 재시도하고, 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트를 dead letter로 이동해 같은 fingerprint의 반복 재전송을 막도록 했다.
+- Dead letter는 기본 1시간 TTL과 최대 1000개 제한을 둬 같은 fingerprint가 영구적으로 막히지 않게 했다.
 - Elasticsearch evidence 세부 key 인덱싱을 비활성화해 mapping field 증가를 줄였다.
 - Docker Compose에서 주요 비밀번호/API Key를 필수 환경변수로 요구하고 DB/Elasticsearch 포트 기본 바인딩을 `127.0.0.1`로 제한했다.
-- PostgreSQL 접속 URL은 SQLAlchemy `URL.create()`로 생성해 비밀번호에 `@`, `:`, `/`, `#` 같은 특수문자가 있어도 파싱 오류가 나지 않도록 했다.
+- PostgreSQL 접속 URL은 SQLAlchemy `URL.create()`로 생성하고 Alembic 설정에 넣을 때 `%`를 이스케이프해 비밀번호에 `@`, `:`, `/`, `#` 같은 특수문자가 있어도 파싱 오류가 나지 않도록 했다.
 - 아직 API가 없는 보안 이벤트 조치 버튼과 설정 입력은 비활성화해 실제 적용되는 기능처럼 보이지 않게 했다.
 - ESLint 9 기준 설정을 추가해 `npm run lint`가 정상 검증 명령으로 동작하게 했다.
