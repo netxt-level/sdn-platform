@@ -1,11 +1,19 @@
 export type AttackType =
   | "ICMP_FLOOD"
+  | "UDP_FLOOD"
+  | "SYN_FLOOD"
   | "PORT_SCAN"
   | string;
 
 export type SecuritySeverity = "low" | "medium" | "high" | "critical";
 
-export type SecurityEventStatus = "detected" | "blocked" | "ignored" | "resolved";
+export type SecurityEventStatus =
+  | "detected"
+  | "mitigating"
+  | "blocked"
+  | "ignored"
+  | "resolved"
+  | "failed";
 
 export type SecurityEvent = {
   id: string;
@@ -30,7 +38,7 @@ export type SecurityEvent = {
   mitigation?: Record<string, unknown> | null;
   pps: number;
   bps: number;
-  action: "none" | "block" | "reroute";
+  action: "none" | "block" | "rate_limit" | "reroute";
 };
 
 export type RawSecurityEvent = {

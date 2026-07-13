@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.policies.flow_rule_policy import is_reusable_flow_rule
 from app.repositories.flow_repository import FlowRepository
 from app.services.dashboard_service import DashboardService
 
@@ -19,7 +20,7 @@ class PathService:
 
     def get_status(self) -> dict[str, Any]:
         summary = self.dashboard_service.get_summary()
-        flow_rules = self.flow_repository.list_flows()
+        flow_rules = self.flow_repository.list_flows(limit=100)
         current_bps = float(summary.get("current_bps") or 0)
 
         # 실제 링크 계측 API가 없으므로 현재 트래픽 요약으로 경로 사용률을 파생한다.
@@ -99,6 +100,7 @@ class PathService:
         has_pending_response = any(
             str(rule.get("status", "")).upper() == "PENDING"
             and str(rule.get("action", "")).upper() in {"RATE_LIMIT", "DROP"}
+            and is_reusable_flow_rule(rule)
             for rule in flow_rules
         )
 

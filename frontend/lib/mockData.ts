@@ -30,7 +30,7 @@ export const mockPacketSummary: PacketSummary = {
     TCP: 920,
     UDP: 248,
     ICMP: 96,
-    UNKNOWN: 20
+    OTHER: 20
   },
   host_stats: [
     {

@@ -1,27 +1,23 @@
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends
+from fastapi import Query
 
+from app.core.auth import require_admin_api_key
+from app.schemas.flow import FlowRuleCreateRequest
 from app.services.flow_service import FlowService
 
 router = APIRouter()
 flow_service = FlowService()
 
 
-class FlowRuleCreateRequest(BaseModel):
-    switch_id: str | None = None
-    match: dict = Field(default_factory=dict)
-    action: str
-    priority: int = Field(100, ge=1, le=65535)
-    idle_timeout: int | None = Field(default=None, ge=0)
-    hard_timeout: int | None = Field(default=None, ge=0)
-    rate_limit_pps: int | None = Field(default=None, ge=1)
-
-
 @router.get("")
-def get_flows(src_ip: str | None = None):
-    return flow_service.get_flows(src_ip)
+def get_flows(
+    src_ip: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    return flow_service.get_flows(src_ip, limit=limit, offset=offset)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_admin_api_key)])
 def create_flow(payload: FlowRuleCreateRequest):
-    return flow_service.create_flow(payload.model_dump())
+    return flow_service.create_flow(payload.model_dump(mode="json", exclude_none=True))

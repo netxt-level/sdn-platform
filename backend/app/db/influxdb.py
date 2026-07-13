@@ -31,6 +31,17 @@ def get_influx_client() -> InfluxDBClient:
     )
 
 
+def is_influxdb_ready() -> bool:
+    client = get_influx_client()
+    try:
+        health = client.health()
+        return str(getattr(health, "status", "")).lower() == "pass"
+    except Exception:
+        return False
+    finally:
+        client.close()
+
+
 def validate_duration(value: str) -> str:
     if not re.fullmatch(r"[1-9][0-9]*[smhdw]", value):
         raise ValueError("Duration must look like 5s, 1m, 2h, 1d, or 1w")
@@ -54,6 +65,9 @@ from(bucket: "{settings.influxdb_bucket}")
   |> filter(fn: (r) => r["_measurement"] == "traffic_summary")
   |> filter(fn: (r) => r["_field"] == "total_packets" or r["_field"] == "total_bits")
   |> aggregateWindow(every: {bucket_value}, fn: sum, createEmpty: false)
+  |> group(columns: ["_time", "_field"])
+  |> sum(column: "_value")
+  |> group()
   |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"])
 '''
@@ -105,7 +119,7 @@ from(bucket: "{settings.influxdb_bucket}")
                 packet_count = int(record.get_value() or 0)
                 total_packets += packet_count
                 protocol_counts.append({
-                    "protocol": record.values.get("protocol", "UNKNOWN"),
+                    "protocol": record.values.get("protocol", "OTHER"),
                     "packet_count": packet_count,
                 })
 
@@ -138,14 +152,14 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
     points = [
         Point("traffic_summary")
         .tag("analyzer_id", analyzer_id)
-        .field("window_sec", int(summary["window_sec"]))
+        .field("window_sec", float(summary["window_sec"]))
         .field("total_packets", int(summary["total_packets"]))
         .field("total_bits", int(summary["total_bits"]))
         .time(timestamp, WritePrecision.NS)
     ]
 
     # measurement: protocol_stats
-    # TCP, UDP, UNKNOWN 같은 프로토콜별 패킷 수를 각각 별도 point로 저장
+    # TCP, UDP, ARP, OTHER 같은 프로토콜별 패킷 수를 각각 별도 point로 저장
     for protocol, packet_count in summary.get("protocol_stats", {}).items():
         points.append(
             Point("protocol_stats")
@@ -156,7 +170,7 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
         )
 
     # measurement: host_traffic
-    # src_ip:src_port -> dst_ip:dst_port 단위의 트래픽 수치를 저장
+    # 출발지/목적지/프로토콜 단위로 합산한다.
     for host_stat in summary.get("host_stats", []):
         point = (
             Point("host_traffic")
@@ -167,19 +181,19 @@ def write_packet_summary(summary: dict[str, Any]) -> None:
             .time(timestamp, WritePrecision.NS)
         )
 
-        # src_ip, dst_ip, port는 필터링에 자주 쓸 수 있어서 tag로 둔다.
-        # 값이 null이면 tag로 넣지 않는다.
+        # src_ip와 dst_ip는 필터링에 자주 쓰이므로 tag로 둔다.
+        # 과거 payload에 port가 포함된 경우에도 tag가 아니라 field로만 저장한다.
         if host_stat.get("src_ip"):
             point = point.tag("src_ip", host_stat["src_ip"])
 
         if host_stat.get("src_port") is not None:
-            point = point.tag("src_port", str(host_stat["src_port"]))
+            point = point.field("src_port", int(host_stat["src_port"]))
 
         if host_stat.get("dst_ip"):
             point = point.tag("dst_ip", host_stat["dst_ip"])
 
         if host_stat.get("dst_port") is not None:
-            point = point.tag("dst_port", str(host_stat["dst_port"]))
+            point = point.field("dst_port", int(host_stat["dst_port"]))
 
         points.append(point)
 

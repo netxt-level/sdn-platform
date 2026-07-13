@@ -3,25 +3,36 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+ALLOWED_PROTOCOLS = {"TCP", "UDP", "ICMP", "ARP", "OTHER"}
+
+
 # 일정 시간 동안 수집한 패킷 정보를 요약하는 클래스
 class PacketSummaryBuilder:
     def __init__(
         self,
         analyzer_id: str = "analyzer-1",
         window_sec: int = 1,
+        max_host_stats: int = 50,
     ):
         self.analyzer_id = analyzer_id      # 분석 서버 ID
         self.window_sec = window_sec        # 패킷 집계 시간 범위
+        self.max_host_stats = max_host_stats
 
     # 패킷 목록을 기반으로 패킷 요약 정보 생성
     def build_packet_summary(
         self,
         packets: list[dict[str, Any]],
+        window_sec: int | float | None = None,
     ) -> dict[str, Any]:
+        effective_window_sec = (
+            float(window_sec)
+            if window_sec is not None and window_sec > 0
+            else float(self.window_sec)
+        )
 
         # 프로토콜별 패킷 수 계산
         total_packets = len(packets)
-        
+
         # 프로토콜별 비트 수 계산
         total_bits = sum(
             packet.get("packet_size", 0) * 8
@@ -29,7 +40,7 @@ class PacketSummaryBuilder:
         )
 
         protocol_stats = Counter(
-            packet.get("protocol", "UNKNOWN")
+            _normalize_protocol(packet.get("protocol"))
             for packet in packets
         )
 
@@ -39,7 +50,7 @@ class PacketSummaryBuilder:
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),    # 요약 생성 시각
             "analyzer_id": self.analyzer_id,                        # 분석 서버 ID
-            "window_sec": self.window_sec,                          # 집계 시간 범위
+            "window_sec": effective_window_sec,                     # 실제 집계 시간 범위
             "total_packets": total_packets,                         # 전체 패킷 수
             "total_bits": total_bits,                               # 전체 비트 수
             "protocol_stats": dict(protocol_stats),                 # 프로토콜별 패킷 수
@@ -67,9 +78,7 @@ class PacketSummaryBuilder:
         for packet in packets:
             src_ip = packet.get("src_ip")
             dst_ip = packet.get("dst_ip")
-            src_port = packet.get("src_port")
-            dst_port = packet.get("dst_port")
-            protocol = packet.get("protocol", "UNKNOWN")
+            protocol = _normalize_protocol(packet.get("protocol"))
 
             # 출발지 IP 또는 목적지 IP가 없으면 호스트 통계에서 제외
             if not src_ip or not dst_ip:
@@ -78,10 +87,8 @@ class PacketSummaryBuilder:
             key = (
                 packet.get("src_host"),
                 src_ip,
-                src_port,
                 packet.get("dst_host"),
                 dst_ip,
-                dst_port,
                 protocol,
             )
 
@@ -89,10 +96,8 @@ class PacketSummaryBuilder:
 
             host_map[key]["src_host"] = packet.get("src_host")
             host_map[key]["src_ip"] = src_ip
-            host_map[key]["src_port"] = src_port
             host_map[key]["dst_host"] = packet.get("dst_host")
             host_map[key]["dst_ip"] = dst_ip
-            host_map[key]["dst_port"] = dst_port
             host_map[key]["protocol"] = protocol
             host_map[key]["packet_count"] += 1
             host_map[key]["bit_count"] += packet_bits
@@ -105,4 +110,11 @@ class PacketSummaryBuilder:
             reverse=True,
         )
 
-        return host_stats
+        return host_stats[:self.max_host_stats]
+
+
+def _normalize_protocol(protocol: Any) -> str:
+    protocol_name = str(protocol or "OTHER").upper()
+    if protocol_name in ALLOWED_PROTOCOLS:
+        return protocol_name
+    return "OTHER"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from app.core.websocket import manager
@@ -37,8 +38,14 @@ class SecurityService:
 
     async def receive_events(self, payload: dict[str, Any]) -> None:
         events = payload.get("events", [])
-        self.security_event_repository.save_security_events(events)
-        responses, flow_rules = self._create_responses_and_flow_rules(events)
+        await asyncio.to_thread(
+            self.security_event_repository.save_security_events,
+            events,
+        )
+        responses, flow_rules = await asyncio.to_thread(
+            self._create_responses_and_flow_rules,
+            events,
+        )
 
         await manager.broadcast({
             "type": "security_events",
@@ -67,6 +74,12 @@ class SecurityService:
                 security_response_id=response["id"],
             )
             if flow_rule is not None:
+                linked_response = self.security_response_repository.link_flow_rule(
+                    response["id"],
+                    flow_rule,
+                )
+                if linked_response is not None:
+                    responses[-1] = linked_response
                 flow_rules.append(flow_rule)
 
         return responses, flow_rules

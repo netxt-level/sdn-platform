@@ -1,242 +1,161 @@
-# SDN Platform 현재 진행 및 구현 사항
+# SDN Platform 구현 상태
 
-이 문서는 현재 코드 기준으로 분석 서버, 백엔드 서버, 프론트엔드 서버의 구현 상태를 정리한다.
+이 문서는 현재 코드 기준으로 구현된 범위와 아직 남은 범위를 구분한다. 발표나 PR 설명에서는 이 문서를 기준으로 “구현됨”, “후보 생성까지만 구현됨”, “미구현”을 나누어 설명한다.
 
 ## 전체 구성
 
-| 영역 | 경로 | 역할 |
+| 영역 | 경로 | 현재 상태 |
 |---|---|---|
-| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약 생성, 이상 트래픽 탐지, 백엔드 전송 |
-| 백엔드 서버 | `backend/` | 분석 서버 데이터 수신, DB 저장, 조회 API, WebSocket broadcast |
-| 프론트엔드 서버 | `frontend/` | 실시간 대시보드, 트래픽/보안/토폴로지 화면 |
-| DB/인프라 | `docker-compose.yml`, `migrations/` | PostgreSQL, InfluxDB, Elasticsearch, Alembic migration |
+| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, 보안 탐지, 보안 이벤트 생성, 백엔드 전송 구현 |
+| 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회 API, WebSocket broadcast 구현 |
+| 프론트엔드 | `frontend/` | 대시보드, 보안 이벤트, 경로, Flow Rule 운영 화면 구현 |
+| 인프라 | `docker-compose.yml`, `migrations/` | PostgreSQL, InfluxDB, Elasticsearch, Alembic migration 구성 |
 
-## 분석 서버
+## 완료
 
-### 진행 상태
+- ICMP Echo Request 기반 ICMP Flood 탐지
+- UDP 목적지 포트별 Flood 탐지
+- UDP 출발지-목적지 합산 Flood 탐지
+- 단일/다중 서비스 SYN Flood 탐지
+- SYN/ACK 응답 수와 최종 ACK 완료율을 분리한 SYN Flood 판단
+- TCP SYN 기반 수직/수평 Port Scan 탐지
+- 패킷 timestamp 기반 Port Scan 윈도우 판단
+- 관리 호스트 수평 Port Scan 기준 완화와 반복 SYN 보조 탐지
+- 탐지 결과 점수화, 위험도 분류, 대응 후보 생성
+- 보안 이벤트 중복 억제
+- 보안 이벤트 전송 실패 시 메모리 대기 큐 저장
+- 보안 이벤트 배치 재전송
+- 400/413/422 응답 시 보안 이벤트 batch 크기 축소 재전송
+- 패킷 버퍼 최대 크기 제한과 초과 로그
+- IPv4 주소 검증
+- 백엔드 보안 이벤트 저장 및 대응 후보 저장
+- LOG/ALERT 계열 Security Response `RECORDED` 저장
+- Elasticsearch `event_id` 기반 upsert와 bulk 저장
+- 보안 이벤트 API 입력 검증
+- Analyzer API Key 기반 입력 API 보호
+- 보안 이벤트 batch 크기, 주요 문자열 길이, evidence 크기 제한
+- Analyzer POST 요청 본문 크기 제한
+- 보안 이벤트 요청 `analyzer_id`와 이벤트별 `analyzer_id` 일치 검증
+- 수동 Flow Rule API match/action 입력 검증
+- 수동 Flow Rule 생성용 관리자 API Key 검증
+- 프론트엔드 Flow Rule 수동 생성 비활성화
+- Flow Rule 조회 기본 pagination
+- Flow Rule 조회 전체 개수와 다음 페이지 여부 반환
+- Flow Rule 재사용 시 `analyzer_id`, `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, timeout 비교
+- 재사용된 Flow Rule과 새 보안 대응 이력 연결 정보 저장
+- 의심 호스트 조회 `range`를 Elasticsearch 시간 조건에 반영
+- 여러 Analyzer의 트래픽 시계열을 시간 bucket 기준으로 합산
+- WebSocket 병렬 broadcast와 실패 연결 정리
+- `/health/live`, `/health/ready` 분리
+- Docker Compose 저장소 healthcheck와 backend readiness 연동
+- Elasticsearch 보안 이벤트 인덱스 존재 여부 readiness 확인
+- Elasticsearch evidence 세부 key 인덱싱 비활성화
+- Frontend Docker production build와 build-time API/WebSocket 주소 주입
+- Analyzer 분석 오류 발생 후 다음 정상 분석 시 상태 복구
+- 패킷 캡처 실패 상태의 백엔드 최종 전송
+- 대시보드용 통계 전송 큐를 작게 유지해 오래된 요약 누적 방지
+- Packet Summary가 Analyzer 오류 상태를 정상 상태로 덮어쓰지 않도록 프론트 상태 갱신 분리
 
-분석 서버는 패킷 캡처부터 백엔드 전송까지 기본 흐름이 구현되어 있다. 현재 구현은 지정한 네트워크 인터페이스에서 패킷을 캡처하고, 일정 시간 단위로 패킷 요약과 탐지 요약을 만들어 백엔드 API로 전송한다.
+## 부분 구현
 
-### 주요 구현 파일
-
-| 파일 | 구현 내용 |
-|---|---|
-| `analyzer/app/main.py` | 분석 서버 실행 진입점, 캡처 루프, 분석 루프, 상태 전송 루프 |
-| `analyzer/app/config.py` | 환경변수 파싱 및 분석 서버 설정 생성 |
-| `analyzer/app/packet/capture.py` | 네트워크 인터페이스 패킷 캡처 |
-| `analyzer/app/packet/parser.py` | 캡처 패킷에서 IP, 포트, 프로토콜, 크기 등 메타데이터 추출 |
-| `analyzer/app/packet/summary.py` | 윈도우 단위 패킷 요약 생성 |
-| `analyzer/app/detection/traffic_stats.py` | 네트워크 상태, bps/pps, 의심 호스트 목록 생성 |
-| `analyzer/app/detection/port_scan.py` | TCP SYN 기반 포트 스캔 의심 탐지 |
-| `analyzer/app/analyzer_status.py` | 분석 서버 상태 관리 |
-| `analyzer/app/backend_client.py` | 백엔드 API 전송 클라이언트 |
-| `analyzer/analyzer-backend-api.md` | 분석 서버 -> 백엔드 API 명세 |
-
-### 구현된 기능
-
-- 네트워크 인터페이스 기반 패킷 캡처
-- 패킷 메타데이터 파싱
-- `ANALYZER_WINDOW_SEC` 단위 패킷 요약 생성
-- 프로토콜별 패킷 수 집계
-- 출발지/목적지/프로토콜별 host traffic 집계
-- 전체 패킷 수, 전체 bit 수 계산
-- ICMP pps 기준 ICMP Flood 탐지
-- TCP SYN 패턴 기반 포트 스캔 의심 탐지
-- 분석 서버 상태 생성 및 주기적 보고
-- 분석 루프와 상태 전송 루프 예외 발생 시 오류 상태 기록 후 루프 유지
-- 백엔드 연결 실패/timeout/HTTP 오류 처리
-- 백엔드 API 전송
-
-### 백엔드 전송 API
-
-| 메서드 | 경로 | 설명 |
+| 항목 | 현재 범위 | 남은 범위 |
 |---|---|---|
-| `POST` | `/api/analyzer/packet-summary` | 패킷 요약 전송 |
-| `POST` | `/api/analyzer/detection-summary` | 탐지 요약 전송 |
-| `POST` | `/api/analyzer/status` | 분석 서버 상태 전송 |
+| Rate Limit | Analyzer가 `mitigation` 후보를 만들고 백엔드가 DB에 저장 | Controller/OVS Meter 실제 적용 |
+| Drop | Analyzer가 `DROP` 후보를 만들고 백엔드가 DB에 저장 | Controller Flow Rule 실제 설치 |
+| Self-Healing | 탐지와 대응 후보 생성까지 구현 | 적용 효과 확인, 정상 통신 확인, 자동 해제, 상태 머신 |
+| 경로 우회 | 화면과 백엔드 조회 구조 일부 존재 | 실제 경로 재계산과 Controller 반영 |
+| 보안 이벤트 상태 관리 | 이벤트 저장과 조회 | 처리 완료, 무시, 해결 상태 전환 정책 |
+| 저장소 상태 관리 | readiness에서 연결 상태 확인 | 장애 원인 상세 로깅과 운영 알림 |
+| 관리자 인증 | Analyzer 입력 API와 수동 Flow Rule 생성 API Key 검증, 프론트 수동 생성 차단 | 사용자 로그인, Viewer/Operator/Admin 역할 분리 |
 
-### 환경변수
+## 미구현
+
+- ARP Spoofing 탐지
+- 목적지 전체 기준 분산 DDoS 탐지
+- Low-and-Slow 장기 누적 탐지
+- Baseline 기반 동적 임계값
+- FIN/NULL/XMAS/UDP Scan 탐지
+- Controller Flow Rule 실제 설치/삭제
+- OVS Meter 기반 Rate Limit
+- 대응 효과 검증
+- Persistent Outbox
+- 사용자 로그인 기반 관리자 권한 관리
+- 조회 API와 WebSocket 인증
+
+## 주요 환경변수
 
 | 이름 | 기본값 | 설명 |
-|---|---|---|
-| `ANALYZER_ID` | `analyzer-1` | 분석 서버 ID |
-| `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
-| `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
-| `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 전송 주기 |
-| `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 서버 주소 |
+|---|---:|---|
+| `ANALYZER_INTERFACE` | `eth0` | Docker Compose 기준 패킷 캡처 인터페이스 |
+| `ANALYZER_WINDOW_SEC` | `1` | 패킷 요약과 탐지 실행 주기 |
+| `ANALYZER_PACKET_BUFFER_MAX_SIZE` | `100000` | 분석 지연 시 메모리에 보관할 최대 패킷 수 |
+| `PORT_SCAN_HORIZONTAL_TARGET_THRESHOLD` | `3` | 일반 호스트 수평 Port Scan 대상 수 기준 |
+| `SECURITY_TRUSTED_SOURCE_IPS` | 없음 | 관리 호스트 IPv4 목록 |
+| `TRUSTED_HORIZONTAL_SCAN_THRESHOLD` | `10` | 관리 호스트 수평 Port Scan 대상 수 기준 |
+| `SECURITY_EVENT_QUEUE_MAX_SIZE` | `500` | 재전송 대기 보안 이벤트 최대 개수 |
+| `SECURITY_EVENT_SEND_BATCH_SIZE` | `100` | 보안 이벤트 재전송 배치 크기 |
 
-### 현재 주의사항
+로컬 macOS에서 분석 서버를 직접 실행할 때는 `ANALYZER_INTERFACE=en0`처럼 실제 인터페이스에 맞게 바꿀 수 있다.
 
-- `total_bps`, `total_pps` 필드는 윈도우 내 누적 비트 수와 패킷 수를 `ANALYZER_WINDOW_SEC`로 나누어 초당 값으로 계산한다.
-- `analyzer/app/detection/port_scan.py`는 `analyzer/app/main.py`에서 import하므로 커밋 시 반드시 함께 포함해야 한다.
+## 주의 사항
 
-## 백엔드 서버
+- `.env`는 실제 비밀번호와 토큰을 담을 수 있으므로 Git과 ZIP 결과물에 포함하지 않는다.
+- `.env.example`은 실행 예시용 값만 유지하고 실제 운영 비밀번호를 넣지 않는다.
+- `__pycache__`, `.pytest_cache`, `.DS_Store`, `*.pyc`는 결과물에 포함하지 않는다.
+- 현재 Analyzer의 대응 후보는 IPv4 OpenFlow match 기준이므로 IPv6 주소는 보안 이벤트 변환에서 제외한다.
+- 현재 Flood 탐지는 단일 출발지 기준이다. 여러 출발지가 동시에 한 목적지를 공격하는 분산 DDoS는 별도 집계가 필요하다.
+- `change_me_*` 환경변수 값은 시연용 예시이므로 공유 서버나 운영 환경에서는 반드시 개인 `.env`에서 변경한다.
+- Docker Compose는 주요 비밀번호와 API Key가 없으면 시작하지 않는다.
+- 프론트엔드 Docker build에 들어가는 `FRONTEND_BACKEND_INTERNAL_URL`, `NEXT_PUBLIC_WS_URL`을 바꾸면 이미 빌드된 이미지에는 반영되지 않으므로 다시 빌드해야 한다.
 
-### 진행 상태
+## 검증 명령
 
-백엔드 서버는 FastAPI 기반으로 구현되어 있으며, 분석 서버가 전송한 데이터를 수신해 PostgreSQL, InfluxDB, Elasticsearch에 저장한다. 또한 프론트엔드가 사용할 조회 API와 실시간 WebSocket broadcast 기능이 구현되어 있다.
+```bash
+python -m compileall -q analyzer/app analyzer/tests backend/app backend/tests
+python -m pytest analyzer/tests backend/tests -q
+npm --prefix frontend run lint
+npm --prefix frontend run build
+docker compose --env-file .env.example config --quiet
+git diff --check
+```
 
-### 주요 구현 파일
+## 최근 검토 반영
 
-| 파일 | 구현 내용 |
-|---|---|
-| `backend/app/main.py` | FastAPI 앱 생성 및 라우터 등록 |
-| `backend/app/api/analyzer.py` | 분석 서버 데이터 수신 API |
-| `backend/app/api/dashboard.py` | 대시보드 조회 API |
-| `backend/app/api/flows.py` | flow rule 목록 조회 및 수동 생성 API |
-| `backend/app/api/path.py` | 경로 제어 상태 조회 API |
-| `backend/app/api/security.py` | 보안 이벤트 조회 API |
-| `backend/app/api/ws.py` | WebSocket 연결 및 broadcast 관리 |
-| `backend/app/services/path_service.py` | 대시보드 요약과 flow rule DB 기반 경로 상태 구성 |
-| `backend/app/schemas/analyzer.py` | 분석 서버 요청 body Pydantic 스키마 |
-| `backend/app/db/postgres.py` | PostgreSQL 분석 서버 상태 저장/조회 |
-| `backend/app/db/influxdb.py` | InfluxDB 트래픽/탐지 데이터 저장 및 조회 |
-| `backend/app/db/elasticsearch.py` | Elasticsearch 인덱스 생성 및 이벤트 저장/조회 |
-| `backend/backend-api.md` | 백엔드 HTTP/WebSocket API 명세 |
-
-### 구현된 API
-
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `GET` | `/health` | 백엔드 서버 상태 확인 |
-| `GET` | `/api/analyzer/status` | 분석 서버 상태 조회 |
-| `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
-| `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
-| `POST` | `/api/analyzer/detection-summary` | 탐지 요약 수신 |
-| `GET` | `/api/dashboard/summary` | 최근 트래픽 기반 대시보드 요약 조회 |
-| `GET` | `/api/dashboard/traffic` | InfluxDB 트래픽 시계열 조회 |
-| `GET` | `/api/dashboard/protocols` | InfluxDB 프로토콜 통계 조회 |
-| `GET` | `/api/dashboard/suspicious-hosts` | InfluxDB 의심 호스트 조회 |
-| `GET` | `/api/flows` | PostgreSQL flow rule 목록 조회 |
-| `POST` | `/api/flows` | 수동 flow rule 생성 |
-| `GET` | `/api/path/status` | 경로 제어 상태 조회 |
-| `GET` | `/api/security/events` | Elasticsearch 탐지 이벤트 조회 |
-| `GET` | `/api/security/responses` | PostgreSQL 보안 대응 내역 조회 |
-| `WS` | `/ws/analyzer` | 실시간 분석 이벤트 broadcast |
-
-### 저장소 연동
-
-| 저장소 | 저장/조회 내용 |
-|---|---|
-| PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
-| InfluxDB | 트래픽 시계열, 프로토콜 통계, host traffic, 네트워크 상태, 의심 호스트 |
-| Elasticsearch | 트래픽 요약 문서, 탐지 이벤트 문서 |
-
-### WebSocket 메시지
-
-현재 백엔드가 직접 broadcast하는 메시지 타입은 다음과 같다.
-
-| 타입 | 발생 시점 |
-|---|---|
-| `analyzer_status` | 분석 서버 상태 수신 후 |
-| `packet_summary` | 패킷 요약 수신 후 |
-| `detection_summary` | 탐지 요약 수신 후 |
-
-### 현재 주의사항
-
-- `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 총 패킷 수, 총 byte 수, 최신 pps/bps, 네트워크 상태를 계산한다.
-- `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
-- `/api/flows`는 DB 기반 flow rule 조회와 수동 flow rule 생성을 제공한다. 현재 생성된 rule은 `PENDING` 상태로 저장되며 컨트롤러 적용 로직은 아직 연결되어 있지 않다.
-- `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
-- InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
-- `backend/app/scripts/seed_suspicious_hosts.py`는 의심 호스트 테스트 데이터를 넣기 위한 보조 스크립트다.
-
-## 프론트엔드 서버
-
-### 진행 상태
-
-프론트엔드는 Next.js 기반으로 구현되어 있으며, 대시보드와 여러 운영 화면이 구성되어 있다. 실시간 WebSocket 데이터와 백엔드 조회 API를 함께 사용해 트래픽, 프로토콜, 분석 서버 상태, 의심 호스트 정보를 표시한다.
-
-### 주요 구현 파일
-
-| 파일 | 구현 내용 |
-|---|---|
-| `frontend/app/page.tsx` | 메인 대시보드 화면 |
-| `frontend/hooks/useRealtime.ts` | WebSocket 연결, 히스토리 조회, 실시간 상태 관리 |
-| `frontend/components/dashboard/TrafficTrend.tsx` | 트래픽 시계열 차트 |
-| `frontend/components/dashboard/ProtocolBars.tsx` | 프로토콜별 비율/패킷 수 표시 |
-| `frontend/components/dashboard/AnalyzerStatusPanel.tsx` | 분석 서버 상태 표시 |
-| `frontend/components/dashboard/MetricCard.tsx` | 대시보드 지표 카드 |
-| `frontend/app/security/events/page.tsx` | 보안 이벤트 화면 |
-| `frontend/app/topology/page.tsx` | 토폴로지 화면 |
-| `frontend/app/path/page.tsx` | 경로 제어 화면, `/api/path/status` 연동 |
-| `frontend/app/flow-rules/page.tsx` | Flow rule 조회/수동 생성 화면, `/api/flows` 연동 |
-| `frontend/app/settings/page.tsx` | 설정 화면 |
-| `frontend/types/analyzer.ts` | 분석/탐지 관련 TypeScript 타입 |
-| `frontend/types/realtime.ts` | 실시간 메시지 타입 |
-
-### 구현된 화면
-
-| 화면 | 경로 | 상태 |
-|---|---|---|
-| 대시보드 | `/` | 구현됨 |
-| Flow Rules | `/flow-rules` | 구현됨 |
-| Path | `/path` | 구현됨 |
-| Security Events | `/security/events` | 구현됨 |
-| Topology | `/topology` | 구현됨 |
-| Settings | `/settings` | 구현됨 |
-
-### 대시보드 구현 사항
-
-- 분석 서버 상태 카드 표시
-- 패킷 수, bps, 의심 호스트 수 등 주요 지표 표시
-- 최근 5분 트래픽 시계열 표시
-- 최근 1분 프로토콜 통계 표시
-- 의심 호스트 목록 표시
-- 의심 호스트 공격 유형별 필터링
-- ICMP Flood/Port Scan 유형별 배지 스타일 적용
-- WebSocket 실시간 데이터 수신
-- 초기 로딩 시 백엔드 히스토리 API 조회
-- DB 의심 호스트를 5초마다 polling
-- 실시간 의심 호스트와 DB 의심 호스트 병합
-
-### 백엔드 연동
-
-| 연동 | 경로 |
-|---|---|
-| WebSocket | `ws://localhost:8000/ws/analyzer` 또는 `NEXT_PUBLIC_WS_URL` |
-| 트래픽 히스토리 | `/api/dashboard/traffic?range=5m&bucket=5s` |
-| 프로토콜 통계 | `/api/dashboard/protocols?range=1m` |
-| 의심 호스트 | `/api/dashboard/suspicious-hosts?range=1w` |
-| 보안 이벤트 | `/api/security/events?limit=100` |
-| Flow Rule | `/api/flows` |
-| 경로 제어 | `/api/path/status` |
-
-Next.js rewrite 설정으로 프론트엔드의 `/api/:path*` 요청은 `${BACKEND_INTERNAL_URL}/api/:path*`로 전달된다.
-
-### 현재 주의사항
-
-- WebSocket URL은 `NEXT_PUBLIC_WS_URL`이 없으면 현재 브라우저 host 기준 `:8000/ws/analyzer`로 fallback된다.
-- 프론트 타입에는 과거 호환용 `traffic_analysis`, `security_event`, `topology_update` 메시지가 남아 있지만, 현재 백엔드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_events`다.
-- `보안 규칙` 단독 페이지는 제거되었고, 보안 대응 흐름은 보안 이벤트, 경로 제어, Flow Rule 화면에서 관리한다.
-- Flow Rule 생성은 DB에 후보를 추가하는 단계이며, 실제 SDN 컨트롤러 설치/해제 API는 추가 구현이 필요하다.
-
-## 인프라 및 실행 구성
-
-### Docker Compose
-
-`docker-compose.yml` 기준으로 다음 서비스가 통합되어 있다.
-
-- PostgreSQL
-- InfluxDB
-- Elasticsearch
-- Backend
-- Frontend
-
-### Migration
-
-Alembic migration은 `migrations/`에 구성되어 있다.
-
-| 파일 | 내용 |
-|---|---|
-| `migrations/versions/001_init_schema.py` | `sdn_controller` schema 및 `updated_at` trigger 함수 생성 |
-| `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
-| `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
-| `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
-
-## 커밋 전 체크 사항
-
-- 분석 서버 커밋에는 `analyzer/app/main.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/detection/port_scan.py`, `analyzer/analyzer-backend-api.md` 포함 여부를 확인한다.
-- 백엔드 커밋에는 `backend/app/api/dashboard.py`, `backend/app/api/flows.py`, `backend/app/api/path.py`, `backend/app/services/path_service.py`, `backend/app/db/influxdb.py`, `backend/app/schemas/analyzer.py`, `backend/backend-api.md` 포함 여부를 확인한다.
-- 프론트엔드 커밋에는 `frontend/app/page.tsx`, `frontend/app/security/events/page.tsx`, `frontend/app/path/page.tsx`, `frontend/app/flow-rules/page.tsx`, `frontend/hooks/useRealtime.ts`, `frontend/types/analyzer.ts` 포함 여부를 확인한다.
-- `__pycache__/`, `.DS_Store` 같은 생성 파일은 커밋하지 않는 것이 좋다.
+- SYN Flood와 Port Scan 사이에 빠질 수 있던 6~14개 포트 SYN 집중 구간을 다중 서비스 SYN Flood 기준으로 보완했다.
+- Port Scan 수평 스캔은 대상 IP 수와 최소 SYN 시도 수를 함께 확인하도록 조정했다.
+- Port Scan 쿨다운 중에도 더 높은 점수나 위험도로 올라간 이벤트는 다시 알림으로 남기도록 수정했다.
+- Flow Rule 입력 검증을 강화해 잘못된 OpenFlow match와 `RATE_LIMIT`/`DROP` 옵션 조합을 차단했다.
+- 프론트엔드 보안 이벤트 표시에서 `DROP`, `RATE_LIMIT`, 포트 evidence, PPS 계산이 실제 이벤트 구조와 맞도록 정리했다.
+- 실제 분석 스냅샷 간격을 `window_sec`로 사용해 백엔드 전송 지연 시 PPS가 과대 계산되는 문제를 줄였다.
+- 패킷 요약 host 통계를 상위 50개로 제한하고, host 통계에서는 `src_port`와 `dst_port`를 제외했다.
+- Port Scan과 다중 서비스 SYN Flood가 같은 흐름에서 동시에 잡히면 더 강한 SYN Flood 이벤트만 유지하고 Port Scan 근거는 관련 탐지로 묶도록 정리했다.
+- Port Scan은 초 단위 버킷 집계로 바꿔 패킷 단위 이벤트가 계속 쌓이지 않게 했다.
+- Analyzer 분석 루프와 백엔드 HTTP 전송 루프를 분리해 전송 지연이 분석 주기를 직접 막지 않도록 했다.
+- UDP pair 전체 Flood와 서비스별 UDP Flood가 같은 흐름에서 중복 대응 후보를 만들지 않도록 상관분석을 추가했다.
+- Security Response는 `event_id`별 이력으로 남기고, Flow Rule은 활성 상태의 동일 match만 재사용하도록 조정했다.
+- Analyzer 입력 API에 선택형 API Key 검증을 추가하고, 보안 이벤트 batch, 주요 문자열 길이, evidence 크기를 제한했다.
+- 보안 이벤트 요청의 analyzer ID와 이벤트 내부 analyzer ID가 다르면 거부하도록 검증을 추가했다.
+- Analyzer POST API에 경로별 요청 본문 크기 제한을 추가했다.
+- 백엔드 전송 순서를 보안 이벤트 우선으로 바꿨다.
+- Frontend Docker는 개발 서버 대신 production build 후 `next start`로 실행한다.
+- Frontend Docker build 시 백엔드 내부 주소와 WebSocket 주소를 build argument로 전달하도록 수정했다.
+- 사용자 권한 검증 없는 관리자 proxy가 되지 않도록 프론트엔드 수동 Flow Rule 생성 POST를 차단했다.
+- Analyzer 런타임 메트릭을 PostgreSQL에 저장하도록 모델, repository, migration을 추가했다.
+- Analyzer 분석 루프 오류는 다음 정상 분석 후 복구되도록 하고, 백엔드 전송 성공이 분석 오류 메시지를 지우지 않게 분리했다.
+- 10분이 지난 `PENDING`/`APPROVED` Flow Rule과 5분이 지난 `APPLYING` Flow Rule은 재사용하지 않도록 정책을 추가했다.
+- 오래된 `PENDING` Flow Rule은 Path 화면의 우회 경로 판단에서도 제외했다.
+- Flow Rule 조회에 기본 `limit=100`, 최대 `limit=500` pagination과 `total`, `has_more` 응답을 추가했다.
+- Flow Rule 재사용은 같은 fingerprint만 보지 않고 실제 `analyzer_id`, `switch_id`, `match`, `target`, action 강도, `rate_limit_pps`, `priority`, `idle_timeout`, `hard_timeout`을 함께 비교하도록 보강했다. 최근 여부를 판단할 시간이 없거나 `APPLIED`인데 `applied_at`이 없거나 남은 `hard_timeout`이 부족한 규칙은 재사용하지 않는다.
+- 재사용된 Flow Rule도 새 보안 대응 이력의 `response_payload`에서 추적할 수 있도록 연결 정보를 남겼다.
+- 의심 호스트 조회의 `range` 파라미터를 Elasticsearch `@timestamp` 조건에 반영했다.
+- 여러 Analyzer가 같은 시간대에 보낸 트래픽 시계열은 InfluxDB 조회에서 시간 bucket 기준으로 합산하도록 조정했다.
+- ICMP/UDP/SYN Flood는 패킷 timestamp가 있으면 snapshot 안의 1초 bucket을 시간 순서대로 모두 처리해 분석 지연으로 순간 Flood가 희석되거나 지속 초과 횟수가 누락되는 문제를 줄였다. 단, 중간에 빈 초가 있으면 history를 초기화해 떨어진 burst를 지속 공격으로 묶지 않는다.
+- Port Scan은 분석 처리 시각이 늦어져도 패킷 timestamp 기반 watermark로 수직 스캔 윈도우를 판단한다.
+- SYN Flood는 SYN/ACK 응답 수와 최종 ACK 완료 수를 분리해, 서버가 SYN/ACK를 보내더라도 연결이 완료되지 않는 half-open 흐름을 탐지 근거에 포함한다.
+- 보안 이벤트 batch가 400/413/422로 거부되면 batch 크기를 줄여 재시도하고, 하나의 이벤트까지 나눈 뒤에도 같은 오류가 나면 해당 이벤트를 dead letter로 이동해 같은 fingerprint의 반복 재전송을 막도록 했다.
+- Dead letter는 기본 1시간 TTL과 최대 1000개 제한을 둬 같은 fingerprint가 영구적으로 막히지 않게 했다.
+- Elasticsearch evidence 세부 key 인덱싱을 비활성화해 mapping field 증가를 줄였다.
+- Docker Compose에서 주요 비밀번호/API Key를 필수 환경변수로 요구하고 DB/Elasticsearch 포트 기본 바인딩을 `127.0.0.1`로 제한했다.
+- PostgreSQL 접속 URL은 SQLAlchemy `URL.create()`로 생성하고 Alembic 설정에 넣을 때 `%`를 이스케이프해 비밀번호에 `@`, `:`, `/`, `#` 같은 특수문자가 있어도 파싱 오류가 나지 않도록 했다.
+- 아직 API가 없는 보안 이벤트 조치 버튼과 설정 입력은 비활성화해 실제 적용되는 기능처럼 보이지 않게 했다.
+- ESLint 9 기준 설정을 추가해 `npm run lint`가 정상 검증 명령으로 동작하게 했다.

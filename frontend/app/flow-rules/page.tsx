@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Ban, GitBranch, Plus, Repeat2, ShieldAlert, Workflow } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Ban, GitBranch, Repeat2, ShieldAlert, Workflow } from "lucide-react";
 
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -34,41 +34,11 @@ function formatMatch(match: Record<string, unknown>) {
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(", ");
 }
 
-function parseMatch(value: string) {
-  // 운영자가 입력한 key=value 목록을 백엔드 match JSON으로 변환한다.
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string | number>>((match, part) => {
-      const [rawKey, ...rawValue] = part.split("=");
-      const key = rawKey?.trim();
-      const nextValue = rawValue.join("=").trim();
-
-      if (!key || !nextValue) {
-        return match;
-      }
-
-      const numericValue = Number(nextValue);
-      match[key] = Number.isFinite(numericValue) && nextValue !== ""
-        ? numericValue
-        : nextValue;
-
-      return match;
-    }, {});
-}
-
 export default function FlowRulesPage() {
   const [flowRules, setFlowRules] = useState<FlowRule[]>([]);
   const [selectedSwitch, setSelectedSwitch] = useState("ALL");
-  const [switchId, setSwitchId] = useState("s1");
-  const [matchText, setMatchText] = useState("ipv4_src=10.0.0.2, ipv4_dst=10.0.0.4, ip_proto=1");
-  const [action, setAction] = useState("RATE_LIMIT");
-  const [priority, setPriority] = useState("500");
-  const [rateLimitPps, setRateLimitPps] = useState("100");
-  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const selectedRule = flowRules[0];
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
   const filteredRules = useMemo(
     () =>
       selectedSwitch === "ALL"
@@ -76,21 +46,16 @@ export default function FlowRulesPage() {
         : flowRules.filter((rule) => rule.switch_id === selectedSwitch),
     [flowRules, selectedSwitch]
   );
+  const selectedRule = useMemo(
+    () =>
+      filteredRules.find((rule) => rule.id === selectedRuleId) ??
+      filteredRules[0],
+    [filteredRules, selectedRuleId]
+  );
   const dropCount = flowRules.filter((rule) => rule.action.toUpperCase() === "DROP").length;
   const forwardCount = flowRules.filter((rule) => rule.action.toLowerCase().startsWith("output")).length;
   const rateLimitCount = flowRules.filter((rule) => rule.action.toUpperCase() === "RATE_LIMIT").length;
   const activeSwitches = new Set(flowRules.map((rule) => rule.switch_id).filter(Boolean)).size;
-
-  async function loadFlowRules() {
-    const response = await fetch("/api/flows", { cache: "no-store" });
-
-    if (!response.ok) {
-      throw new Error("Flow Rule 조회 실패");
-    }
-
-    const data = (await response.json()) as FlowRulesResponse;
-    setFlowRules(data.items ?? []);
-  }
 
   useEffect(() => {
     let ignored = false;
@@ -116,52 +81,28 @@ export default function FlowRulesPage() {
     }
 
     load();
+
+    return () => {
+      ignored = true;
+    };
   }, []);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage("");
-
-    const match = parseMatch(matchText);
-
-    if (!Object.keys(match).length) {
-      setMessage("match 조건을 key=value 형식으로 입력하세요.");
+  useEffect(() => {
+    if (!filteredRules.length) {
+      setSelectedRuleId(null);
       return;
     }
 
-    const payload: Record<string, unknown> = {
-      switch_id: switchId,
-      match,
-      action,
-      priority: Number(priority)
-    };
-
-    if (action.toUpperCase() === "RATE_LIMIT" && rateLimitPps) {
-      payload.rate_limit_pps = Number(rateLimitPps);
+    if (!selectedRuleId || !filteredRules.some((rule) => rule.id === selectedRuleId)) {
+      setSelectedRuleId(filteredRules[0].id);
     }
-
-    const response = await fetch("/api/flows", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      setMessage("Flow Rule 추가 실패");
-      return;
-    }
-
-    await loadFlowRules();
-    setMessage("Flow Rule이 추가되었습니다.");
-  }
+  }, [filteredRules, selectedRuleId]);
 
   return (
     <>
       <PageHeader
         title="Flow Rules"
-        description="스위치별 Flow Rule의 match, action, priority, packet count, byte count를 확인합니다."
+        description="스위치별 Flow Rule의 match, action, priority, 적용 상태를 확인합니다."
         connected={!loading}
         source={loading ? "waiting" : "history"}
       />
@@ -207,13 +148,17 @@ export default function FlowRulesPage() {
               </thead>
               <tbody>
                 {filteredRules.map((rule) => (
-                  <tr key={rule.id} className="border-b border-line last:border-0">
+                  <tr
+                    key={rule.id}
+                    onClick={() => setSelectedRuleId(rule.id)}
+                    className={`cursor-pointer border-b border-line last:border-0 ${selectedRule?.id === rule.id ? "bg-[var(--accent-dim)]" : ""}`}
+                  >
                     <td className="px-3 py-3 font-black">{rule.switch_id ?? "-"}</td>
                     <td className="px-3 py-3">{formatMatch(rule.match)}</td>
                     <td className={`px-3 py-3 ${rule.action.toUpperCase() === "DROP" ? "text-red" : "text-accent"}`}>{rule.action}</td>
                     <td className="px-3 py-3 text-right">{rule.priority}</td>
-                    <td className="px-3 py-3 text-right">{formatNumber(rule.packets ?? 0)}</td>
-                    <td className="px-3 py-3 text-right">{formatNumber(rule.bytes ?? 0)}</td>
+                    <td className="px-3 py-3 text-right">{typeof rule.packets === "number" ? formatNumber(rule.packets) : "-"}</td>
+                    <td className="px-3 py-3 text-right">{typeof rule.bytes === "number" ? formatNumber(rule.bytes) : "-"}</td>
                     <td className="px-3 py-3"><StatusBadge value={rule.status.toLowerCase()} tone={rule.status === "APPLIED" ? "normal" : "muted"} /></td>
                   </tr>
                 ))}
@@ -251,29 +196,11 @@ export default function FlowRulesPage() {
             )}
           </Panel>
 
-          <Panel title="Flow Rule 추가" action={<Plus className="h-4 w-4 text-accent" />}>
-            <form className="grid gap-3" onSubmit={handleSubmit}>
-              <select value={switchId} onChange={(event) => setSwitchId(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
-                <option>s1</option>
-                <option>s2</option>
-                <option>s3</option>
-                <option>s4</option>
-              </select>
-              <input value={matchText} onChange={(event) => setMatchText(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] outline-none" placeholder="match: ipv4_src=10.0.0.2" />
-              <select value={action} onChange={(event) => setAction(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
-                <option>RATE_LIMIT</option>
-                <option>DROP</option>
-                <option>output:s2</option>
-                <option>output:s3</option>
-                <option>output:s4</option>
-              </select>
-              <input value={priority} onChange={(event) => setPriority(event.target.value)} type="number" min="1" max="65535" className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] outline-none" placeholder="priority" />
-              {action.toUpperCase() === "RATE_LIMIT" && (
-                <input value={rateLimitPps} onChange={(event) => setRateLimitPps(event.target.value)} type="number" min="1" className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] outline-none" placeholder="rate_limit_pps" />
-              )}
-              <button type="submit" className="font-mono-ui rounded border border-line2 bg-[var(--accent-dim)] px-3 py-2 text-[11px] text-accent">규칙 추가</button>
-              {message && <p className="font-mono-ui text-[10px] text-muted">{message}</p>}
-            </form>
+          <Panel title="수동 Flow Rule" action={<ShieldAlert className="h-4 w-4 text-muted" />}>
+            <div className="font-mono-ui rounded border border-line bg-sidebar p-4 text-[11px] leading-6 text-muted">
+              로그인과 관리자 권한 확인이 연결되기 전까지 화면에서 직접 Flow Rule을 추가하지 않습니다.
+              현재 화면은 Analyzer가 만든 대응 후보와 저장된 Rule을 조회하는 용도로 사용합니다.
+            </div>
           </Panel>
         </div>
       </div>

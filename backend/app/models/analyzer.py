@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, Text, text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -24,6 +24,25 @@ class Analyzer(Base):
         nullable=True,
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pending_security_event_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+    dropped_security_event_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+    packet_buffer_dropped_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
+    last_security_event_send_failure: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     reported_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

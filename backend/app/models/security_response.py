@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, String, Text, text
+from sqlalchemy import DateTime, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -64,4 +64,5 @@ class SecurityResponse(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),
+        onupdate=func.now(),
     )

@@ -10,7 +10,14 @@ export function AnalyzerStatusPanel({ status }: { status: AnalyzerStatus }) {
     ["캡처", status.capture_active ? "active" : "inactive"],
     ["백엔드", status.backend_connected ? "connected" : "disconnected"],
     ["마지막 패킷", formatDateTime(status.last_packet_at)],
-    ["마지막 전송", formatDateTime(status.last_summary_sent_at)]
+    ["마지막 전송", formatDateTime(status.last_summary_sent_at)],
+    ["대기 이벤트", String(status.pending_security_event_count ?? 0)],
+    ["버린 이벤트", String(status.dropped_security_event_count ?? 0)],
+    ["버린 패킷", String(status.packet_buffer_dropped_count ?? 0)],
+    [
+      "전송 실패",
+      formatDateTime(status.last_security_event_send_failure)
+    ]
   ];
 
   return (

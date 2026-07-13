@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.auth import require_analyzer_api_key
 from app.schemas.analyzer import (
     AnalyzerStatusRequest,
     DetectionSummaryRequest,
@@ -18,7 +19,7 @@ def get_analyzer_status(analyzer_id: str | None = None):
     }
 
 
-@router.post("/status")
+@router.post("/status", dependencies=[Depends(require_analyzer_api_key)])
 async def receive_analyzer_status(payload: AnalyzerStatusRequest):
     data = payload.model_dump(mode="json")
     await analyzer_service.receive_status(data)
@@ -26,7 +27,7 @@ async def receive_analyzer_status(payload: AnalyzerStatusRequest):
     return {"ok": True}
 
 
-@router.post("/packet-summary")
+@router.post("/packet-summary", dependencies=[Depends(require_analyzer_api_key)])
 async def receive_packet_summary(payload: PacketSummaryRequest):
     data = payload.model_dump(mode="json")
     await analyzer_service.receive_packet_summary(data)
@@ -34,7 +35,7 @@ async def receive_packet_summary(payload: PacketSummaryRequest):
     return {"ok": True}
 
 
-@router.post("/detection-summary")
+@router.post("/detection-summary", dependencies=[Depends(require_analyzer_api_key)])
 async def receive_detection_summary(payload: DetectionSummaryRequest):
     data = payload.model_dump(mode="json")
     await analyzer_service.receive_detection_summary(data)

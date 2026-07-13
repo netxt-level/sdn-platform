@@ -129,6 +129,9 @@ function getWebsocketUrl() {
     if (isLoopbackHost(url.hostname) && !isLoopbackHost(pageHost)) {
       url.hostname = pageHost;
     }
+    if (window.location.protocol === "https:" && url.protocol === "ws:") {
+      url.protocol = "wss:";
+    }
 
     return url.toString();
   } catch {
@@ -155,7 +158,11 @@ const initialAnalyzerStatus: AnalyzerStatus = {
   backend_connected: false,
   last_packet_at: null,
   last_summary_sent_at: null,
-  error_message: null
+  error_message: null,
+  pending_security_event_count: 0,
+  dropped_security_event_count: 0,
+  packet_buffer_dropped_count: 0,
+  last_security_event_send_failure: null
 };
 
 const initialPacketSummary: PacketSummary = {
@@ -215,7 +222,13 @@ function normalizeStoredAnalyzerStatus(
     backend_connected: status.backend_connected,
     last_packet_at: status.last_packet_at ?? null,
     last_summary_sent_at: status.last_summary_sent_at ?? null,
-    error_message: status.error_message ?? null
+    error_message: status.error_message ?? null,
+    pending_security_event_count: status.pending_security_event_count ?? 0,
+    dropped_security_event_count: status.dropped_security_event_count ?? 0,
+    packet_buffer_dropped_count: status.packet_buffer_dropped_count ?? 0,
+    last_security_event_send_failure: (
+      status.last_security_event_send_failure ?? null
+    )
   };
 }
 
@@ -232,8 +245,10 @@ function normalizePacketSummary(summary: IncomingPacketSummary): PacketSummary {
     host_stats: (summary.host_stats ?? []).map((hostStat) => ({
       src_host: hostStat.src_host ?? null,
       src_ip: hostStat.src_ip ?? null,
+      src_port: hostStat.src_port ?? null,
       dst_host: hostStat.dst_host ?? null,
       dst_ip: hostStat.dst_ip ?? null,
+      dst_port: hostStat.dst_port ?? null,
       protocol: hostStat.protocol,
       packet_count: hostStat.packet_count,
       bit_count: hostStat.bit_count ?? (hostStat.byte_count ?? 0) * 8
@@ -277,8 +292,9 @@ function toHistoryTrafficSample(item: DashboardTrafficItem): TrafficSample {
 
 function toProtocolStats(items: DashboardProtocolItem[]): Record<string, number> {
   return items.reduce<Record<string, number>>((stats, item) => {
-    stats[item.protocol || "UNKNOWN"] =
-      (stats[item.protocol || "UNKNOWN"] ?? 0) + (item.packet_count ?? 0);
+    const protocol = item.protocol || "OTHER";
+
+    stats[protocol] = (stats[protocol] ?? 0) + (item.packet_count ?? 0);
 
     return stats;
   }, {});
@@ -294,7 +310,7 @@ function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
   return items.map((host) => ({
     host: host.host ?? null,
     ip: host.ip,
-    protocol: host.protocol ?? "UNKNOWN",
+    protocol: host.protocol ?? "OTHER",
     bps: host.bps ?? 0,
     pps: host.pps ?? 0,
     attack_type: normalizeAttackType(host.attack_type),
@@ -321,9 +337,11 @@ function normalizeSecuritySeverity(value?: string): SecurityEvent["severity"] {
 function normalizeSecurityStatus(value?: string): SecurityEvent["status"] {
   if (
     value === "detected" ||
+    value === "mitigating" ||
     value === "blocked" ||
     value === "ignored" ||
-    value === "resolved"
+    value === "resolved" ||
+    value === "failed"
   ) {
     return value;
   }
@@ -340,6 +358,25 @@ function numberFromEvidence(
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function ppsFromEvidence(evidence: Record<string, unknown>): number {
+  const explicitPps =
+    numberFromEvidence(evidence, "syn_pps") ||
+    numberFromEvidence(evidence, "pps");
+  if (explicitPps > 0) {
+    return explicitPps;
+  }
+
+  const packetCount =
+    numberFromEvidence(evidence, "packet_count") ||
+    numberFromEvidence(evidence, "syn_count");
+  const windowSeconds = numberFromEvidence(evidence, "window_seconds");
+  if (packetCount > 0 && windowSeconds > 0) {
+    return packetCount / windowSeconds;
+  }
+
+  return 0;
+}
+
 function actionFromSecurityEvent(event: RawSecurityEvent): SecurityEvent["action"] {
   const mitigationAction = event.mitigation?.action;
   const action = String(
@@ -348,8 +385,12 @@ function actionFromSecurityEvent(event: RawSecurityEvent): SecurityEvent["action
       : event.recommended_action ?? "none"
   ).toLowerCase();
 
-  if (action.includes("block") || action.includes("limit")) {
+  if (action === "drop" || action === "block") {
     return "block";
+  }
+
+  if (action === "rate_limit" || action.includes("limit")) {
+    return "rate_limit";
   }
 
   if (action.includes("reroute")) {
@@ -369,7 +410,11 @@ function numericPort(value: unknown): number | null {
 
 function portSummaryFromSecurityEvent(event: RawSecurityEvent): string {
   const srcPort = numericPort(event.src_port);
-  const dstPort = numericPort(event.dst_port);
+  const dstPort =
+    numericPort(event.dst_port) ??
+    numericPort(event.evidence?.destination_port) ??
+    numericPort(event.evidence?.dst_port) ??
+    numericPort(event.evidence?.dominant_dst_port);
 
   if (srcPort !== null && dstPort !== null) {
     return `${srcPort} -> ${dstPort}`;
@@ -379,7 +424,8 @@ function portSummaryFromSecurityEvent(event: RawSecurityEvent): string {
     return String(dstPort);
   }
 
-  const uniqueDstPorts = event.evidence?.unique_dst_ports;
+  const uniqueDstPorts =
+    event.evidence?.unique_dst_ports ?? event.evidence?.sample_dst_ports;
 
   if (Array.isArray(uniqueDstPorts)) {
     const ports = uniqueDstPorts
@@ -417,17 +463,14 @@ function normalizeSecurityEvent(event: RawSecurityEvent): SecurityEvent {
     src_port: numericPort(event.src_port),
     dst_port: numericPort(event.dst_port),
     port_summary: portSummaryFromSecurityEvent(event),
-    protocol: event.protocol ?? "UNKNOWN",
+    protocol: event.protocol ?? "OTHER",
     detection_rule: event.detection_rule,
     recommended_action: event.recommended_action,
     response_level: event.response_level,
     confidence: event.confidence,
     evidence,
     mitigation: event.mitigation ?? null,
-    pps:
-      numberFromEvidence(evidence, "pps") ||
-      numberFromEvidence(evidence, "syn_count") ||
-      numberFromEvidence(evidence, "packet_count"),
+    pps: ppsFromEvidence(evidence),
     bps: numberFromEvidence(evidence, "bps"),
     action: actionFromSecurityEvent(event)
   };
@@ -440,7 +483,7 @@ function mergeSecurityEvents(
   const events = new Map<string, SecurityEvent>();
 
   [...currentEvents, ...incomingEvents].forEach((event) => {
-    const key = event.event_fingerprint ?? event.event_id ?? event.id;
+    const key = event.event_id ?? event.id ?? event.event_fingerprint;
     events.set(key, event);
   });
 
@@ -731,7 +774,7 @@ function normalizeDetectionSummary(
         .map((talker) => ({
           host: talker.host ?? null,
           ip: talker.ip,
-          protocol: talker.protocol ?? "UNKNOWN",
+          protocol: talker.protocol ?? "OTHER",
           bps: talker.bps,
           pps: talker.pps,
           attack_type: "DOS",
@@ -987,12 +1030,10 @@ export function useRealtime(): RealtimeState {
               ...prev,
               timestamp: nextPacketSummary.timestamp,
               analyzer_id: nextPacketSummary.analyzer_id,
-              status: "running",
-              capture_active: true,
-              backend_connected: true,
-              last_packet_at: nextPacketSummary.timestamp,
-              last_summary_sent_at: nextPacketSummary.timestamp,
-              error_message: null
+              last_packet_at: nextPacketSummary.total_packets > 0
+                ? nextPacketSummary.timestamp
+                : prev.last_packet_at,
+              last_summary_sent_at: nextPacketSummary.timestamp
             }));
           }
 
@@ -1021,10 +1062,7 @@ export function useRealtime(): RealtimeState {
               ...prev,
               timestamp: nextDetectionSummary.timestamp,
               analyzer_id: nextDetectionSummary.analyzer_id,
-              status: "running",
-              backend_connected: true,
-              last_summary_sent_at: nextDetectionSummary.timestamp,
-              error_message: null
+              last_summary_sent_at: nextDetectionSummary.timestamp
             }));
           }
 

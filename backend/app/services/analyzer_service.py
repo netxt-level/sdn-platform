@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from app.core.websocket import manager
@@ -20,7 +21,7 @@ class AnalyzerService:
         return self.analyzer_repository.list_statuses(analyzer_id)
 
     async def receive_status(self, payload: dict[str, Any]) -> None:
-        self.analyzer_repository.save_status(payload)
+        await asyncio.to_thread(self.analyzer_repository.save_status, payload)
 
         await manager.broadcast({
             "type": "analyzer_status",
@@ -28,7 +29,10 @@ class AnalyzerService:
         })
 
     async def receive_packet_summary(self, payload: dict[str, Any]) -> None:
-        self.traffic_repository.save_packet_summary(payload)
+        await asyncio.to_thread(
+            self.traffic_repository.save_packet_summary,
+            payload,
+        )
 
         await manager.broadcast({
             "type": "packet_summary",
@@ -36,7 +40,10 @@ class AnalyzerService:
         })
 
     async def receive_detection_summary(self, payload: dict[str, Any]) -> None:
-        self.traffic_repository.save_detection_summary_metrics(payload)
+        await asyncio.to_thread(
+            self.traffic_repository.save_detection_summary_metrics,
+            payload,
+        )
 
         await manager.broadcast({
             "type": "detection_summary",

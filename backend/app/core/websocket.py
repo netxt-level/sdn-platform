@@ -1,5 +1,10 @@
+import asyncio
+import logging
+
 from fastapi.encoders import jsonable_encoder
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketManager:
@@ -15,16 +20,23 @@ class WebSocketManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        disconnected_connections = []
+        if not self.active_connections:
+            return
 
-        for websocket in self.active_connections:
-            try:
-                await websocket.send_json(jsonable_encoder(message))
-            except RuntimeError:
-                disconnected_connections.append(websocket)
+        encoded_message = jsonable_encoder(message)
+        connections = list(self.active_connections)
+        results = await asyncio.gather(
+            *[
+                websocket.send_json(encoded_message)
+                for websocket in connections
+            ],
+            return_exceptions=True,
+        )
 
-        for websocket in disconnected_connections:
-            self.disconnect(websocket)
+        for websocket, result in zip(connections, results):
+            if isinstance(result, Exception):
+                logger.info("WebSocket 전송 실패로 연결을 정리합니다: %s", result)
+                self.disconnect(websocket)
 
 
 manager = WebSocketManager()
