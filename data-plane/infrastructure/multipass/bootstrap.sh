@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-CLOUD_INIT="${REPO_ROOT}/infrastructure/multipass/cloud-init.yaml"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+CLOUD_INIT="${SCRIPT_DIR}/cloud-init.yaml"
 
 VM_NAME="${VM_NAME:-sdn-lab}"
 VM_CPUS="${VM_CPUS:-4}"
@@ -16,7 +16,7 @@ VM_PROJECT_DIR="/home/ubuntu/sdn-platform"
 
 usage() {
   cat <<'EOF'
-Usage: bootstrap-vm.sh [options]
+Usage: bootstrap.sh [options]
 
 Options:
   --name NAME       Multipass instance name (default: sdn-lab)
@@ -117,7 +117,7 @@ multipass exec "${VM_NAME}" -- sudo cloud-init status --wait
 
 echo "Ensuring Ubuntu packages are installed..."
 multipass transfer \
-  "${SCRIPT_DIR}/provision-ubuntu.sh" \
+  "${SCRIPT_DIR}/provision.sh" \
   "${VM_NAME}:/home/ubuntu/provision-ubuntu.sh"
 multipass exec "${VM_NAME}" -- \
   sudo bash /home/ubuntu/provision-ubuntu.sh
@@ -220,7 +220,7 @@ if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
 
   echo "Verifying the hybrid data-plane environment..."
   multipass exec "${VM_NAME}" -- \
-    bash "${VM_PROJECT_DIR}/scripts/data-plane/verify-environment.sh" \
+    bash "${VM_PROJECT_DIR}/data-plane/infrastructure/multipass/verify-vm.sh" \
     "${VM_PROJECT_DIR}" dataplane "${BACKEND_URL}" "${FRONTEND_URL}"
 
   curl --retry 10 --retry-delay 2 --retry-connrefused \
@@ -253,7 +253,7 @@ else
 
   echo "Verifying Mininet, OVS, Docker, and service health..."
   multipass exec "${VM_NAME}" -- \
-    bash "${VM_PROJECT_DIR}/scripts/data-plane/verify-environment.sh" \
+    bash "${VM_PROJECT_DIR}/data-plane/infrastructure/multipass/verify-vm.sh" \
     "${VM_PROJECT_DIR}" full
 
   echo

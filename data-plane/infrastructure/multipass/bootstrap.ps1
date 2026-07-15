@@ -41,9 +41,9 @@ function Wait-HttpEndpoint {
     }
 }
 
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$CloudInit = Join-Path $RepoRoot "infrastructure\multipass\cloud-init.yaml"
-$ProvisionScript = Join-Path $RepoRoot "scripts\data-plane\provision-ubuntu.sh"
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+$CloudInit = Join-Path $PSScriptRoot "cloud-init.yaml"
+$ProvisionScript = Join-Path $PSScriptRoot "provision.sh"
 $EnvFile = Join-Path $RepoRoot ".env"
 $MainCompose = Join-Path $RepoRoot "docker-compose.yml"
 $ControlCompose = Join-Path $RepoRoot "docker-compose.control-plane.yml"
@@ -210,7 +210,7 @@ try {
         Write-Host "Verifying the hybrid data-plane environment..."
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
-            "bash", "${VmProjectDir}/scripts/data-plane/verify-environment.sh",
+            "bash", "${VmProjectDir}/data-plane/infrastructure/multipass/verify-vm.sh",
             $VmProjectDir, "dataplane", $BackendUrl, $FrontendUrl
         )
 
@@ -251,7 +251,7 @@ try {
         Write-Host "Verifying Mininet, OVS, Docker, and service health..."
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
-            "bash", "${VmProjectDir}/scripts/data-plane/verify-environment.sh",
+            "bash", "${VmProjectDir}/data-plane/infrastructure/multipass/verify-vm.sh",
             $VmProjectDir, "full"
         )
 

@@ -40,13 +40,13 @@ Multipass와 호스트 Docker는 자동으로 설치하지 않습니다. 먼저 
 기본 하이브리드 구성:
 
 ```bash
-./scripts/data-plane/bootstrap-vm.sh
+./data-plane/infrastructure/multipass/bootstrap.sh
 ```
 
 리소스와 Analyzer 인터페이스 지정:
 
 ```bash
-./scripts/data-plane/bootstrap-vm.sh \
+./data-plane/infrastructure/multipass/bootstrap.sh \
   --name sdn-lab \
   --cpus 4 \
   --memory 8G \
@@ -61,13 +61,13 @@ Multipass와 호스트 Docker는 자동으로 설치하지 않습니다. 먼저 
 ## Windows PowerShell
 
 ```powershell
-.\scripts\data-plane\bootstrap-vm.ps1
+.\data-plane\infrastructure\multipass\bootstrap.ps1
 ```
 
 사용자 지정:
 
 ```powershell
-.\scripts\data-plane\bootstrap-vm.ps1 `
+.\data-plane\infrastructure\multipass\bootstrap.ps1 `
   -VmName sdn-lab `
   -Cpus 4 `
   -Memory 8G `
@@ -86,7 +86,7 @@ Multipass와 호스트 Docker는 자동으로 설치하지 않습니다. 먼저 
 Analyzer는 VM의 `network_mode: host`로 실행됩니다. 따라서 이후 OVS Mirror가 연결된 `sensor0`를 만들면 다음처럼 재실행해 동일한 컨테이너가 해당 인터페이스를 캡처할 수 있습니다.
 
 ```bash
-./scripts/data-plane/bootstrap-vm.sh --interface sensor0
+./data-plane/infrastructure/multipass/bootstrap.sh --interface sensor0
 ```
 
 현재 `sensor0` 구성 전에는 `auto`가 기본값이며, VM의 기본 경로 NIC(예: `enp0s1`)를 자동으로 찾습니다. 이 상태는 호스트-VM 연결 검증용이며 Mininet 트래픽 캡처 완료를 의미하지 않습니다.
@@ -96,7 +96,7 @@ Analyzer는 VM의 `network_mode: host`로 실행됩니다. 따라서 이후 OVS 
 문제 재현이나 독립 실행을 위해 모든 기존 Compose 서비스를 VM 안에서 실행할 수 있습니다.
 
 ```bash
-./scripts/data-plane/bootstrap-vm.sh --profile full
+./data-plane/infrastructure/multipass/bootstrap.sh --profile full
 ```
 
 PowerShell에서는 `-Profile full`을 사용합니다.
