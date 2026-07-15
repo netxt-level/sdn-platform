@@ -8,6 +8,7 @@ from os_ken.controller.handler import MAIN_DISPATCHER
 from os_ken.controller.handler import set_ev_cls
 from os_ken.ofproto import ofproto_v1_3
 
+from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
 from app.flow_manager import install_table_miss_flow
 
@@ -16,6 +17,10 @@ class SwitchConnectionController(app_manager.OSKenApp):
     """Log OpenFlow switch connection state transitions."""
 
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.datapaths = DatapathRegistry()
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, event):
@@ -44,6 +49,28 @@ class SwitchConnectionController(app_manager.OSKenApp):
         dpid = f"{datapath.id:016x}"
 
         if event.state == MAIN_DISPATCHER:
-            self.logger.info("switch_connected dpid=%s", dpid)
+            previous = self.datapaths.register(datapath)
+            if previous is None:
+                event_name = "switch_connected"
+            elif previous is datapath:
+                event_name = "switch_connection_refreshed"
+            else:
+                event_name = "switch_reconnected"
+            self.logger.info(
+                "%s dpid=%s connected_switches=%d",
+                event_name,
+                dpid,
+                len(self.datapaths),
+            )
         elif event.state == DEAD_DISPATCHER:
-            self.logger.info("switch_disconnected dpid=%s", dpid)
+            if self.datapaths.unregister(datapath):
+                self.logger.info(
+                    "switch_disconnected dpid=%s connected_switches=%d",
+                    dpid,
+                    len(self.datapaths),
+                )
+            else:
+                self.logger.info(
+                    "switch_disconnect_ignored dpid=%s reason=stale_datapath",
+                    dpid,
+                )
