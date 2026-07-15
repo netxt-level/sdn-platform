@@ -70,3 +70,19 @@ multipass exec sdn-lab -- sudo python3 \
 현재 Controller는 Table-Miss Rule까지만 설치한다. 호스트와 스위치 구성이
 정상이더라도 ARP 및 L2 전달 구현 전에는 `pingall` 성공을 기대하지 않는다.
 
+## 호스트 위치 학습
+
+Controller는 Packet-In의 Ethernet 출발지와 ARP 또는 IPv4 출발지 주소를
+이용해 호스트의 MAC, IPv4, DPID 및 입력 포트를 학습한다. 현재 고정
+토폴로지에서 호스트 연결 포트로 지정된 `s1`의 1~3번과 `s4`의 3번만 학습
+대상이며, 스위치 간 transit 포트에서 관측한 MAC은 호스트로 등록하지 않는다.
+
+학습 로그는 다음 명령으로 확인한다.
+
+```bash
+multipass exec sdn-lab -- docker logs --since 5m sdn-controller
+```
+
+`host_learned`, `host_ip_updated`, `host_moved` 로그에는 학습한 MAC, IPv4,
+DPID와 입력 포트가 포함된다. 이 단계는 위치 학습만 수행하며 Packet-Out이나
+전달 Flow는 아직 설치하지 않는다.
