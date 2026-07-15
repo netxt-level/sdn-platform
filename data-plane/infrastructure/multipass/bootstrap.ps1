@@ -47,6 +47,7 @@ $ProvisionScript = Join-Path $PSScriptRoot "provision.sh"
 $EnvFile = Join-Path $RepoRoot ".env"
 $MainCompose = Join-Path $RepoRoot "docker-compose.yml"
 $ControlCompose = Join-Path $RepoRoot "docker-compose.control-plane.yml"
+$ControllerRestPort = if ($env:CONTROLLER_REST_PORT) { $env:CONTROLLER_REST_PORT } else { "8080" }
 $VmProjectDir = "/home/ubuntu/sdn-platform"
 $RemoteArchive = "/home/ubuntu/sdn-platform-source.tar.gz"
 $Archive = Join-Path ([System.IO.Path]::GetTempPath()) "sdn-platform-$([guid]::NewGuid()).tar.gz"
@@ -199,10 +200,19 @@ try {
             "down", "--remove-orphans"
         )
 
+        Write-Host "Starting the Controller in the VM..."
+        Invoke-Native "multipass" @(
+            "exec", $VmName, "--",
+            "docker", "compose", "--profile", "dataplane",
+            "-f", "${VmProjectDir}/docker-compose.yml",
+            "up", "-d", "--build", "controller"
+        )
+
         Write-Host "Starting the Analyzer in the VM..."
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
-            "env", "BACKEND_BASE_URL=${BackendUrl}", "ANALYZER_INTERFACE=${ResolvedAnalyzerInterface}",
+            "env", "COMPOSE_IGNORE_ORPHANS=true",
+            "BACKEND_BASE_URL=${BackendUrl}", "ANALYZER_INTERFACE=${ResolvedAnalyzerInterface}",
             "docker", "compose", "-f", "${VmProjectDir}/docker-compose.dataplane.yml",
             "up", "-d", "--build"
         )
@@ -211,7 +221,8 @@ try {
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
             "bash", "${VmProjectDir}/data-plane/infrastructure/multipass/verify-vm.sh",
-            $VmProjectDir, "dataplane", $BackendUrl, $FrontendUrl
+            $VmProjectDir, "dataplane", $BackendUrl, $FrontendUrl,
+            "http://127.0.0.1:${ControllerRestPort}/health"
         )
 
         Wait-HttpEndpoint "http://127.0.0.1:8000/health"
@@ -222,6 +233,7 @@ try {
         Write-Host "Profile:   dataplane"
         Write-Host "VM:        $VmName ($VmIp)"
         Write-Host "Analyzer:  VM host network ($ResolvedAnalyzerInterface)"
+        Write-Host "Controller: http://${VmIp}:${ControllerRestPort}"
         Write-Host "Frontend:  http://127.0.0.1:${FrontendPort}"
         Write-Host "Backend:   http://127.0.0.1:8000"
         Write-Host "API docs:  http://127.0.0.1:8000/docs"
@@ -229,12 +241,14 @@ try {
         Write-Host "Building and starting the full platform in the VM..."
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
-            "docker", "compose", "-f", "${VmProjectDir}/docker-compose.yml",
+            "docker", "compose", "--profile", "dataplane",
+            "-f", "${VmProjectDir}/docker-compose.yml",
             "config", "--quiet"
         )
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
-            "docker", "compose", "-f", "${VmProjectDir}/docker-compose.yml",
+            "docker", "compose", "--profile", "dataplane",
+            "-f", "${VmProjectDir}/docker-compose.yml",
             "up", "-d", "--build"
         )
 
@@ -252,7 +266,9 @@ try {
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
             "bash", "${VmProjectDir}/data-plane/infrastructure/multipass/verify-vm.sh",
-            $VmProjectDir, "full"
+            $VmProjectDir, "full",
+            "http://127.0.0.1:8000", "http://127.0.0.1:3000",
+            "http://127.0.0.1:${ControllerRestPort}/health"
         )
 
         Write-Host ""
@@ -261,6 +277,7 @@ try {
         Write-Host "VM:       $VmName ($VmIp)"
         Write-Host "Frontend: http://${VmIp}:3000"
         Write-Host "Backend:  http://${VmIp}:8000"
+        Write-Host "Controller: http://${VmIp}:${ControllerRestPort}"
         Write-Host "API docs: http://${VmIp}:8000/docs"
     }
 } finally {

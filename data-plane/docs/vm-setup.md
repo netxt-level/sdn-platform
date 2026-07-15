@@ -9,7 +9,7 @@ macOS/Windows Docker                 Ubuntu Multipass VM
 -------------------                 -------------------
 Frontend                            Mininet / Open vSwitch
 Backend          <--- HTTP ------   Analyzer
-PostgreSQL                          Controller (추가 예정)
+PostgreSQL                          Controller
 InfluxDB                            OVS mirror/sensor0 (추가 예정)
 Elasticsearch                       공격자/사용자/웹 호스트 (추가 예정)
 ```
@@ -17,7 +17,7 @@ Elasticsearch                       공격자/사용자/웹 호스트 (추가 �
 `dataplane` 프로필이 기본값입니다.
 
 - 개발 호스트: Backend, Frontend, PostgreSQL, InfluxDB, Elasticsearch
-- Linux VM: Mininet, OVS, Analyzer와 이후 추가할 Controller/가상 호스트
+- Linux VM: Mininet, OVS, Controller, Analyzer와 이후 추가할 가상 호스트
 - VM의 Analyzer는 Multipass 기본 게이트웨이를 통해 호스트의 Backend에 연결
 - VM에 있던 기존 데이터 볼륨은 삭제하지 않지만, `dataplane` 프로필에서는 DB 컨테이너를 실행하지 않음
 
@@ -79,7 +79,7 @@ Multipass와 호스트 Docker는 자동으로 설치하지 않습니다. 먼저 
 
 ## Compose 파일 역할
 
-- `docker-compose.yml`: 기존 전체 애플리케이션 정의이며 변경하지 않음
+- `docker-compose.yml`: 기존 애플리케이션과 `dataplane` 프로필의 Controller 정의
 - `docker-compose.control-plane.yml`: 호스트 DB 마이그레이션용 오버레이
 - `docker-compose.dataplane.yml`: VM에서 실행할 Analyzer 정의
 
@@ -113,7 +113,29 @@ PowerShell에서는 `-Profile full`을 사용합니다.
 
 VM의 `/home/ubuntu/sdn-platform`은 생성된 복사본입니다. 코드는 호스트에서 수정하고 부트스트랩을 다시 실행해야 합니다.
 
-## 운영 명령
+## Controller 운영 명령
+
+부트스트랩은 Controller를 VM에서 자동으로 빌드하고 시작합니다. 이후 Controller만 다시 시작하거나 정지할 때는 호스트에서 다음 명령을 사용합니다.
+
+```bash
+./data-plane/scripts/start.sh
+./data-plane/scripts/stop.sh
+./data-plane/scripts/cleanup.sh
+```
+
+`cleanup.sh`는 Controller 컨테이너와 Mininet/OVS 잔여 상태만 제거하며 Analyzer와 호스트의 Backend·데이터베이스는 중지하지 않습니다.
+
+Controller 상태 확인:
+
+```bash
+VM_IP="$(multipass list --format csv | awk -F, '$1 == "sdn-lab" {print $3}')"
+curl "http://${VM_IP}:8080/health"
+curl "http://${VM_IP}:8080/switches"
+```
+
+소스 변경 후에는 VM의 프로젝트 복사본을 갱신하기 위해 부트스트랩을 다시 실행해야 합니다.
+
+## VM 운영 명령
 
 VM 셸 열기:
 
@@ -145,6 +167,7 @@ multipass exec sdn-lab -- docker ps
 - Frontend: `http://127.0.0.1:3000`
 - Backend: `http://127.0.0.1:8000`
 - API 문서: `http://127.0.0.1:8000/docs`
+- Controller: `http://<VM_IP>:8080`
 
 ## 주의 사항
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-switch Mininet topology for the SDN data-plane lab."""
+"""Four-switch, four-host Mininet topology for the SDN data-plane lab."""
 
 import argparse
 import time
@@ -20,9 +20,39 @@ SWITCH_DPIDS = {
     "s4": "0000000000000004",
 }
 
+HOSTS = {
+    "h1": {
+        "role": "user",
+        "ip": "10.0.0.1/24",
+        "mac": "00:00:00:00:00:01",
+    },
+    "h2": {
+        "role": "administrator",
+        "ip": "10.0.0.2/24",
+        "mac": "00:00:00:00:00:02",
+    },
+    "h3": {
+        "role": "attacker",
+        "ip": "10.0.0.3/24",
+        "mac": "00:00:00:00:00:03",
+    },
+    "web": {
+        "role": "web-server",
+        "ip": "10.0.0.100/24",
+        "mac": "00:00:00:00:01:00",
+    },
+}
+
+SWITCH_PORTS = {
+    "s1": {1: "h1", 2: "h2", 3: "h3", 4: "s2", 5: "s3"},
+    "s2": {1: "s1", 2: "s4"},
+    "s3": {1: "s1", 2: "s4"},
+    "s4": {1: "s2", 2: "s3", 3: "web"},
+}
+
 
 class FourSwitchTopology(Topo):
-    """Diamond topology with fixed DPIDs and explicit switch ports."""
+    """Diamond topology with fixed host identities and explicit ports."""
 
     def build(self):
         switches = {
@@ -35,10 +65,19 @@ class FourSwitchTopology(Topo):
             for name, dpid in SWITCH_DPIDS.items()
         }
 
-        self.addLink(switches["s1"], switches["s2"], port1=1, port2=1)
-        self.addLink(switches["s1"], switches["s3"], port1=2, port2=1)
+        hosts = {
+            name: self.addHost(name, ip=config["ip"], mac=config["mac"])
+            for name, config in HOSTS.items()
+        }
+
+        self.addLink(hosts["h1"], switches["s1"], port1=0, port2=1)
+        self.addLink(hosts["h2"], switches["s1"], port1=0, port2=2)
+        self.addLink(hosts["h3"], switches["s1"], port1=0, port2=3)
+        self.addLink(switches["s1"], switches["s2"], port1=4, port2=1)
+        self.addLink(switches["s1"], switches["s3"], port1=5, port2=1)
         self.addLink(switches["s2"], switches["s4"], port1=2, port2=1)
         self.addLink(switches["s3"], switches["s4"], port1=2, port2=2)
+        self.addLink(switches["s4"], hosts["web"], port1=3, port2=0)
 
 
 def parse_args():
@@ -73,6 +112,52 @@ def print_connection_status(net):
         print(f"{switch.name} {SWITCH_DPIDS[switch.name]} {state}")
 
 
+def get_switch_port_map(switch):
+    ports = {}
+
+    for interface, port in switch.ports.items():
+        if interface.link is None:
+            continue
+        peer = (
+            interface.link.intf2
+            if interface.link.intf1 is interface
+            else interface.link.intf1
+        )
+        ports[port] = peer.node.name
+
+    return ports
+
+
+def print_topology_status(net):
+    valid = True
+
+    for host in sorted(net.hosts, key=lambda item: item.name):
+        config = HOSTS[host.name]
+        expected_ip = config["ip"].split("/", maxsplit=1)[0]
+        host_valid = (
+            host.IP() == expected_ip
+            and host.MAC().lower() == config["mac"]
+        )
+        valid = valid and host_valid
+        state = "valid" if host_valid else "invalid"
+        print(
+            f"{host.name} role={config['role']} ip={host.IP()} "
+            f"mac={host.MAC()} {state}"
+        )
+
+    for switch in sorted(net.switches, key=lambda item: item.name):
+        actual_ports = get_switch_port_map(switch)
+        switch_valid = actual_ports == SWITCH_PORTS[switch.name]
+        valid = valid and switch_valid
+        state = "valid" if switch_valid else "invalid"
+        port_list = ",".join(
+            f"{port}={peer}" for port, peer in sorted(actual_ports.items())
+        )
+        print(f"{switch.name} ports={port_list} {state}")
+
+    return valid
+
+
 def run(args):
     topology = FourSwitchTopology()
     network = Mininet(
@@ -99,7 +184,8 @@ def run(args):
                 args.verify_timeout,
             )
             print_connection_status(network)
-            return 0 if connected else 1
+            topology_valid = print_topology_status(network)
+            return 0 if connected and topology_valid else 1
 
         CLI(network)
         return 0

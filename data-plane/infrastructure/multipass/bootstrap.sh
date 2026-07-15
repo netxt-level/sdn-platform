@@ -12,6 +12,7 @@ VM_DISK="${VM_DISK:-40G}"
 VM_IMAGE="${VM_IMAGE:-24.04}"
 DEPLOYMENT_PROFILE="${DEPLOYMENT_PROFILE:-dataplane}"
 VM_ANALYZER_INTERFACE="${VM_ANALYZER_INTERFACE:-auto}"
+CONTROLLER_REST_PORT="${CONTROLLER_REST_PORT:-8080}"
 VM_PROJECT_DIR="/home/ubuntu/sdn-platform"
 
 usage() {
@@ -212,16 +213,24 @@ if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   multipass exec "${VM_NAME}" -- \
     docker compose -f "${VM_PROJECT_DIR}/docker-compose.yml" down --remove-orphans
 
+  echo "Starting the Controller in the VM..."
+  multipass exec "${VM_NAME}" -- \
+    docker compose --profile dataplane \
+    -f "${VM_PROJECT_DIR}/docker-compose.yml" \
+    up -d --build controller
+
   echo "Starting the Analyzer in the VM..."
   multipass exec "${VM_NAME}" -- \
-    env BACKEND_BASE_URL="${BACKEND_URL}" ANALYZER_INTERFACE="${RESOLVED_ANALYZER_INTERFACE}" \
+    env COMPOSE_IGNORE_ORPHANS=true \
+    BACKEND_BASE_URL="${BACKEND_URL}" ANALYZER_INTERFACE="${RESOLVED_ANALYZER_INTERFACE}" \
     docker compose -f "${VM_PROJECT_DIR}/docker-compose.dataplane.yml" \
     up -d --build
 
   echo "Verifying the hybrid data-plane environment..."
   multipass exec "${VM_NAME}" -- \
     bash "${VM_PROJECT_DIR}/data-plane/infrastructure/multipass/verify-vm.sh" \
-    "${VM_PROJECT_DIR}" dataplane "${BACKEND_URL}" "${FRONTEND_URL}"
+    "${VM_PROJECT_DIR}" dataplane "${BACKEND_URL}" "${FRONTEND_URL}" \
+    "http://127.0.0.1:${CONTROLLER_REST_PORT}/health"
 
   curl --retry 10 --retry-delay 2 --retry-connrefused \
     --fail --silent --show-error http://127.0.0.1:8000/health >/dev/null
@@ -234,15 +243,18 @@ if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   echo "Profile:   dataplane"
   echo "VM:        ${VM_NAME} (${VM_IP})"
   echo "Analyzer:  VM host network (${RESOLVED_ANALYZER_INTERFACE})"
+  echo "Controller: http://${VM_IP}:${CONTROLLER_REST_PORT}"
   echo "Frontend:  http://127.0.0.1:${FRONTEND_PORT:-3000}"
   echo "Backend:   http://127.0.0.1:8000"
   echo "API docs:  http://127.0.0.1:8000/docs"
 else
   echo "Building and starting the full platform in the VM..."
   multipass exec "${VM_NAME}" -- \
-    docker compose -f "${VM_PROJECT_DIR}/docker-compose.yml" config --quiet
+    docker compose --profile dataplane \
+    -f "${VM_PROJECT_DIR}/docker-compose.yml" config --quiet
   multipass exec "${VM_NAME}" -- \
-    docker compose -f "${VM_PROJECT_DIR}/docker-compose.yml" up -d --build
+    docker compose --profile dataplane \
+    -f "${VM_PROJECT_DIR}/docker-compose.yml" up -d --build
 
   echo "Applying database migrations in the VM..."
   multipass exec "${VM_NAME}" -- \
@@ -254,7 +266,9 @@ else
   echo "Verifying Mininet, OVS, Docker, and service health..."
   multipass exec "${VM_NAME}" -- \
     bash "${VM_PROJECT_DIR}/data-plane/infrastructure/multipass/verify-vm.sh" \
-    "${VM_PROJECT_DIR}" full
+    "${VM_PROJECT_DIR}" full \
+    "http://127.0.0.1:8000" "http://127.0.0.1:3000" \
+    "http://127.0.0.1:${CONTROLLER_REST_PORT}/health"
 
   echo
   echo "Full VM SDN lab is ready."
@@ -262,5 +276,6 @@ else
   echo "VM:       ${VM_NAME} (${VM_IP})"
   echo "Frontend: http://${VM_IP}:3000"
   echo "Backend:  http://${VM_IP}:8000"
+  echo "Controller: http://${VM_IP}:${CONTROLLER_REST_PORT}"
   echo "API docs: http://${VM_IP}:8000/docs"
 fi
