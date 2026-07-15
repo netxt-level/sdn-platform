@@ -1,0 +1,4 @@
+scripts/data-plane/*.sh text eol=lf
+scripts/data-plane/*.ps1 text eol=crlf
+infrastructure/multipass/*.yaml text eol=lf
+docs/*.md text eol=lf
