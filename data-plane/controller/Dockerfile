@@ -6,6 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV CONTROLLER_OPENFLOW_PORT=6653
+ENV CONTROLLER_REST_HOST=0.0.0.0
+ENV CONTROLLER_REST_PORT=8080
 
 COPY requirements.txt .
 
@@ -16,6 +18,6 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY app ./app
 
-EXPOSE 6653
+EXPOSE 6653 8080
 
 CMD ["sh", "-c", "exec osken-manager --ofp-tcp-listen-port \"$CONTROLLER_OPENFLOW_PORT\" app/controller.py"]

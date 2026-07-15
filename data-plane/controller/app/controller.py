@@ -8,6 +8,8 @@ from os_ken.controller.handler import MAIN_DISPATCHER
 from os_ken.controller.handler import set_ev_cls
 from os_ken.ofproto import ofproto_v1_3
 
+from app.api import ControllerApiServer
+from app.config import load_settings
 from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
 from app.flow_manager import install_table_miss_flow
@@ -20,7 +22,25 @@ class SwitchConnectionController(app_manager.OSKenApp):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.settings = load_settings()
         self.datapaths = DatapathRegistry()
+        self.api_server = ControllerApiServer(
+            self.datapaths,
+            self.settings,
+        )
+
+    def start(self):
+        super().start()
+        self.api_server.start()
+        self.logger.info(
+            "rest_api_started host=%s port=%d",
+            self.settings.rest_host,
+            self.settings.rest_port,
+        )
+
+    def stop(self):
+        self.api_server.stop()
+        super().stop()
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, event):
