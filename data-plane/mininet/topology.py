@@ -89,7 +89,10 @@ def parse_args():
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="Verify all switches connect, then exit without opening the CLI.",
+        help=(
+            "Verify switch connections, topology layout, and pingall, then "
+            "exit without opening the CLI."
+        ),
     )
     parser.add_argument("--verify-timeout", type=float, default=10.0)
     return parser.parse_args()
@@ -185,7 +188,10 @@ def run(args):
             )
             print_connection_status(network)
             topology_valid = print_topology_status(network)
-            return 0 if connected and topology_valid else 1
+            if not connected or not topology_valid:
+                return 1
+            packet_loss = network.pingAll(timeout=1)
+            return 0 if packet_loss == 0.0 else 1
 
         CLI(network)
         return 0

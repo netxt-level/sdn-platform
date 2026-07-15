@@ -51,8 +51,8 @@ OpenFlow 1.3과 `secure` fail mode를 사용한다.
 
 ## 검증
 
-Controller를 시작한 후 호스트 주소, 포트 연결 및 스위치 연결 상태를
-자동 검증한다.
+Controller를 시작한 후 호스트 주소, 포트 연결, 스위치 연결 상태 및
+`pingall`을 자동 검증한다.
 
 ```bash
 ./data-plane/scripts/start.sh
@@ -67,8 +67,8 @@ multipass exec sdn-lab -- sudo python3 \
   /home/ubuntu/sdn-platform/data-plane/mininet/topology.py
 ```
 
-현재 Controller는 Table-Miss Rule까지만 설치한다. 호스트와 스위치 구성이
-정상이더라도 ARP 및 L2 전달 구현 전에는 `pingall` 성공을 기대하지 않는다.
+현재 Controller는 Table-Miss Rule만 설치하고, ARP와 IPv4 패킷은
+Packet-Out으로 전달한다. 목적지별 전달 Flow 설치는 다음 단계에서 추가한다.
 
 ## 호스트 위치 학습
 
@@ -84,5 +84,28 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 ```
 
 `host_learned`, `host_ip_updated`, `host_moved` 로그에는 학습한 MAC, IPv4,
-DPID와 입력 포트가 포함된다. 이 단계는 위치 학습만 수행하며 Packet-Out이나
-전달 Flow는 아직 설치하지 않는다.
+DPID와 입력 포트가 포함된다. 학습 정보는 유지하지만 목적지별 전달 Flow는
+아직 설치하지 않는다.
+
+## Flooding Tree와 Unknown Unicast 정책
+
+Broadcast storm을 막기 위해 Flooding은 다음 트리 링크만 사용한다.
+
+```text
+s3
+ |
+s1 -- s2 -- s4
+```
+
+`s3-s4` 링크는 Backup 경로용으로 유지하지만 Broadcast와 Unknown Unicast
+Flooding에는 사용하지 않는다. 각 Packet-Out은 입력 포트를 제외한 트리
+포트로만 출력한다.
+
+- ARP Request와 Reply: Flooding Tree로 전달
+- IPv4 Broadcast/Multicast: Flooding Tree로 전달
+- 아직 목적지 Flow가 없는 IPv4 Unicast: Flooding Tree로 전달
+- LLDP, IPv6 및 그 밖의 Ethertype: 현재 전달 대상에서 제외
+
+이 단계에서는 `pingall`이 성공할 수 있지만 모든 ARP 및 IPv4 패킷이 계속
+Table-Miss로 Controller에 전달된다. 반복 패킷의 Packet-In 감소는 목적지별
+Unicast Flow를 설치하는 다음 단계에서 검증한다.

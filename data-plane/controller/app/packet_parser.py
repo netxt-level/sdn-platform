@@ -16,6 +16,14 @@ class SourceIdentity:
     ipv4: str | None
 
 
+@dataclass(frozen=True)
+class PacketMetadata:
+    source_mac: str
+    destination_mac: str
+    ethertype: int
+    source_ipv4: str | None
+
+
 def _is_unicast_source(mac):
     try:
         first_octet = int(mac.split(":", maxsplit=1)[0], 16)
@@ -24,8 +32,8 @@ def _is_unicast_source(mac):
     return mac != "00:00:00:00:00:00" and not first_octet & 1
 
 
-def parse_source_identity(data):
-    """Return a learnable Ethernet source and optional IPv4 address."""
+def parse_packet_metadata(data):
+    """Return learnable source and forwarding metadata for an Ethernet frame."""
     if not data:
         return None
 
@@ -55,5 +63,32 @@ def parse_source_identity(data):
         if ipv4_header is not None:
             source_ipv4 = ipv4_header.src
 
-    return SourceIdentity(mac=source_mac, ipv4=source_ipv4)
+    return PacketMetadata(
+        source_mac=source_mac,
+        destination_mac=ethernet_header.dst.lower(),
+        ethertype=ethernet_header.ethertype,
+        source_ipv4=source_ipv4,
+    )
 
+
+def parse_source_identity(data):
+    """Return a learnable Ethernet source and optional IPv4 address."""
+    metadata = parse_packet_metadata(data)
+    if metadata is None:
+        return None
+    return SourceIdentity(
+        mac=metadata.source_mac,
+        ipv4=metadata.source_ipv4,
+    )
+
+
+def classify_destination(mac):
+    """Classify a destination MAC for structured forwarding logs."""
+    try:
+        normalized = mac.lower()
+        first_octet = int(normalized.split(":", maxsplit=1)[0], 16)
+    except (AttributeError, TypeError, ValueError):
+        return "invalid"
+    if normalized == "ff:ff:ff:ff:ff:ff":
+        return "broadcast"
+    return "multicast" if first_octet & 1 else "unknown_unicast"

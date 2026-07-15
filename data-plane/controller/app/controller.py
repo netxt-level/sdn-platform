@@ -6,6 +6,7 @@ from os_ken.controller.handler import CONFIG_DISPATCHER
 from os_ken.controller.handler import DEAD_DISPATCHER
 from os_ken.controller.handler import MAIN_DISPATCHER
 from os_ken.controller.handler import set_ev_cls
+from os_ken.lib.packet import ether_types
 from os_ken.ofproto import ofproto_v1_3
 
 from app.api import ControllerApiServer
@@ -13,9 +14,18 @@ from app.config import load_settings
 from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
 from app.flow_manager import install_table_miss_flow
+from app.flow_manager import send_packet_out
 from app.hosts import HostRegistry
-from app.packet_parser import parse_source_identity
+from app.packet_parser import classify_destination
+from app.packet_parser import parse_packet_metadata
+from app.topology import get_flood_output_ports
 from app.topology import is_host_facing_port
+
+
+FLOOD_ETHERTYPES = frozenset({
+    ether_types.ETH_TYPE_ARP,
+    ether_types.ETH_TYPE_IP,
+})
 
 
 class SwitchConnectionController(app_manager.OSKenApp):
@@ -118,31 +128,26 @@ class SwitchConnectionController(app_manager.OSKenApp):
             )
             return
 
-        self._learn_source_host(datapath, in_port, msg.data)
-
-    def _learn_source_host(self, datapath, in_port, data):
-        if not is_host_facing_port(datapath.id, in_port):
+        metadata = parse_packet_metadata(msg.data)
+        if metadata is None:
             self.logger.debug(
-                "packet_in_ignored reason=transit_port dpid=%016x port=%d",
-                datapath.id,
-                in_port,
-            )
-            return
-
-        identity = parse_source_identity(data)
-        if identity is None:
-            self.logger.debug(
-                "packet_in_ignored reason=source_not_learnable dpid=%016x "
+                "packet_in_ignored reason=packet_not_supported dpid=%016x "
                 "port=%d",
                 datapath.id,
                 in_port,
             )
             return
 
+        if is_host_facing_port(datapath.id, in_port):
+            self._learn_source_host(datapath, in_port, metadata)
+
+        self._flood_packet(msg, metadata)
+
+    def _learn_source_host(self, datapath, in_port, metadata):
         try:
             result = self.hosts.learn(
-                mac=identity.mac,
-                ipv4=identity.ipv4,
+                mac=metadata.source_mac,
+                ipv4=metadata.source_ipv4,
                 dpid=datapath.id,
                 port=in_port,
             )
@@ -165,4 +170,43 @@ class SwitchConnectionController(app_manager.OSKenApp):
             result.current.ipv4 or "unknown",
             result.current.dpid,
             result.current.port,
+        )
+
+    def _flood_packet(self, msg, metadata):
+        datapath = msg.datapath
+        in_port = msg.match["in_port"]
+
+        if metadata.ethertype not in FLOOD_ETHERTYPES:
+            self.logger.debug(
+                "packet_in_ignored reason=ethertype_not_supported "
+                "dpid=%016x port=%d ethertype=0x%04x",
+                datapath.id,
+                in_port,
+                metadata.ethertype,
+            )
+            return
+
+        output_ports = get_flood_output_ports(datapath.id, in_port)
+        if not output_ports:
+            self.logger.debug(
+                "packet_out_skipped reason=no_flood_port dpid=%016x port=%d",
+                datapath.id,
+                in_port,
+            )
+            return
+
+        send_packet_out(
+            datapath=datapath,
+            buffer_id=msg.buffer_id,
+            in_port=in_port,
+            output_ports=output_ports,
+            data=msg.data,
+        )
+        self.logger.debug(
+            "packet_out_flooded kind=%s dpid=%016x in_port=%d "
+            "out_ports=%s",
+            classify_destination(metadata.destination_mac),
+            datapath.id,
+            in_port,
+            ",".join(str(port) for port in output_ports),
         )

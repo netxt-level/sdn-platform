@@ -7,6 +7,8 @@ from os_ken.lib.packet import ipv4
 from os_ken.lib.packet import packet
 
 from app.packet_parser import SourceIdentity
+from app.packet_parser import classify_destination
+from app.packet_parser import parse_packet_metadata
 from app.packet_parser import parse_source_identity
 
 
@@ -19,6 +21,29 @@ def serialize_packet(*protocols):
 
 
 class PacketParserTests(unittest.TestCase):
+    def test_extracts_forwarding_metadata(self):
+        data = serialize_packet(
+            ethernet.ethernet(
+                dst="ff:ff:ff:ff:ff:ff",
+                src="00:00:00:00:00:01",
+                ethertype=ether_types.ETH_TYPE_ARP,
+            ),
+            arp.arp(
+                opcode=arp.ARP_REQUEST,
+                src_mac="00:00:00:00:00:01",
+                src_ip="10.0.0.1",
+                dst_mac="00:00:00:00:00:00",
+                dst_ip="10.0.0.100",
+            ),
+        )
+
+        metadata = parse_packet_metadata(data)
+
+        self.assertEqual("00:00:00:00:00:01", metadata.source_mac)
+        self.assertEqual("ff:ff:ff:ff:ff:ff", metadata.destination_mac)
+        self.assertEqual(ether_types.ETH_TYPE_ARP, metadata.ethertype)
+        self.assertEqual("10.0.0.1", metadata.source_ipv4)
+
     def test_extracts_source_from_arp_packet(self):
         source_mac = "00:00:00:00:00:01"
         data = serialize_packet(
@@ -116,7 +141,20 @@ class PacketParserTests(unittest.TestCase):
             parse_source_identity(data),
         )
 
+    def test_classifies_destination_mac(self):
+        self.assertEqual(
+            "broadcast",
+            classify_destination("ff:ff:ff:ff:ff:ff"),
+        )
+        self.assertEqual(
+            "multicast",
+            classify_destination("01:00:5e:00:00:01"),
+        )
+        self.assertEqual(
+            "unknown_unicast",
+            classify_destination("00:00:00:00:01:00"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

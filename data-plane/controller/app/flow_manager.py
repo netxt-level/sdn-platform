@@ -40,3 +40,33 @@ def install_table_miss_flow(datapath):
     flow_mod = build_table_miss_flow(datapath)
     datapath.send_msg(flow_mod)
     return flow_mod
+
+
+def build_packet_out(datapath, buffer_id, in_port, output_ports, data):
+    """Build a Packet-Out for the selected physical output ports."""
+    parser = datapath.ofproto_parser
+    actions = [parser.OFPActionOutput(port) for port in output_ports]
+    packet_data = data
+    if buffer_id != datapath.ofproto.OFP_NO_BUFFER:
+        packet_data = None
+
+    return parser.OFPPacketOut(
+        datapath=datapath,
+        buffer_id=buffer_id,
+        in_port=in_port,
+        actions=actions,
+        data=packet_data,
+    )
+
+
+def send_packet_out(datapath, buffer_id, in_port, output_ports, data):
+    """Build and send a Packet-Out message."""
+    packet_out = build_packet_out(
+        datapath,
+        buffer_id,
+        in_port,
+        output_ports,
+        data,
+    )
+    datapath.send_msg(packet_out)
+    return packet_out
