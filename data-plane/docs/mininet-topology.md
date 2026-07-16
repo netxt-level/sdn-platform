@@ -109,3 +109,19 @@ Flooding에는 사용하지 않는다. 각 Packet-Out은 입력 포트를 제외
 이 단계에서는 `pingall`이 성공할 수 있지만 모든 ARP 및 IPv4 패킷이 계속
 Table-Miss로 Controller에 전달된다. 반복 패킷의 Packet-In 감소는 목적지별
 Unicast Flow를 설치하는 다음 단계에서 검증한다.
+
+## Primary 경로 계산
+
+목적지별 Unicast Flow 설치에 사용할 Primary 스위치 그래프는 Flooding
+Tree와 동일하다. `s3-s4` 링크는 Backup으로 유지하며 Primary 계산에서는
+제외한다.
+
+```text
+h1/s1 → s1(port 4) → s2(port 2) → s4(port 3) → web
+web   → s4(port 1) → s2(port 1) → s1(port 1) → h1
+```
+
+동일 스위치에 연결된 호스트는 해당 스위치의 목적지 호스트 포트만 출력
+포트로 사용한다. 경로 계산 모듈은 OpenFlow 객체와 분리되어 있으며,
+스위치 경로와 각 스위치의 출력 포트만 반환한다. 이 단계에서는 계산 결과를
+Flow Rule로 설치하지 않으므로 실행 중 패킷 전달 방식은 아직 변경되지 않는다.

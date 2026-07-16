@@ -6,6 +6,20 @@ HOST_FACING_PORTS = {
     4: frozenset({3}),
 }
 
+SWITCH_LINK_PORTS = {
+    1: {2: 4, 3: 5},
+    2: {1: 1, 4: 2},
+    3: {1: 1, 4: 2},
+    4: {2: 1, 3: 2},
+}
+
+PRIMARY_SWITCH_GRAPH = {
+    1: (2, 3),
+    2: (1, 4),
+    3: (1,),
+    4: (2,),
+}
+
 FLOOD_TREE_PORTS = {
     1: frozenset({1, 2, 3, 4, 5}),
     2: frozenset({1, 2}),

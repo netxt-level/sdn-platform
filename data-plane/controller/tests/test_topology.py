@@ -2,6 +2,8 @@ import unittest
 
 from app.topology import get_flood_output_ports
 from app.topology import is_host_facing_port
+from app.topology import PRIMARY_SWITCH_GRAPH
+from app.topology import SWITCH_LINK_PORTS
 
 
 class TopologyPortRoleTests(unittest.TestCase):
@@ -32,6 +34,16 @@ class TopologyPortRoleTests(unittest.TestCase):
 
     def test_unknown_switch_has_no_flood_ports(self):
         self.assertEqual((), get_flood_output_ports(99, 1))
+
+    def test_switch_link_ports_are_symmetric(self):
+        for source, neighbors in SWITCH_LINK_PORTS.items():
+            for destination in neighbors:
+                with self.subTest(source=source, destination=destination):
+                    self.assertIn(source, SWITCH_LINK_PORTS[destination])
+
+    def test_primary_graph_excludes_s3_s4_backup_link(self):
+        self.assertNotIn(4, PRIMARY_SWITCH_GRAPH[3])
+        self.assertNotIn(3, PRIMARY_SWITCH_GRAPH[4])
 
 
 if __name__ == "__main__":
