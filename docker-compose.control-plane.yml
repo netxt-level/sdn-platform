@@ -1,0 +1,17 @@
+services:
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./migrations:/app/migrations:ro
+    command:
+      - alembic
+      - upgrade
+      - head
+    depends_on:
+      - postgres
+

@@ -1,0 +1,4 @@
+data-plane/**/*.sh text eol=lf
+data-plane/**/*.ps1 text eol=crlf
+data-plane/**/*.yaml text eol=lf
+data-plane/**/*.md text eol=lf

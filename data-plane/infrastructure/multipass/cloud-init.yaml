@@ -1,0 +1,25 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - mininet
+  - openvswitch-switch
+  - openvswitch-common
+  - iperf3
+  - tcpdump
+  - iproute2
+  - iputils-ping
+  - curl
+  - jq
+  - ethtool
+  - net-tools
+  - python3-pip
+  - docker.io
+  - docker-compose-v2
+  - docker-buildx
+
+runcmd:
+  - [systemctl, enable, --now, openvswitch-switch]
+  - [systemctl, enable, --now, docker]
+  - [usermod, -aG, docker, ubuntu]
