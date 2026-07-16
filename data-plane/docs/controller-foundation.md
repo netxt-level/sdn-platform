@@ -246,11 +246,24 @@ curl "http://<VM_IP>:8080/health"
 curl "http://<VM_IP>:8080/switches"
 ```
 
+일반 `start.sh`는 VM에 있는 기존 Controller 이미지를 사용한다. 현재 로컬
+`data-plane/`을 VM에 동기화하고 이미지를 다시 만들려면 전체 검증 명령을
+사용한다. 필요하면 다음처럼 Controller 시작만 강제 재빌드할 수 있다.
+
+```bash
+CONTROLLER_REBUILD=true ./data-plane/scripts/start.sh
+```
+
 전체 자동 검증:
 
 ```bash
 ./data-plane/scripts/verify.sh
 ```
+
+`verify.sh`는 시나리오 실행 전에 현재 `data-plane/`만 VM 프로젝트 복사본에
+교체 동기화하고 파일별 SHA-256을 비교한다. 일치한 소스로 Controller 이미지를
+재빌드하고 컨테이너를 강제 재생성하므로 이전 VM 코드나 이미지로 검증하지
+않는다.
 
 자동 검증은 다음을 포함한다.
 

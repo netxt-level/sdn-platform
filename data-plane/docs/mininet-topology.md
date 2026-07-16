@@ -230,7 +230,10 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 ./data-plane/scripts/verify.sh
 ```
 
-스크립트는 Controller를 시작한 뒤 VM 안에서 다음 항목을 순서대로 검증한다.
+스크립트는 현재 로컬 `data-plane/`을 VM에 교체 동기화하고 파일별 SHA-256을
+비교한다. 그 소스로 Controller 이미지를 재빌드·재생성한 뒤 VM 안에서 다음
+항목을 순서대로 검증한다. 따라서 별도의 수동 `multipass transfer`가 필요하지
+않다.
 
 1. OpenFlow 1.3 스위치 4개 연결
 2. 고정 Host IP/MAC 및 Switch Port 구성

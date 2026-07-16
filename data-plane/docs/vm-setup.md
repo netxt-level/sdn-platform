@@ -113,6 +113,8 @@ VM_ANALYZER_INTERFACE
 VM 프로젝트 복사본은 `/home/ubuntu/sdn-platform`에 생성된다. 부트스트랩을
 다시 실행하면 이 디렉터리를 새 스냅샷으로 교체한다. Docker volume은 별도로
 유지되지만 VM 프로젝트 디렉터리에서 직접 수정한 파일은 보존 대상이 아니다.
+전체 플랫폼 부트스트랩 없이 데이터 플레인 코드만 갱신할 때는
+`data-plane/scripts/sync-vm.sh`를 사용한다.
 
 ## 배치 프로필
 
@@ -157,6 +159,22 @@ Controller 시작:
 ./data-plane/scripts/start.sh
 ```
 
+현재 로컬 데이터 플레인만 VM에 동기화:
+
+```bash
+./data-plane/scripts/sync-vm.sh
+```
+
+동기화 스크립트는 VM의 `data-plane/`만 교체하며 Backend, Frontend,
+Analyzer, 데이터베이스와 Docker volume은 변경하지 않는다. 동기화 후 로컬과
+VM 파일별 SHA-256이 다르면 실패한다.
+
+Controller 이미지 강제 재빌드와 컨테이너 재생성:
+
+```bash
+CONTROLLER_REBUILD=true ./data-plane/scripts/start.sh
+```
+
 Controller 정지:
 
 ```bash
@@ -175,7 +193,8 @@ Controller 컨테이너와 잔여 Mininet/OVS 상태 정리:
 ./data-plane/scripts/verify.sh
 ```
 
-`verify.sh`는 Controller를 실행한 뒤 다음을 자동 확인한다.
+`verify.sh`는 `sync-vm.sh`를 먼저 실행하고 Controller 이미지를 재빌드한 뒤
+다음을 자동 확인한다.
 
 - 스위치 4개, 고정 Host/Port, `pingall`
 - Primary/Backup 경로와 링크 장애·복구
@@ -243,5 +262,5 @@ multipass exec sdn-lab -- sudo ovs-vsctl list-br
   실패할 수 있다.
 - Windows에서도 같은 Ubuntu 구성을 만들지만 Multipass/Hyper-V 설정에 따라
   VM IP 대역이 달라질 수 있다.
-- VM 프로젝트 복사본을 직접 수정하지 말고 호스트 저장소 수정 후 다시
-  부트스트랩한다.
+- VM 프로젝트 복사본을 직접 수정하지 말고 호스트 저장소를 수정한다. 전체
+  플랫폼 갱신은 부트스트랩을, 데이터 플레인 검증은 `verify.sh`를 사용한다.

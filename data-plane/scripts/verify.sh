@@ -10,7 +10,8 @@ CONTROLLER_CONTAINER="${CONTROLLER_CONTAINER:-sdn-controller}"
 FAILOVER_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/failover.py"
 PERFORMANCE_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/link_performance.py"
 
-"${SCRIPT_DIR}/start.sh"
+"${SCRIPT_DIR}/sync-vm.sh"
+CONTROLLER_REBUILD=true "${SCRIPT_DIR}/start.sh"
 
 multipass exec "${VM_NAME}" -- sudo python3 -u "${FAILOVER_SCENARIO}" \
   --controller-host 127.0.0.1 \

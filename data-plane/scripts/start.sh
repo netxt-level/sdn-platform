@@ -4,6 +4,7 @@ set -Eeuo pipefail
 VM_NAME="${VM_NAME:-sdn-lab}"
 VM_PROJECT_DIR="${VM_PROJECT_DIR:-/home/ubuntu/sdn-platform}"
 CONTROLLER_REST_PORT="${CONTROLLER_REST_PORT:-8080}"
+CONTROLLER_REBUILD="${CONTROLLER_REBUILD:-false}"
 COMPOSE_FILE="${VM_PROJECT_DIR}/docker-compose.yml"
 
 if ! command -v multipass >/dev/null 2>&1; then
@@ -18,9 +19,28 @@ if ! multipass list --format csv | \
 fi
 
 multipass start "${VM_NAME}" >/dev/null 2>&1 || true
-multipass exec "${VM_NAME}" -- \
-  docker compose --profile dataplane -f "${COMPOSE_FILE}" \
-  up -d controller
+
+COMPOSE_UP=(
+  docker compose
+  --profile dataplane
+  -f "${COMPOSE_FILE}"
+  up -d
+)
+
+case "${CONTROLLER_REBUILD}" in
+  true)
+    COMPOSE_UP+=(--build --force-recreate)
+    ;;
+  false)
+    ;;
+  *)
+    echo "CONTROLLER_REBUILD must be true or false." >&2
+    exit 2
+    ;;
+esac
+
+COMPOSE_UP+=(controller)
+multipass exec "${VM_NAME}" -- "${COMPOSE_UP[@]}"
 
 multipass exec "${VM_NAME}" -- \
   curl --retry 15 --retry-delay 1 --retry-connrefused \
