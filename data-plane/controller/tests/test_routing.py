@@ -7,6 +7,7 @@ from app.routing import calculate_bidirectional_routes
 from app.routing import calculate_dijkstra_path
 from app.routing import calculate_output_hops
 from app.routing import calculate_unweighted_path
+from app.routing import calculate_weighted_bidirectional_routes
 from app.topology import PRIMARY_SWITCH_GRAPH
 from app.topology import SWITCH_LINK_PORTS
 from app.topology import WEIGHTED_SWITCH_GRAPH
@@ -180,6 +181,59 @@ class DijkstraPathCalculationTests(unittest.TestCase):
             calculate_dijkstra_path(WEIGHTED_SWITCH_GRAPH, 1, 99)
         with self.assertRaisesRegex(RoutingError, "no path"):
             calculate_dijkstra_path({1: {}, 2: {}}, 1, 2)
+
+
+class WeightedRouteCalculationTests(unittest.TestCase):
+    def test_calculates_weighted_bidirectional_primary_routes(self):
+        routes = calculate_weighted_bidirectional_routes(
+            graph=WEIGHTED_SWITCH_GRAPH,
+            link_ports=SWITCH_LINK_PORTS,
+            source_dpid=1,
+            source_port=1,
+            destination_dpid=4,
+            destination_port=3,
+        )
+
+        self.assertEqual((1, 2, 4), routes.forward.switches)
+        self.assertEqual(
+            (
+                PathHop(dpid=1, output_port=4),
+                PathHop(dpid=2, output_port=2),
+                PathHop(dpid=4, output_port=3),
+            ),
+            routes.forward.hops,
+        )
+        self.assertEqual((4, 2, 1), routes.reverse.switches)
+        self.assertEqual(
+            (
+                PathHop(dpid=4, output_port=1),
+                PathHop(dpid=2, output_port=1),
+                PathHop(dpid=1, output_port=1),
+            ),
+            routes.reverse.hops,
+        )
+
+    def test_calculates_weighted_bidirectional_backup_routes(self):
+        graph = {
+            switch: dict(neighbors)
+            for switch, neighbors in WEIGHTED_SWITCH_GRAPH.items()
+        }
+        del graph[1][2]
+        del graph[2][1]
+
+        routes = calculate_weighted_bidirectional_routes(
+            graph=graph,
+            link_ports=SWITCH_LINK_PORTS,
+            source_dpid=1,
+            source_port=1,
+            destination_dpid=4,
+            destination_port=3,
+        )
+
+        self.assertEqual((1, 3, 4), routes.forward.switches)
+        self.assertEqual((4, 3, 1), routes.reverse.switches)
+        self.assertEqual(5, routes.forward.hops[0].output_port)
+        self.assertEqual(2, routes.reverse.hops[0].output_port)
 
 
 if __name__ == "__main__":

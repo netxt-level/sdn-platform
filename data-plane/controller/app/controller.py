@@ -21,11 +21,12 @@ from app.hosts import HostRegistry
 from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
 from app.routing import RoutingError
-from app.routing import calculate_bidirectional_routes
+from app.routing import calculate_weighted_bidirectional_routes
+from app.topology import ActiveTopology
 from app.topology import get_flood_output_ports
 from app.topology import is_host_facing_port
-from app.topology import PRIMARY_SWITCH_GRAPH
 from app.topology import SWITCH_LINK_PORTS
+from app.topology import WEIGHTED_SWITCH_GRAPH
 
 
 FLOOD_ETHERTYPES = frozenset({
@@ -48,6 +49,7 @@ class SwitchConnectionController(app_manager.OSKenApp):
         self.settings = load_settings()
         self.datapaths = DatapathRegistry()
         self.hosts = HostRegistry()
+        self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
         self.api_server = ControllerApiServer(
             self.datapaths,
             self.settings,
@@ -94,6 +96,15 @@ class SwitchConnectionController(app_manager.OSKenApp):
 
         if event.state == MAIN_DISPATCHER:
             previous = self.datapaths.register(datapath)
+            try:
+                topology_changed = self.topology.connect_switch(datapath.id)
+            except ValueError as error:
+                topology_changed = False
+                self.logger.warning(
+                    "topology_switch_ignored dpid=%s reason=%s",
+                    dpid,
+                    error,
+                )
             if previous is None:
                 event_name = "switch_connected"
             elif previous is datapath:
@@ -106,8 +117,23 @@ class SwitchConnectionController(app_manager.OSKenApp):
                 dpid,
                 len(self.datapaths),
             )
+            if topology_changed:
+                self.logger.info(
+                    "topology_switch_activated dpid=%s active_switches=%d",
+                    dpid,
+                    len(self.topology.snapshot()),
+                )
         elif event.state == DEAD_DISPATCHER:
             if self.datapaths.unregister(datapath):
+                try:
+                    self.topology.disconnect_switch(datapath.id)
+                except ValueError as error:
+                    self.logger.warning(
+                        "topology_switch_disconnect_ignored dpid=%s "
+                        "reason=%s",
+                        dpid,
+                        error,
+                    )
                 self.logger.info(
                     "switch_disconnected dpid=%s connected_switches=%d",
                     dpid,
@@ -210,8 +236,8 @@ class SwitchConnectionController(app_manager.OSKenApp):
             return False
 
         try:
-            routes = calculate_bidirectional_routes(
-                graph=PRIMARY_SWITCH_GRAPH,
+            routes = calculate_weighted_bidirectional_routes(
+                graph=self.topology.snapshot(),
                 link_ports=SWITCH_LINK_PORTS,
                 source_dpid=source.dpid,
                 source_port=source.port,

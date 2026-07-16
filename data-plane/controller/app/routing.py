@@ -155,6 +155,29 @@ def calculate_route(
     )
 
 
+def calculate_weighted_route(
+    graph,
+    link_ports,
+    source_dpid,
+    destination_dpid,
+    destination_port,
+):
+    """Calculate a minimum-cost path and output ports toward one host."""
+    weighted_path = calculate_dijkstra_path(
+        graph,
+        source_dpid,
+        destination_dpid,
+    )
+    return Route(
+        switches=weighted_path.switches,
+        hops=calculate_output_hops(
+            weighted_path.switches,
+            link_ports,
+            destination_port,
+        ),
+    )
+
+
 def calculate_bidirectional_routes(
     graph,
     link_ports,
@@ -173,6 +196,33 @@ def calculate_bidirectional_routes(
             destination_port,
         ),
         reverse=calculate_route(
+            graph,
+            link_ports,
+            destination_dpid,
+            source_dpid,
+            source_port,
+        ),
+    )
+
+
+def calculate_weighted_bidirectional_routes(
+    graph,
+    link_ports,
+    source_dpid,
+    source_port,
+    destination_dpid,
+    destination_port,
+):
+    """Calculate forward and reverse routes using weighted link costs."""
+    return BidirectionalRoutes(
+        forward=calculate_weighted_route(
+            graph,
+            link_ports,
+            source_dpid,
+            destination_dpid,
+            destination_port,
+        ),
+        reverse=calculate_weighted_route(
             graph,
             link_ports,
             destination_dpid,
