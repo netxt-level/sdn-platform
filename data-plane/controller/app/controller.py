@@ -13,19 +13,29 @@ from app.api import ControllerApiServer
 from app.config import load_settings
 from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
+from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
+from app.flow_manager import install_l2_forwarding_flow
 from app.flow_manager import send_packet_out
 from app.hosts import HostRegistry
 from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
+from app.routing import RoutingError
+from app.routing import calculate_bidirectional_routes
 from app.topology import get_flood_output_ports
 from app.topology import is_host_facing_port
+from app.topology import PRIMARY_SWITCH_GRAPH
+from app.topology import SWITCH_LINK_PORTS
 
 
 FLOOD_ETHERTYPES = frozenset({
     ether_types.ETH_TYPE_ARP,
     ether_types.ETH_TYPE_IP,
 })
+L2_FORWARDING_ETHERTYPES = (
+    ether_types.ETH_TYPE_ARP,
+    ether_types.ETH_TYPE_IP,
+)
 
 
 class SwitchConnectionController(app_manager.OSKenApp):
@@ -141,6 +151,14 @@ class SwitchConnectionController(app_manager.OSKenApp):
         if is_host_facing_port(datapath.id, in_port):
             self._learn_source_host(datapath, in_port, metadata)
 
+        if (
+            metadata.ethertype in FLOOD_ETHERTYPES
+            and classify_destination(metadata.destination_mac)
+            == "unknown_unicast"
+            and self._forward_known_unicast(msg, metadata)
+        ):
+            return
+
         self._flood_packet(msg, metadata)
 
     def _learn_source_host(self, datapath, in_port, metadata):
@@ -171,6 +189,124 @@ class SwitchConnectionController(app_manager.OSKenApp):
             result.current.dpid,
             result.current.port,
         )
+
+        if result.change == "moved":
+            self._invalidate_host_flows(result.current.mac)
+
+    def _invalidate_host_flows(self, mac):
+        datapaths = self.datapaths.snapshot()
+        for datapath in datapaths:
+            delete_l2_forwarding_flows_for_mac(datapath, mac)
+        self.logger.info(
+            "l2_flows_invalidated mac=%s switches=%d",
+            mac,
+            len(datapaths),
+        )
+
+    def _forward_known_unicast(self, msg, metadata):
+        source = self.hosts.get(metadata.source_mac)
+        destination = self.hosts.get(metadata.destination_mac)
+        if source is None or destination is None:
+            return False
+
+        try:
+            routes = calculate_bidirectional_routes(
+                graph=PRIMARY_SWITCH_GRAPH,
+                link_ports=SWITCH_LINK_PORTS,
+                source_dpid=source.dpid,
+                source_port=source.port,
+                destination_dpid=destination.dpid,
+                destination_port=destination.port,
+            )
+        except RoutingError as error:
+            self.logger.warning(
+                "l2_route_failed src=%s dst=%s reason=%s",
+                source.mac,
+                destination.mac,
+                error,
+            )
+            return False
+
+        route_dpids = {
+            hop.dpid
+            for route in (routes.forward, routes.reverse)
+            for hop in route.hops
+        }
+        route_datapaths = {
+            dpid: self.datapaths.get(dpid)
+            for dpid in route_dpids
+        }
+        missing_dpids = sorted(
+            dpid
+            for dpid, datapath in route_datapaths.items()
+            if datapath is None
+        )
+        if missing_dpids:
+            self.logger.warning(
+                "l2_route_failed src=%s dst=%s missing_switches=%s",
+                source.mac,
+                destination.mac,
+                ",".join(f"{dpid:016x}" for dpid in missing_dpids),
+            )
+            return False
+
+        current_hop = next(
+            (
+                hop
+                for hop in routes.forward.hops
+                if hop.dpid == msg.datapath.id
+            ),
+            None,
+        )
+        if current_hop is None:
+            self.logger.warning(
+                "l2_route_failed src=%s dst=%s packet_switch=%016x "
+                "reason=switch_not_on_path",
+                source.mac,
+                destination.mac,
+                msg.datapath.id,
+            )
+            return False
+
+        self._install_route_flows(
+            routes.forward,
+            route_datapaths,
+            source.mac,
+            destination.mac,
+        )
+        self._install_route_flows(
+            routes.reverse,
+            route_datapaths,
+            destination.mac,
+            source.mac,
+        )
+        send_packet_out(
+            datapath=msg.datapath,
+            buffer_id=msg.buffer_id,
+            in_port=msg.match["in_port"],
+            output_ports=(current_hop.output_port,),
+            data=msg.data,
+        )
+        self.logger.info(
+            "l2_path_installed src=%s dst=%s forward=%s reverse=%s",
+            source.mac,
+            destination.mac,
+            "-".join(str(dpid) for dpid in routes.forward.switches),
+            "-".join(str(dpid) for dpid in routes.reverse.switches),
+        )
+        return True
+
+    @staticmethod
+    def _install_route_flows(route, datapaths, source_mac, destination_mac):
+        for hop in route.hops:
+            for ethertype in L2_FORWARDING_ETHERTYPES:
+                install_l2_forwarding_flow(
+                    datapath=datapaths[hop.dpid],
+                    source_mac=source_mac,
+                    destination_mac=destination_mac,
+                    ethertype=ethertype,
+                    output_port=hop.output_port,
+                )
 
     def _flood_packet(self, msg, metadata):
         datapath = msg.datapath

@@ -106,9 +106,9 @@ Flooding에는 사용하지 않는다. 각 Packet-Out은 입력 포트를 제외
 - 아직 목적지 Flow가 없는 IPv4 Unicast: Flooding Tree로 전달
 - LLDP, IPv6 및 그 밖의 Ethertype: 현재 전달 대상에서 제외
 
-이 단계에서는 `pingall`이 성공할 수 있지만 모든 ARP 및 IPv4 패킷이 계속
-Table-Miss로 Controller에 전달된다. 반복 패킷의 Packet-In 감소는 목적지별
-Unicast Flow를 설치하는 다음 단계에서 검증한다.
+Broadcast와 아직 위치를 모르는 목적지 패킷은 Table-Miss로 Controller에
+전달된다. 출발지와 목적지 위치를 모두 학습하면 Controller가 목적지별
+Unicast Flow를 설치한다.
 
 ## Primary 경로 계산
 
@@ -123,5 +123,30 @@ web   → s4(port 1) → s2(port 1) → s1(port 1) → h1
 
 동일 스위치에 연결된 호스트는 해당 스위치의 목적지 호스트 포트만 출력
 포트로 사용한다. 경로 계산 모듈은 OpenFlow 객체와 분리되어 있으며,
-스위치 경로와 각 스위치의 출력 포트만 반환한다. 이 단계에서는 계산 결과를
-Flow Rule로 설치하지 않으므로 실행 중 패킷 전달 방식은 아직 변경되지 않는다.
+스위치 경로와 각 스위치의 출력 포트만 반환한다.
+
+## 학습 기반 Unicast Flow
+
+두 호스트의 위치가 모두 알려진 ARP 또는 IPv4 Unicast Packet-In을 받으면
+Primary 경로의 모든 스위치에 순방향과 역방향 Flow를 설치한다. 첫 패킷은
+Packet-Out으로 전달하며 이후 패킷은 스위치가 직접 처리한다.
+
+| 항목 | 값 |
+|---|---|
+| Match | `eth_src`, `eth_dst`, `eth_type` |
+| 지원 Ethertype | ARP `0x0806`, IPv4 `0x0800` |
+| Action | 계산된 포트로 `OUTPUT` |
+| Priority | `100` |
+| Idle timeout | `60초` |
+| Hard timeout | `0` |
+| Cookie prefix | `0x53444e10` |
+
+호스트의 스위치 또는 포트가 변경되면 해당 MAC이 출발지나 목적지인 내부 L2
+Flow를 모든 연결 스위치에서 제거한다. Broadcast, 목적지 위치를 모르는
+Unicast, IPv6 및 미지원 Ethertype 정책은 이전 단계와 동일하다.
+
+설치된 Rule은 Mininet 실행 중 다음 명령으로 확인한다.
+
+```bash
+multipass exec sdn-lab -- sudo ovs-ofctl -O OpenFlow13 dump-flows s1
+```
