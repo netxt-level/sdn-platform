@@ -4,6 +4,7 @@ from app.topology import get_flood_output_ports
 from app.topology import is_host_facing_port
 from app.topology import PRIMARY_SWITCH_GRAPH
 from app.topology import SWITCH_LINK_PORTS
+from app.topology import WEIGHTED_SWITCH_GRAPH
 
 
 class TopologyPortRoleTests(unittest.TestCase):
@@ -44,6 +45,22 @@ class TopologyPortRoleTests(unittest.TestCase):
     def test_primary_graph_excludes_s3_s4_backup_link(self):
         self.assertNotIn(4, PRIMARY_SWITCH_GRAPH[3])
         self.assertNotIn(3, PRIMARY_SWITCH_GRAPH[4])
+
+    def test_weighted_graph_contains_symmetric_positive_link_costs(self):
+        for source, neighbors in WEIGHTED_SWITCH_GRAPH.items():
+            for destination, cost in neighbors.items():
+                with self.subTest(source=source, destination=destination):
+                    self.assertGreater(cost, 0)
+                    self.assertEqual(
+                        cost,
+                        WEIGHTED_SWITCH_GRAPH[destination][source],
+                    )
+
+    def test_weighted_graph_prefers_upper_primary_links(self):
+        self.assertLess(
+            WEIGHTED_SWITCH_GRAPH[1][2] + WEIGHTED_SWITCH_GRAPH[2][4],
+            WEIGHTED_SWITCH_GRAPH[1][3] + WEIGHTED_SWITCH_GRAPH[3][4],
+        )
 
 
 if __name__ == "__main__":

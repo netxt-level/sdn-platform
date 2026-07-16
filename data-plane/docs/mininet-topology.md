@@ -67,8 +67,8 @@ multipass exec sdn-lab -- sudo python3 \
   /home/ubuntu/sdn-platform/data-plane/mininet/topology.py
 ```
 
-현재 Controller는 Table-Miss Rule만 설치하고, ARP와 IPv4 패킷은
-Packet-Out으로 전달한다. 목적지별 전달 Flow 설치는 다음 단계에서 추가한다.
+현재 Controller는 Table-Miss Rule과 학습 기반 ARP·IPv4 Unicast Flow를
+설치한다. Broadcast와 목적지 위치를 모르는 패킷은 Packet-Out으로 전달한다.
 
 ## 호스트 위치 학습
 
@@ -84,8 +84,8 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 ```
 
 `host_learned`, `host_ip_updated`, `host_moved` 로그에는 학습한 MAC, IPv4,
-DPID와 입력 포트가 포함된다. 학습 정보는 유지하지만 목적지별 전달 Flow는
-아직 설치하지 않는다.
+DPID와 입력 포트가 포함된다. 두 호스트의 위치를 모두 알면 목적지별
+Unicast Flow 설치에 이 정보를 사용한다.
 
 ## Flooding Tree와 Unknown Unicast 정책
 
@@ -150,3 +150,23 @@ Unicast, IPv6 및 미지원 Ethertype 정책은 이전 단계와 동일하다.
 ```bash
 multipass exec sdn-lab -- sudo ovs-ofctl -O OpenFlow13 dump-flows s1
 ```
+
+## 가중치 기반 Dijkstra 계산
+
+전체 다이아몬드 토폴로지를 포함하는 별도 가중 그래프에서 Dijkstra 최단
+경로를 계산한다.
+
+| 링크 | 비용 | 역할 |
+|---|---:|---|
+| `s1-s2` | 1 | Primary |
+| `s2-s4` | 1 | Primary |
+| `s1-s3` | 10 | Backup |
+| `s3-s4` | 10 | Backup |
+
+정상 상태에서는 총비용 2인 `s1-s2-s4`를 선택한다. Primary 링크가
+비활성화되면 총비용 20인 `s1-s3-s4`를 선택할 수 있다. 동일 비용 경로는
+전체 DPID 경로를 사전순으로 비교해 결정적으로 선택한다.
+
+현재 체크포인트에서는 계산 모듈과 단위 테스트만 추가한다. Controller가
+실제 링크 상태로 그래프를 갱신하고 기존 Flow를 교체하는 동작은 다음
+체크포인트에서 연결한다.

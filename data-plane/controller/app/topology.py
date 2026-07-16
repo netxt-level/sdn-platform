@@ -20,6 +20,13 @@ PRIMARY_SWITCH_GRAPH = {
     4: (2,),
 }
 
+WEIGHTED_SWITCH_GRAPH = {
+    1: {2: 1, 3: 10},
+    2: {1: 1, 4: 1},
+    3: {1: 10, 4: 10},
+    4: {2: 1, 3: 10},
+}
+
 FLOOD_TREE_PORTS = {
     1: frozenset({1, 2, 3, 4, 5}),
     2: frozenset({1, 2}),
