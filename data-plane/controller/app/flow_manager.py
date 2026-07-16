@@ -168,3 +168,21 @@ def delete_l2_forwarding_flows_for_mac(datapath, mac):
         flow_mods.append(flow_mod)
 
     return tuple(flow_mods)
+
+
+def delete_all_l2_forwarding_flows(datapath):
+    """Delete all Controller-managed learned-unicast rules on a datapath."""
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+    flow_mod = parser.OFPFlowMod(
+        datapath=datapath,
+        cookie=L2_FORWARDING_COOKIE_PREFIX,
+        cookie_mask=L2_FORWARDING_COOKIE_MASK,
+        table_id=TABLE_MISS_TABLE_ID,
+        command=ofproto.OFPFC_DELETE,
+        out_port=ofproto.OFPP_ANY,
+        out_group=ofproto.OFPG_ANY,
+        match=parser.OFPMatch(),
+    )
+    datapath.send_msg(flow_mod)
+    return flow_mod

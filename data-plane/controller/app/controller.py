@@ -13,6 +13,7 @@ from app.api import ControllerApiServer
 from app.config import load_settings
 from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
+from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
 from app.flow_manager import install_l2_forwarding_flow
@@ -23,7 +24,7 @@ from app.packet_parser import parse_packet_metadata
 from app.routing import RoutingError
 from app.routing import calculate_weighted_bidirectional_routes
 from app.topology import ActiveTopology
-from app.topology import get_flood_output_ports
+from app.topology import get_neighbor_switch
 from app.topology import is_host_facing_port
 from app.topology import SWITCH_LINK_PORTS
 from app.topology import WEIGHTED_SWITCH_GRAPH
@@ -123,16 +124,26 @@ class SwitchConnectionController(app_manager.OSKenApp):
                     dpid,
                     len(self.topology.snapshot()),
                 )
+                self._invalidate_all_l2_flows(
+                    reason=f"switch_connected:{dpid}",
+                )
         elif event.state == DEAD_DISPATCHER:
             if self.datapaths.unregister(datapath):
+                topology_changed = False
                 try:
-                    self.topology.disconnect_switch(datapath.id)
+                    topology_changed = self.topology.disconnect_switch(
+                        datapath.id,
+                    )
                 except ValueError as error:
                     self.logger.warning(
                         "topology_switch_disconnect_ignored dpid=%s "
                         "reason=%s",
                         dpid,
                         error,
+                    )
+                if topology_changed:
+                    self._invalidate_all_l2_flows(
+                        reason=f"switch_disconnected:{dpid}",
                     )
                 self.logger.info(
                     "switch_disconnected dpid=%s connected_switches=%d",
@@ -144,6 +155,74 @@ class SwitchConnectionController(app_manager.OSKenApp):
                     "switch_disconnect_ignored dpid=%s reason=stale_datapath",
                     dpid,
                 )
+
+    @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
+    def handle_port_status(self, event):
+        msg = event.msg
+        datapath = msg.datapath
+        port = msg.desc.port_no
+        neighbor = get_neighbor_switch(datapath.id, port)
+        if neighbor is None:
+            self.logger.debug(
+                "topology_port_ignored dpid=%016x port=%d "
+                "reason=not_switch_link",
+                datapath.id,
+                port,
+            )
+            return
+
+        try:
+            active = self._port_is_active(msg)
+            topology_changed = self.topology.set_link_port_state(
+                datapath.id,
+                neighbor,
+                active,
+            )
+        except ValueError as error:
+            self.logger.warning(
+                "topology_port_rejected dpid=%016x port=%d reason=%s",
+                datapath.id,
+                port,
+                error,
+            )
+            return
+
+        if not topology_changed:
+            self.logger.debug(
+                "topology_link_unchanged source=%016x destination=%016x "
+                "port=%d active=%s",
+                datapath.id,
+                neighbor,
+                port,
+                active,
+            )
+            return
+
+        state = "up" if active else "down"
+        self.logger.info(
+            "topology_link_%s source=%016x destination=%016x port=%d",
+            state,
+            datapath.id,
+            neighbor,
+            port,
+        )
+        self._invalidate_all_l2_flows(
+            reason=f"link_{state}:{datapath.id}-{neighbor}",
+        )
+
+    @staticmethod
+    def _port_is_active(msg):
+        ofproto = msg.datapath.ofproto
+        if msg.reason == ofproto.OFPPR_DELETE:
+            return False
+        if msg.reason not in (ofproto.OFPPR_ADD, ofproto.OFPPR_MODIFY):
+            raise ValueError(f"unknown port status reason: {msg.reason}")
+
+        inactive_state = ofproto.OFPPS_LINK_DOWN | ofproto.OFPPS_BLOCKED
+        return not (
+            msg.desc.config & ofproto.OFPPC_PORT_DOWN
+            or msg.desc.state & inactive_state
+        )
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def handle_packet_in(self, event):
@@ -226,6 +305,16 @@ class SwitchConnectionController(app_manager.OSKenApp):
         self.logger.info(
             "l2_flows_invalidated mac=%s switches=%d",
             mac,
+            len(datapaths),
+        )
+
+    def _invalidate_all_l2_flows(self, reason):
+        datapaths = self.datapaths.snapshot()
+        for datapath in datapaths:
+            delete_all_l2_forwarding_flows(datapath)
+        self.logger.info(
+            "l2_flows_invalidated reason=%s switches=%d",
+            reason,
             len(datapaths),
         )
 
@@ -348,7 +437,10 @@ class SwitchConnectionController(app_manager.OSKenApp):
             )
             return
 
-        output_ports = get_flood_output_ports(datapath.id, in_port)
+        output_ports = self.topology.get_flood_output_ports(
+            datapath.id,
+            in_port,
+        )
         if not output_ports:
             self.logger.debug(
                 "packet_out_skipped reason=no_flood_port dpid=%016x port=%d",

@@ -14,6 +14,7 @@ from app.flow_manager import L2_FORWARDING_PRIORITY
 from app.flow_manager import build_l2_forwarding_cookie
 from app.flow_manager import build_l2_forwarding_flow
 from app.flow_manager import build_packet_out
+from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
 from app.flow_manager import install_l2_forwarding_flow
@@ -198,6 +199,22 @@ class L2ForwardingFlowTests(unittest.TestCase):
             self.assertEqual(L2_FORWARDING_COOKIE_MASK, flow_mod.cookie_mask)
             self.assertEqual(ofproto_v1_3.OFPP_ANY, flow_mod.out_port)
             self.assertEqual(ofproto_v1_3.OFPG_ANY, flow_mod.out_group)
+
+    def test_deletes_all_controller_managed_l2_rules(self):
+        datapath = FakeDatapath()
+
+        flow_mod = delete_all_l2_forwarding_flows(datapath)
+
+        self.assertEqual([flow_mod], datapath.sent_messages)
+        self.assertEqual(ofproto_v1_3.OFPFC_DELETE, flow_mod.command)
+        self.assertEqual(L2_FORWARDING_COOKIE_PREFIX, flow_mod.cookie)
+        self.assertEqual(L2_FORWARDING_COOKIE_MASK, flow_mod.cookie_mask)
+        self.assertEqual(ofproto_v1_3.OFPP_ANY, flow_mod.out_port)
+        self.assertEqual(ofproto_v1_3.OFPG_ANY, flow_mod.out_group)
+        self.assertEqual(
+            [],
+            flow_mod.match.to_jsondict()["OFPMatch"]["oxm_fields"],
+        )
 
 
 if __name__ == "__main__":

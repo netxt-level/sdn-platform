@@ -89,7 +89,8 @@ Unicast Flow 설치에 이 정보를 사용한다.
 
 ## Flooding Tree와 Unknown Unicast 정책
 
-Broadcast storm을 막기 위해 Flooding은 다음 트리 링크만 사용한다.
+Broadcast storm을 막기 위해 활성 링크 그래프에서 최소 신장 트리를
+계산하고 해당 트리 포트로만 Flooding한다. 정상 상태의 트리는 다음과 같다.
 
 ```text
 s3
@@ -97,8 +98,9 @@ s3
 s1 -- s2 -- s4
 ```
 
-`s3-s4` 링크는 Backup 경로용으로 유지하지만 Broadcast와 Unknown Unicast
-Flooding에는 사용하지 않는다. 각 Packet-Out은 입력 포트를 제외한 트리
+정상 상태에서는 `s3-s4` 링크가 트리에서 제외된다. `s1-s2`가 down이면
+트리를 `s1-s3-s4-s2` 형태로 다시 계산해 ARP와 Unknown Unicast도 Backup
+경로를 통과할 수 있게 한다. 각 Packet-Out은 입력 포트를 제외한 현재 트리
 포트로만 출력한다.
 
 - ARP Request와 Reply: Flooding Tree로 전달
@@ -110,11 +112,10 @@ Broadcast와 아직 위치를 모르는 목적지 패킷은 Table-Miss로 Contro
 전달된다. 출발지와 목적지 위치를 모두 학습하면 Controller가 목적지별
 Unicast Flow를 설치한다.
 
-## Primary 경로 계산
+## 가중치 기반 경로 계산
 
-목적지별 Unicast Flow 설치에 사용할 Primary 스위치 그래프는 Flooding
-Tree와 동일하다. `s3-s4` 링크는 Backup으로 유지하며 Primary 계산에서는
-제외한다.
+목적지별 Unicast Flow는 활성 링크 그래프에서 Dijkstra 최소 비용 경로를
+계산해 설치한다. 정상 상태에서는 비용이 낮은 Primary 경로를 사용한다.
 
 ```text
 h1/s1 → s1(port 4) → s2(port 2) → s4(port 3) → web
@@ -128,8 +129,8 @@ web   → s4(port 1) → s2(port 1) → s1(port 1) → h1
 ## 학습 기반 Unicast Flow
 
 두 호스트의 위치가 모두 알려진 ARP 또는 IPv4 Unicast Packet-In을 받으면
-Primary 경로의 모든 스위치에 순방향과 역방향 Flow를 설치한다. 첫 패킷은
-Packet-Out으로 전달하며 이후 패킷은 스위치가 직접 처리한다.
+현재 최소 비용 경로의 모든 스위치에 순방향과 역방향 Flow를 설치한다. 첫
+패킷은 Packet-Out으로 전달하며 이후 패킷은 스위치가 직접 처리한다.
 
 | 항목 | 값 |
 |---|---|
@@ -171,7 +172,22 @@ Controller는 접속된 스위치와 활성 링크만 포함하는 그래프 스
 새 Unicast 경로를 계산한다. 스위치가 연결되면 그래프에 추가되고 연결이
 끊기면 해당 스위치와 연결된 링크가 경로 계산 대상에서 제외된다.
 
-개별 설정 링크를 양방향으로 활성화·비활성화하는 상태 관리도 제공한다.
-다만 현재는 OVS의 실제 포트 down/up 이벤트를 상태 관리에 전달하지 않으므로,
-양 끝 스위치가 연결된 설정 링크는 활성 상태로 간주한다. 실제 링크 이벤트
-감지, 기존 Flow 무효화 및 Backup 경로 재설치는 다음 체크포인트에서 연결한다.
+Controller는 OpenFlow `PortStatus`의 포트 설정과 `LINK_DOWN`, `BLOCKED`,
+삭제 상태를 반영한다. 링크 양쪽 포트가 모두 정상일 때만 활성 링크로
+간주한다. 링크 또는 스위치 상태가 바뀌면 Controller Cookie 범위에 해당하는
+학습형 L2 Flow를 모든 연결 스위치에서 제거한다. 다음 패킷부터 변경된
+그래프와 Flooding Tree를 사용하므로 Primary 장애 시 Backup으로 우회하고,
+Primary 복구 후에는 다시 비용이 낮은 경로로 복귀한다.
+
+Mininet CLI에서 다음 순서로 장애와 복구를 확인할 수 있다.
+
+```text
+h1 ping -c 2 10.0.0.100
+link s1 s2 down
+h1 ping -c 2 10.0.0.100
+link s1 s2 up
+h1 ping -c 2 10.0.0.100
+```
+
+Controller 로그의 `topology_link_down`, `topology_link_up`,
+`l2_flows_invalidated`, `l2_path_installed` 이벤트로 선택 경로를 확인한다.

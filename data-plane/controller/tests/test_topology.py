@@ -1,7 +1,9 @@
 import unittest
 
 from app.topology import ActiveTopology
+from app.topology import calculate_flood_tree_links
 from app.topology import get_flood_output_ports
+from app.topology import get_neighbor_switch
 from app.topology import is_host_facing_port
 from app.topology import PRIMARY_SWITCH_GRAPH
 from app.topology import SWITCH_LINK_PORTS
@@ -42,6 +44,13 @@ class TopologyPortRoleTests(unittest.TestCase):
             for destination in neighbors:
                 with self.subTest(source=source, destination=destination):
                     self.assertIn(source, SWITCH_LINK_PORTS[destination])
+
+    def test_resolves_neighbor_switch_from_transit_port(self):
+        self.assertEqual(2, get_neighbor_switch(1, 4))
+        self.assertEqual(3, get_neighbor_switch(1, 5))
+        self.assertEqual(4, get_neighbor_switch(3, 2))
+        self.assertIsNone(get_neighbor_switch(1, 1))
+        self.assertIsNone(get_neighbor_switch(99, 1))
 
     def test_primary_graph_excludes_s3_s4_backup_link(self):
         self.assertNotIn(4, PRIMARY_SWITCH_GRAPH[3])
@@ -106,6 +115,80 @@ class ActiveTopologyTests(unittest.TestCase):
         self.assertEqual(1, graph[1][2])
         self.assertEqual(1, graph[2][1])
 
+    def test_link_stays_down_until_both_port_endpoints_recover(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+
+        self.assertTrue(self.topology.set_link_port_state(1, 2, False))
+        self.assertFalse(self.topology.set_link_port_state(2, 1, False))
+        self.assertNotIn(2, self.topology.snapshot()[1])
+
+        self.assertFalse(self.topology.set_link_port_state(1, 2, True))
+        self.assertNotIn(2, self.topology.snapshot()[1])
+        self.assertTrue(self.topology.set_link_port_state(2, 1, True))
+        self.assertEqual(1, self.topology.snapshot()[1][2])
+
+    def test_active_flood_tree_uses_primary_links_normally(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+
+        self.assertEqual(
+            ((1, 2), (2, 4), (1, 3)),
+            calculate_flood_tree_links(self.topology.snapshot()),
+        )
+        self.assertEqual(
+            (2, 3, 4, 5),
+            self.topology.get_flood_output_ports(1, 1),
+        )
+        self.assertEqual(
+            (),
+            self.topology.get_flood_output_ports(3, 2),
+        )
+
+    def test_active_flood_tree_moves_to_backup_after_primary_failure(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+        self.topology.set_link_port_state(1, 2, False)
+
+        self.assertEqual(
+            ((2, 4), (1, 3), (3, 4)),
+            calculate_flood_tree_links(self.topology.snapshot()),
+        )
+        self.assertEqual(
+            (2, 3, 5),
+            self.topology.get_flood_output_ports(1, 1),
+        )
+        self.assertEqual(
+            (2,),
+            self.topology.get_flood_output_ports(3, 1),
+        )
+        self.assertEqual(
+            (1, 3),
+            self.topology.get_flood_output_ports(4, 2),
+        )
+
+    def test_active_flood_tree_does_not_forward_from_non_tree_port(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+
+        self.assertEqual(
+            (),
+            self.topology.get_flood_output_ports(4, 2),
+        )
+        self.assertEqual(
+            (),
+            self.topology.get_flood_output_ports(99, 1),
+        )
+
+    def test_manual_link_enable_does_not_override_down_port(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+
+        self.topology.set_link_port_state(1, 2, False)
+        self.assertFalse(self.topology.set_link_state(1, 2, True))
+
+        self.assertNotIn(2, self.topology.snapshot()[1])
+
     def test_repeated_state_update_reports_no_change(self):
         self.assertTrue(self.topology.connect_switch(1))
         self.assertFalse(self.topology.connect_switch(1))
@@ -129,6 +212,8 @@ class ActiveTopologyTests(unittest.TestCase):
             self.topology.set_link_state(1, 4, False)
         with self.assertRaisesRegex(ValueError, "must be a boolean"):
             self.topology.set_link_state(1, 2, 1)
+        with self.assertRaisesRegex(ValueError, "must be a boolean"):
+            self.topology.set_link_port_state(1, 2, 1)
 
     def test_rejects_asymmetric_configured_graph(self):
         with self.assertRaisesRegex(ValueError, "must be symmetric"):
