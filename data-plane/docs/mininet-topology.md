@@ -1,5 +1,8 @@
 # Mininet 토폴로지
 
+- 상태: 구현 및 자동 검증 완료
+- 최종 수정일: 2026-07-16
+
 ## 구성
 
 ```text
@@ -49,10 +52,11 @@ OpenFlow 1.3과 `secure` fail mode를 사용한다.
 
 각 호스트 인터페이스는 해당 네임스페이스의 0번 Mininet 포트를 사용한다.
 
-## 검증
+## 빠른 검증과 대화형 실행
 
 Controller를 시작한 후 호스트 주소, 포트 연결, 스위치 연결 상태 및
-`pingall`을 자동 검증한다.
+`pingall`만 빠르게 확인하려면 다음 명령을 사용한다. 장애 우회와 링크 성능을
+포함한 전체 검증은 아래의 `./data-plane/scripts/verify.sh`를 사용한다.
 
 ```bash
 ./data-plane/scripts/start.sh
@@ -112,7 +116,7 @@ Broadcast와 아직 위치를 모르는 목적지 패킷은 Table-Miss로 Contro
 전달된다. 출발지와 목적지 위치를 모두 학습하면 Controller가 목적지별
 Unicast Flow를 설치한다.
 
-## 가중치 기반 경로 계산
+## 경로와 출력 포트
 
 목적지별 Unicast Flow는 활성 링크 그래프에서 Dijkstra 최소 비용 경로를
 계산해 설치한다. 정상 상태에서는 비용이 낮은 Primary 경로를 사용한다.
@@ -192,6 +196,27 @@ h1 ping -c 2 10.0.0.100
 Controller 로그의 `topology_link_down`, `topology_link_up`,
 `l2_flows_invalidated`, `l2_path_installed` 이벤트로 선택 경로를 확인한다.
 
+## 링크별 성능 설정
+
+스위치 간 링크에는 `bw`, `delay`, `loss`를 개별 지정할 수 있다. 동일 옵션을
+여러 번 사용해 필요한 링크만 설정한다.
+
+```bash
+multipass exec sdn-lab -- sudo python3 \
+  /home/ubuntu/sdn-platform/data-plane/mininet/topology.py \
+  --link-config s1-s2:bw=10,delay=5ms,loss=0 \
+  --link-config s2-s4:bw=10,delay=5ms,loss=0 \
+  --link-config s1-s3:bw=20,delay=2ms,loss=0.5
+```
+
+- `bw`: Mbps 단위의 0보다 큰 값
+- `delay`: `us`, `ms`, `s` 단위
+- `loss`: `0~100` 범위의 백분율
+
+설정 가능한 링크는 `s1-s2`, `s1-s3`, `s2-s4`, `s3-s4`다. 설정하지 않은
+링크는 Mininet 기본값을 사용한다. 링크 방향은 정규화되므로 `s2-s1`도
+`s1-s2`와 동일하지만 동일 링크를 두 번 지정하면 오류로 종료한다.
+
 ## 자동 장애·복구 검증
 
 macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나리오를 실행한다.
@@ -212,6 +237,11 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 8. 기존 L2 Flow와 ARP 제거 후 호스트 재학습, Primary Flow 및 `pingall`
 9. Mininet 네트워크 및 인터페이스 정리
 
+장애·복구 시나리오가 끝나면 Primary의 `s1-s2`, `s2-s4`에 각각
+`10 Mbps`, `5 ms`, `0% loss`를 설정한 별도 네트워크를 시작한다. ICMP 평균
+RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범위에 있는지
+검증한 뒤 네트워크를 정리한다.
+
 경로 검증은 ping 결과만 확인하지 않고 `ovs-ofctl dump-flows` 출력의
 `h1 → web` IPv4 Flow와 각 스위치 출력 포트를 비교한다. 실패하더라도
 시나리오의 `finally`에서 Mininet을 중지하며, 강제 종료 등으로 상태가
@@ -220,3 +250,25 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 ```bash
 ./data-plane/scripts/cleanup.sh
 ```
+
+자동 검증의 실제 시나리오는 다음 두 파일로 분리되어 있다.
+
+- `data-plane/mininet/scenarios/failover.py`: Primary/Backup 전환, 복구,
+  Controller 재시작 검증
+- `data-plane/mininet/scenarios/link_performance.py`: TCLink 지연과 대역폭
+  제한 검증
+
+## 현재 제한사항
+
+- Dijkstra 링크 비용과 Mininet의 `bw`, `delay`, `loss` 값은 독립된 설정이다.
+  현재 경로 선택 비용은 Controller 토폴로지의 고정 Primary/Backup 정책을
+  사용한다.
+- 링크 품질 옵션은 네 개의 스위치 간 transit 링크에만 적용한다. 호스트
+  access 링크는 Mininet 기본값을 사용한다.
+- Packet loss는 확률적이므로 자동 성능 시나리오는 지연과 TCP 대역폭 제한을
+  검증하고 loss 수치 자체는 판정하지 않는다.
+- Controller 외부 Flow Rule API, OVS Meter, Analyzer Mirror는 이 인프라
+  단계에서 아직 연결하지 않았다.
+- Mininet 호스트와 OVS 스위치는 영구 VM이 아니라 시나리오 실행 중 생성되는
+  Linux 네임스페이스와 가상 인터페이스다. 종료 후 `cleanup.sh`로 잔여 상태를
+  제거한다.

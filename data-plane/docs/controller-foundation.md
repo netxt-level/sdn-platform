@@ -1,190 +1,198 @@
-# OpenFlow Controller Foundation
+# OpenFlow Controller 인프라
 
-- 상태: 구현 전 최종 제안
-- 적용 단계: Milestone 1 — Controller starts and one switch connects
-- 최종 수정일: 2026-07-15
+- 상태: Controller·L2·경로 우회 구현 및 자동 검증 완료
+- 적용 범위: `feat/data-plane-infrastructure`
+- 최종 수정일: 2026-07-16
 
-## 목표
+## 목표와 현재 범위
 
-OpenFlow 1.3 Controller를 컨테이너 서비스로 추가하고 Mininet이 생성한 OVS 스위치 한 대를 연결한다. 스위치 연결 상태를 관리하고 Table-Miss Rule을 설치하며, REST API와 운영 로그를 통해 상태를 확인할 수 있어야 한다.
+OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리하고,
+호스트 학습·기본 L2 전달·가중치 기반 경로 선택·링크 장애 우회를 수행한다.
+현재 브랜치는 독립 실행 가능한 데이터 플레인 인프라까지만 담당한다.
 
-이번 단계는 전체 네트워크 통신을 구현하는 단계가 아니다. MAC 학습, ARP 처리, L2 전달, 경로 계산은 Controller 기반과 단일 스위치 연결이 검증된 이후 구현한다.
+현재 구현된 기능:
 
-## 기술 결정
+- OpenFlow 1.3 전용 Listener와 Table-Miss Rule
+- Datapath 연결·해제·재연결 관리
+- ARP/IPv4 Packet-In과 첫 패킷 Packet-Out
+- 호스트 MAC/IP/DPID/Port 학습
+- 활성 토폴로지와 동적 Flooding Tree
+- Dijkstra Primary/Backup 경로 계산
+- 양방향 학습형 L2 Flow 설치
+- PortStatus 기반 링크 down/up 감지
+- 토폴로지 변경 시 내부 L2 Flow 무효화
+- Controller 재시작 후 OVS 재연결과 호스트 재학습
+- 읽기 전용 Health/Switch REST API
 
-| 항목 | 선택 |
+현재 브랜치에서 제외하는 기능:
+
+- Backend Flow Rule 적용과 상태 동기화
+- `POST /flows`, `DELETE /flows/{id}`, `GET /topology`
+- OVS Meter 기반 `RATE_LIMIT`
+- Analyzer OVS Mirror와 Mininet 트래픽 캡처
+- 보안 이벤트 기반 DROP/Rate Limit 종단 간 대응
+
+위 기능은 인프라 브랜치를 기반으로 별도 연동 브랜치에서 구현한다.
+
+## 기술 구성
+
+| 항목 | 값 |
 |---|---|
-| Controller Framework | OS-Ken 3.1.1 |
-| Python | 3.11 |
-| REST API | FastAPI |
-| OpenFlow | 1.3 전용 |
-| OpenFlow Port | 6653 |
-| REST Port | 8080 |
+| Controller Framework | OS-Ken `3.1.1` |
+| Python | `3.11` |
+| REST API | FastAPI/Uvicorn |
+| OpenFlow | `1.3` 전용 |
+| OpenFlow Port | `6653` |
+| REST Port | `8080` |
 | 실행 위치 | Multipass Ubuntu VM의 Docker 컨테이너 |
-| 네트워크 모드 | `host` |
+| Docker Network | `host` |
 
-OS-Ken 3.1.1은 독립 Controller 실행기인 `osken-manager`를 제공하는 계열이면서 Python 3.11을 지원한다. 최신 OS-Ken 4.x는 실행기가 제거된 라이브러리 중심 배포이므로 이번 MVP에는 사용하지 않는다.
-
-의존성은 재현 가능한 빌드를 위해 정확한 버전으로 고정한다. 최신 OS-Ken으로 전환할 때는 별도 실행기 구현과 호환성 검증을 독립 작업으로 수행한다.
+Controller와 Mininet은 같은 Linux VM에서 실행한다. OVS Remote Controller는
+기본적으로 `127.0.0.1:6653`을 사용하며 포트는 환경변수와 실행 인자로
+변경할 수 있다.
 
 ## 실행 구조
 
 ```text
-macOS/Windows Docker
-├── Backend
-├── Frontend
-└── Databases
-       ▲
-       │ HTTP
-       │
-Ubuntu Multipass VM
-├── Controller container (host network)
-│   ├── OS-Ken event loop
-│   │   ├── OpenFlow :6653
-│   │   ├── switch connection events
-│   │   └── Flow-Mod / Barrier processing
-│   └── FastAPI thread
-│       ├── GET /health
-│       └── GET /switches
-├── Analyzer container (host network)
-├── Mininet
-└── Open vSwitch
+Development host
+├── Backend / Frontend / Databases
+└── data-plane 운영 스크립트
+          │ Multipass exec
+          ▼
+Ubuntu VM
+├── sdn-controller (Docker host network)
+│   ├── OS-Ken OpenFlow :6653
+│   └── FastAPI REST :8080
+├── Mininet hosts
+├── Open vSwitch s1~s4
+└── sdn-analyzer (캡처 경로 연동 전)
 ```
 
-Mininet과 Controller가 동일한 Linux VM 네트워크를 사용하므로 OVS는 `127.0.0.1:6653`으로 연결한다. 외부 주소나 Docker bridge IP를 하드코딩하지 않는다.
+Packet-In 처리 경로에서는 Backend HTTP 요청을 수행하지 않는다. Controller는
+스위치·토폴로지·경로 상태를 관리하고, 외부 서비스 연동은 후속 브랜치에서
+별도 Queue/Retry 구조로 추가한다.
 
-## 디렉터리 구조
+## 디렉터리와 모듈
 
 ```text
 data-plane/controller/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py
+│   ├── api.py
 │   ├── config.py
 │   ├── controller.py
 │   ├── datapaths.py
 │   ├── flow_manager.py
-│   ├── api.py
-│   └── logging_config.py
+│   ├── hosts.py
+│   ├── packet_parser.py
+│   ├── routing.py
+│   └── topology.py
 ├── tests/
-│   ├── test_config.py
-│   ├── test_datapaths.py
-│   ├── test_table_miss.py
-│   └── test_api.py
 ├── Dockerfile
 └── requirements.txt
 ```
 
-`topology.py`와 `routing.py`는 아직 만들지 않는다. 사용되지 않는 빈 구현을 미리 추가하지 않고 해당 기능을 구현하는 단계에서 생성한다.
+| 모듈 | 책임 |
+|---|---|
+| `controller.py` | OS-Ken 이벤트, Packet-In, PortStatus, 경로 설치 |
+| `datapaths.py` | 최신 Datapath 등록과 stale disconnect 방지 |
+| `hosts.py` | 호스트 MAC/IP/접속 위치 학습 |
+| `packet_parser.py` | Ethernet, ARP, IPv4 메타데이터 추출 |
+| `topology.py` | 고정 포트 맵, 활성 스위치·링크, Flooding Tree |
+| `routing.py` | 순수 Dijkstra와 출력 포트 계산 |
+| `flow_manager.py` | Table-Miss, L2 Flow, Packet-Out, Flow 삭제 메시지 |
+| `api.py` | `/health`, `/switches` 읽기 전용 API |
+| `config.py` | OpenFlow/REST 포트 환경변수 검증 |
 
-## 모듈 책임
+경로 알고리즘과 활성 토폴로지 계산은 OpenFlow 객체와 분리되어 단위 테스트가
+가능하다.
 
-### `main.py`
-
-- 환경변수 검증
-- OS-Ken 실행 인자 구성
-- Controller 애플리케이션 실행
-- 종료 신호 처리
-
-### `config.py`
-
-- OpenFlow/REST 주소와 포트
-- 로그 레벨
-- 환경변수 타입과 범위 검증
-- 개발자별 주소 하드코딩 방지
-
-### `controller.py`
-
-- OpenFlow 1.3 버전 고정
-- Switch Features 이벤트 처리
-- Datapath 연결·해제 이벤트 처리
-- Barrier Reply 및 OpenFlow Error 처리
-- Packet-In hot path에서 HTTP 호출 금지
-
-### `datapaths.py`
-
-- DPID 기준 Datapath 등록
-- 재연결 시 최신 Datapath 객체로 교체
-- 오래된 연결의 해제 이벤트가 새 연결을 제거하지 않도록 객체 비교
-- REST API용 읽기 전용 Switch 상태 제공
-
-### `flow_manager.py`
-
-- Table-Miss Rule 생성
-- Controller 예약 Cookie 관리
-- Flow-Mod 전송
-- Barrier Request 발행과 설치 확인 상태 연결
-
-### `api.py`
-
-- Controller 상태 조회
-- 연결된 Switch 목록 조회
-- OpenFlow 객체 직접 접근 금지
-- 공유 상태 접근 시 Lock 또는 thread-safe snapshot 사용
-
-### `logging_config.py`
-
-- JSON 구조화 로그
-- Switch 연결·해제 로그
-- Table-Miss 설치 요청·확인·실패 로그
-- DPID, OpenFlow XID, Cookie 등 진단 필드 포함
-
-## 스위치 연결 처리
+## 스위치 연결과 Table-Miss
 
 ```text
-OVS TCP connection
-  → OpenFlow 1.3 negotiation
-  → Switch Features received
-  → Datapath registered
-  → Table-Miss Flow-Mod sent
-  → Barrier Request sent
-  → Barrier Reply received
-  → Table-Miss status confirmed
+OVS TCP connect
+→ OpenFlow 1.3 negotiation
+→ Switch Features
+→ Table-Miss Flow-Mod
+→ MAIN_DISPATCHER Datapath registration
+→ active topology registration
 ```
 
-연결 상태는 OS-Ken의 Dispatcher 이벤트를 기준으로 관리한다.
+재연결 시 동일 DPID의 최신 Datapath 객체로 교체한다. 이전 연결에서 늦게 온
+DEAD_DISPATCHER 이벤트는 현재 연결을 제거하지 않는다. 스위치가 다시 연결되면
+이전 Mininet 인스턴스의 Port DELETE 상태도 초기화한다.
+
+Table-Miss Rule:
+
+| 항목 | 값 |
+|---|---|
+| Table | `0` |
+| Priority | `0` |
+| Match | 전체 |
+| Action | `CONTROLLER` |
+| Idle/Hard timeout | `0 / 0` |
+| Cookie | `0x53444e0000000001` |
+
+현재 API의 `table_miss_installed`는 Switch Features 처리 시 Flow-Mod를
+전송했다는 의미다. Barrier Reply 기반 설치 확인과 외부 Rule lifecycle은
+후속 Flow Rule 관리 단계의 범위다.
+
+## Packet-In과 호스트 학습
+
+Controller는 고정된 호스트 연결 포트에서만 출발지 호스트를 학습한다.
+
+- `s1`: 1번 `h1`, 2번 `h2`, 3번 `h3`
+- `s4`: 3번 `web`
+
+학습 정보는 MAC, IPv4, DPID, 입력 포트다. 호스트가 이동하면 해당 MAC이
+출발지 또는 목적지인 Controller 관리 L2 Flow를 모든 연결 스위치에서
+삭제한다.
+
+지원 전달 범위:
+
+- ARP `0x0806`
+- IPv4 `0x0800`
+- Broadcast와 Unknown Unicast의 루프 없는 Packet-Out
+- 목적지를 아는 Unicast의 순방향·역방향 Flow
+
+IPv6, LLDP 및 그 밖의 Ethertype는 현재 전달 대상에서 제외한다.
+
+## L2 Flow
+
+| 항목 | 값 |
+|---|---|
+| Match | `eth_src`, `eth_dst`, `eth_type` |
+| Priority | `100` |
+| Idle timeout | `60초` |
+| Hard timeout | `0` |
+| Action | 계산된 포트로 `OUTPUT` |
+| Cookie prefix | `0x53444e10` |
+
+첫 패킷은 Packet-Out으로 전달하고 같은 통신의 이후 패킷은 OVS Flow가
+처리한다. 토폴로지 변경 시 Cookie mask로 Controller 관리 L2 Flow만 제거해
+Table-Miss와 향후 외부 Rule 영역을 보존한다.
+
+## 경로와 장애 우회
+
+정상 경로 비용:
 
 ```text
-MAIN_DISPATCHER
-  → register or replace the Datapath for the DPID
-
-DEAD_DISPATCHER
-  → remove only when the disconnected object is still current
+s1 --1-- s2 --1-- s4   total=2
+s1 -10-- s3 -10-- s4   total=20
 ```
 
-## Table-Miss Rule
+Dijkstra는 정상 상태에서 `s1-s2-s4`를 선택한다. 동일 비용이면 전체 DPID
+경로를 사전순으로 비교한다. `PortStatus`가 `PORT_DOWN`, `LINK_DOWN`,
+`BLOCKED` 또는 Port DELETE를 알리면 링크 끝점 상태를 갱신한다. 양쪽 끝점이
+정상일 때만 활성 링크로 사용한다.
 
-```text
-table=0
-priority=0
-match=all
-action=CONTROLLER
-idle_timeout=0
-hard_timeout=0
-cookie=reserved controller cookie
-```
-
-동일한 Table, Match, Priority, Cookie를 사용해 재연결 시 규칙이 비정상적으로 중복되지 않게 한다. Flow-Mod 직후 Barrier Request를 전송하며 Barrier Reply가 확인되기 전에는 설치 완료로 기록하지 않는다.
-
-이번 단계의 Packet-In 처리는 전달 결정을 수행하지 않는다. 패킷 전달, MAC 학습 및 Packet-Out은 L2 Forwarding 단계에서 구현한다.
-
-## REST와 OpenFlow 스레드 경계
-
-```text
-FastAPI thread
-  ↕ thread-safe snapshots / command queue
-OS-Ken event loop
-```
-
-FastAPI 스레드는 Datapath에 직접 `send_msg()`를 호출하지 않는다. 이번 단계의 API는 읽기 전용 상태만 제공한다. 향후 Flow Rule 변경 API는 명령 Queue에 요청을 넣고 OS-Ken 이벤트 루프가 이를 소비하도록 확장한다.
-
-Packet-In 처리 중 Backend나 다른 외부 서비스에 동기 HTTP 요청을 보내지 않는다.
+링크 상태가 바뀌면 기존 L2 Flow를 삭제한다. 다음 패킷은 변경된 그래프에서
+경로를 다시 계산하므로 Primary 장애 시 `s1-s3-s4`로 우회하고, 복구 시 다시
+Primary로 돌아간다. Broadcast/ARP도 활성 그래프의 최소 신장 트리를 사용해
+Backup 경로를 통과할 수 있다.
 
 ## REST API
 
 ### `GET /health`
-
-Controller 프로세스와 OpenFlow Listener가 정상이면 Switch 연결 여부와 관계없이 HTTP 200을 반환한다.
 
 ```json
 {
@@ -192,7 +200,7 @@ Controller 프로세스와 OpenFlow Listener가 정상이면 Switch 연결 여�
   "openflow_version": "1.3",
   "openflow_port": 6653,
   "rest_port": 8080,
-  "connected_switches": 0
+  "connected_switches": 4
 }
 ```
 
@@ -210,95 +218,72 @@ Controller 프로세스와 OpenFlow Listener가 정상이면 Switch 연결 여�
 }
 ```
 
-이번 단계에서는 `POST /flows`, `DELETE /flows/{id}`, `GET /topology`를 노출하지 않는다.
+현재 REST API는 읽기 전용이며 API 문서 URL은 비활성화되어 있다.
 
 ## 환경변수
 
 ```env
-CONTROLLER_OPENFLOW_HOST=0.0.0.0
 CONTROLLER_OPENFLOW_PORT=6653
 CONTROLLER_REST_HOST=0.0.0.0
 CONTROLLER_REST_PORT=8080
-CONTROLLER_LOG_LEVEL=INFO
 ```
 
-Backend 주소는 아직 사용하지 않으므로 이번 단계에 추가하지 않는다. Controller와 Backend를 실제로 연동하는 단계에서 timeout, retry 및 인증 설정과 함께 추가한다.
+OpenFlow bind host는 OS-Ken 실행기가 관리한다. Backend 주소나 인증 정보는
+현재 Controller에서 사용하지 않는다.
 
-## Docker Compose 적용
+## 실행과 검증
 
-기존 루트 `docker-compose.yml`에 Controller 서비스를 최소 추가한다. 기존 서비스 정의와 API 계약은 변경하지 않는다.
-
-기본 하이브리드 프로필에서는 다음과 같이 배치한다.
-
-```text
-Development host
-  Backend, Frontend, PostgreSQL, InfluxDB, Elasticsearch
-
-Ubuntu VM
-  Controller, Analyzer, Mininet, Open vSwitch
+```bash
+./data-plane/scripts/start.sh
+curl "http://<VM_IP>:8080/health"
+curl "http://<VM_IP>:8080/switches"
 ```
 
-Controller 컨테이너는 VM의 `host` 네트워크를 사용한다. 기본 하이브리드 부트스트랩은 VM에서 Controller와 Analyzer만 실행해야 하며 Backend와 데이터베이스 컨테이너를 VM에 시작하지 않는다.
+전체 자동 검증:
 
-## 단일 스위치 통합 검증
-
-전체 토폴로지를 만들기 전에 임시 Switch 한 대만 연결한다.
-
-```text
-Mininet
-└── s1 (DPID 0000000000000001)
-      └── tcp:127.0.0.1:6653, OpenFlow 1.3
+```bash
+./data-plane/scripts/verify.sh
 ```
 
-검증 순서:
+자동 검증은 다음을 포함한다.
 
-1. Controller 컨테이너를 시작한다.
-2. `GET /health`가 HTTP 200인지 확인한다.
-3. Mininet으로 `s1`을 생성하고 OpenFlow 1.3을 강제한다.
-4. `GET /switches`에서 DPID를 확인한다.
-5. `ovs-ofctl -O OpenFlow13 dump-flows s1`로 Table-Miss Rule을 확인한다.
-6. OVS의 Controller 연결을 해제하고 다시 연결한다.
-7. 연결 상태가 정상 복구되고 Table-Miss Rule이 한 개만 존재하는지 확인한다.
-8. Controller를 재시작하고 OVS가 재연결되는지 확인한다.
+- `pingall` 12/12
+- Primary와 Backup 출력 포트
+- 링크 down/up과 Flow 무효화
+- Controller 컨테이너 재시작과 스위치 4개 재연결
+- 호스트 재학습과 Primary Flow 복구
+- TCLink 지연과 `iperf3` 대역폭 제한
+- 종료 후 잔여 OVS 브리지 확인
 
-이번 단계에서는 L2 전달을 구현하지 않으므로 `pingall` 성공을 완료 조건으로 사용하지 않는다.
+Controller 단위 테스트는 의존성이 설치된 이미지에서 실행한다.
 
-## 단위 테스트
+```bash
+multipass exec sdn-lab -- docker run --rm \
+  -v /home/ubuntu/sdn-platform/data-plane/controller/tests:/app/tests \
+  sdn-platform-controller \
+  python -m unittest discover -s tests
+```
 
-- 환경변수 기본값과 잘못된 포트 검증
-- Datapath 최초 등록
-- 동일 DPID 재연결 시 객체 교체
-- 오래된 Datapath 해제 이벤트 무시
-- Table-Miss Match, Priority, Action, Cookie 검증
-- Health API 응답
-- Switch API snapshot 응답
+## 운영 로그
 
-## 이번 단계 제외 범위
+```bash
+multipass exec sdn-lab -- docker logs --since 5m sdn-controller
+```
 
-- 전체 `s1~s4` 토폴로지
-- 호스트 MAC/IP 학습
-- ARP 및 Broadcast 처리
-- L2 전달 및 Packet-Out
-- Dijkstra 경로 계산
-- Primary/Backup 경로 우회
-- Backend Flow Rule 연동
-- OVS Meter 기반 Rate Limit
-- Analyzer OVS Mirror
-- 공격 및 부하 테스트
+주요 이벤트:
 
-## 완료 기준
+- `switch_connected`, `switch_reconnected`, `switch_disconnected`
+- `topology_switch_activated`
+- `topology_link_down`, `topology_link_up`
+- `host_learned`, `host_ip_updated`, `host_moved`
+- `l2_path_installed`, `l2_flows_invalidated`
 
-- Controller 컨테이너가 정상 실행된다.
-- Controller Health API가 HTTP 200을 반환한다.
-- OVS Switch가 OpenFlow 1.3으로 연결된다.
-- 연결된 DPID가 REST API와 로그에서 확인된다.
-- Table-Miss Rule 설치가 Barrier Reply로 확인된다.
-- Switch 또는 Controller 재연결 후 규칙이 비정상적으로 중복되지 않는다.
-- Controller 단위 테스트와 단일 Switch 통합 검증이 통과한다.
+## 알려진 제한사항
 
-## 공식 참고 자료
-
-- [OS-Ken 3.1.1](https://pypi.org/project/os-ken/3.1.1/)
-- [OS-Ken OpenFlow 1.3 Reference](https://docs.openstack.org/os-ken/latest/ofproto_v1_3_ref.html)
-- [OS-Ken Application API](https://docs.openstack.org/os-ken/latest/os_ken_app_api.html)
-- [OS-Ken 2026.1 Release Notes](https://docs.openstack.org/releasenotes/os-ken/2026.1.html)
+- OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
+- REST API는 실제 Flow 설치/삭제 명령을 아직 제공하지 않는다.
+- 외부 Flow Rule acknowledgement와 lifecycle은 구현하지 않았다.
+- 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
+- Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거한 뒤
+  재학습하는 방식으로 확인한다.
+- Analyzer는 아직 Mininet Mirror 인터페이스에 연결되지 않았다.

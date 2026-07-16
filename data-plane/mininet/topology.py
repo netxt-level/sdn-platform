@@ -12,6 +12,9 @@ from mininet.node import OVSSwitch
 from mininet.node import RemoteController
 from mininet.topo import Topo
 
+from link_config import canonical_link_name
+from link_config import parse_link_configs
+
 
 SWITCH_DPIDS = {
     "s1": "0000000000000001",
@@ -54,7 +57,13 @@ SWITCH_PORTS = {
 class FourSwitchTopology(Topo):
     """Diamond topology with fixed host identities and explicit ports."""
 
-    def build(self):
+    def build(self, link_configs=None):
+        link_configs = link_configs or {}
+
+        def transit_parameters(first, second):
+            link_name = canonical_link_name(first, second)
+            return dict(link_configs.get(link_name, {}))
+
         switches = {
             name: self.addSwitch(
                 name,
@@ -73,10 +82,34 @@ class FourSwitchTopology(Topo):
         self.addLink(hosts["h1"], switches["s1"], port1=0, port2=1)
         self.addLink(hosts["h2"], switches["s1"], port1=0, port2=2)
         self.addLink(hosts["h3"], switches["s1"], port1=0, port2=3)
-        self.addLink(switches["s1"], switches["s2"], port1=4, port2=1)
-        self.addLink(switches["s1"], switches["s3"], port1=5, port2=1)
-        self.addLink(switches["s2"], switches["s4"], port1=2, port2=1)
-        self.addLink(switches["s3"], switches["s4"], port1=2, port2=2)
+        self.addLink(
+            switches["s1"],
+            switches["s2"],
+            port1=4,
+            port2=1,
+            **transit_parameters("s1", "s2"),
+        )
+        self.addLink(
+            switches["s1"],
+            switches["s3"],
+            port1=5,
+            port2=1,
+            **transit_parameters("s1", "s3"),
+        )
+        self.addLink(
+            switches["s2"],
+            switches["s4"],
+            port1=2,
+            port2=1,
+            **transit_parameters("s2", "s4"),
+        )
+        self.addLink(
+            switches["s3"],
+            switches["s4"],
+            port1=2,
+            port2=2,
+            **transit_parameters("s3", "s4"),
+        )
         self.addLink(switches["s4"], hosts["web"], port1=3, port2=0)
 
 
@@ -87,6 +120,16 @@ def parse_args():
     parser.add_argument("--controller-host", default="127.0.0.1")
     parser.add_argument("--controller-port", type=int, default=6653)
     parser.add_argument(
+        "--link-config",
+        action="append",
+        default=[],
+        metavar="LINK:key=value[,key=value]",
+        help=(
+            "Configure one transit link with bw (Mbps), delay (us/ms/s), "
+            "and loss (percent); may be repeated."
+        ),
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help=(
@@ -95,7 +138,12 @@ def parse_args():
         ),
     )
     parser.add_argument("--verify-timeout", type=float, default=10.0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    try:
+        args.link_configs = parse_link_configs(args.link_config)
+    except ValueError as error:
+        parser.error(str(error))
+    return args
 
 
 def wait_for_controller_connections(net, timeout):
@@ -161,9 +209,13 @@ def print_topology_status(net):
     return valid
 
 
-def create_network(controller_host="127.0.0.1", controller_port=6653):
+def create_network(
+    controller_host="127.0.0.1",
+    controller_port=6653,
+    link_configs=None,
+):
     """Create the configured Mininet network without starting it."""
-    topology = FourSwitchTopology()
+    topology = FourSwitchTopology(link_configs=link_configs or {})
     network = Mininet(
         topo=topology,
         controller=None,
@@ -184,6 +236,7 @@ def run(args):
     network = create_network(
         controller_host=args.controller_host,
         controller_port=args.controller_port,
+        link_configs=args.link_configs,
     )
 
     try:
