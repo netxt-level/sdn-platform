@@ -101,6 +101,20 @@ class ActiveTopologyTests(unittest.TestCase):
             self.topology.snapshot(),
         )
 
+    def test_reconnect_clears_stale_port_state_for_each_endpoint(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+        self.topology.set_link_port_state(1, 2, False)
+        self.topology.set_link_port_state(2, 1, False)
+
+        self.topology.disconnect_switch(1)
+        self.topology.disconnect_switch(2)
+        self.topology.connect_switch(1)
+        self.assertNotIn(2, self.topology.snapshot()[1])
+
+        self.topology.connect_switch(2)
+        self.assertEqual(1, self.topology.snapshot()[1][2])
+
     def test_link_state_removes_and_restores_both_directions(self):
         for dpid in WEIGHTED_SWITCH_GRAPH:
             self.topology.connect_switch(dpid)

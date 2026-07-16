@@ -161,7 +161,8 @@ def print_topology_status(net):
     return valid
 
 
-def run(args):
+def create_network(controller_host="127.0.0.1", controller_port=6653):
+    """Create the configured Mininet network without starting it."""
     topology = FourSwitchTopology()
     network = Mininet(
         topo=topology,
@@ -173,8 +174,16 @@ def run(args):
     network.addController(
         "c0",
         controller=RemoteController,
-        ip=args.controller_host,
-        port=args.controller_port,
+        ip=controller_host,
+        port=controller_port,
+    )
+    return network
+
+
+def run(args):
+    network = create_network(
+        controller_host=args.controller_host,
+        controller_port=args.controller_port,
     )
 
     try:

@@ -57,7 +57,14 @@ class ActiveTopology:
         self._require_switch(dpid)
         previous_count = len(self._connected_switches)
         self._connected_switches.add(dpid)
-        return len(self._connected_switches) != previous_count
+        changed = len(self._connected_switches) != previous_count
+        if changed:
+            self._inactive_link_endpoints = {
+                endpoint
+                for endpoint in self._inactive_link_endpoints
+                if endpoint[0] != dpid
+            }
+        return changed
 
     def disconnect_switch(self, dpid):
         """Mark a configured switch disconnected and return whether it existed."""

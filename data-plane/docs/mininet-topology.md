@@ -191,3 +191,31 @@ h1 ping -c 2 10.0.0.100
 
 Controller 로그의 `topology_link_down`, `topology_link_up`,
 `l2_flows_invalidated`, `l2_path_installed` 이벤트로 선택 경로를 확인한다.
+
+## 자동 장애·복구 검증
+
+macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나리오를 실행한다.
+
+```bash
+./data-plane/scripts/verify.sh
+```
+
+스크립트는 Controller를 시작한 뒤 VM 안에서 다음 항목을 순서대로 검증한다.
+
+1. OpenFlow 1.3 스위치 4개 연결
+2. 고정 Host IP/MAC 및 Switch Port 구성
+3. Controller Health의 연결 스위치 수
+4. 초기 `pingall`과 Primary `s1-s2-s4` Flow
+5. `s1-s2` 장애 후 Backup `s1-s3-s4` Flow
+6. 링크 복구 후 Primary 경로 복귀
+7. 최종 `pingall` 12/12 수신
+8. Mininet 네트워크 및 인터페이스 정리
+
+경로 검증은 ping 결과만 확인하지 않고 `ovs-ofctl dump-flows` 출력의
+`h1 → web` IPv4 Flow와 각 스위치 출력 포트를 비교한다. 실패하더라도
+시나리오의 `finally`에서 Mininet을 중지하며, 강제 종료 등으로 상태가
+남았을 때는 다음 명령으로 정리한다.
+
+```bash
+./data-plane/scripts/cleanup.sh
+```
