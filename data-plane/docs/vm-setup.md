@@ -179,7 +179,7 @@ Controller 컨테이너와 잔여 Mininet/OVS 상태 정리:
 
 - 스위치 4개, 고정 Host/Port, `pingall`
 - Primary/Backup 경로와 링크 장애·복구
-- Controller 재시작과 OVS 재연결
+- Primary 링크 down 상태의 Controller 재시작과 OVS 포트 상태 재동기화
 - 호스트 재학습과 Primary Flow 복구
 - TCLink 지연과 `iperf3` 대역폭 제한
 - 종료 후 잔여 OVS 브리지 부재

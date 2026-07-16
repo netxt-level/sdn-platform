@@ -251,13 +251,6 @@ def run(args):
         require_path(network, BACKUP_OUTPUTS, excluded_switch="s2")
         checkpoint(5, "Primary failure rerouted traffic over s1-s3-s4")
 
-        network.configLinkStatus("s1", "s2", "up")
-        wait_for_l2_flow_removal(network, args.timeout)
-        clear_arp(network.get("h1"), network.get("web"))
-        require_ping(network.get("h1"), network.get("web"))
-        require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
-        checkpoint(6, "Primary recovery restored path s1-s2-s4")
-
         restart_controller(args.controller_container, args.timeout)
         if not wait_for_controller_connections(network, args.timeout):
             print_connection_status(network)
@@ -270,7 +263,21 @@ def run(args):
             expected_switches=4,
             timeout=args.timeout,
         )
-        checkpoint(7, "Controller restarted and four switches reconnected")
+        delete_managed_l2_flows(network, args.timeout)
+        clear_all_arp(network)
+        require_ping(network.get("h1"), network.get("web"))
+        require_path(network, BACKUP_OUTPUTS, excluded_switch="s2")
+        checkpoint(
+            6,
+            "Controller restart preserved the down link and Backup path",
+        )
+
+        network.configLinkStatus("s1", "s2", "up")
+        wait_for_l2_flow_removal(network, args.timeout)
+        clear_arp(network.get("h1"), network.get("web"))
+        require_ping(network.get("h1"), network.get("web"))
+        require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
+        checkpoint(7, "Primary recovery restored path s1-s2-s4")
 
         delete_managed_l2_flows(network, args.timeout)
         clear_all_arp(network)

@@ -114,12 +114,15 @@ OVS TCP connect
 → Switch Features
 → Table-Miss Flow-Mod
 → MAIN_DISPATCHER Datapath registration
+→ transit ports pending
+→ Port Description request/reply
 → active topology registration
 ```
 
 재연결 시 동일 DPID의 최신 Datapath 객체로 교체한다. 이전 연결에서 늦게 온
-DEAD_DISPATCHER 이벤트는 현재 연결을 제거하지 않는다. 스위치가 다시 연결되면
-이전 Mininet 인스턴스의 Port DELETE 상태도 초기화한다.
+DEAD_DISPATCHER 이벤트는 현재 연결을 제거하지 않는다. 스위치가 연결되면 모든
+transit 포트를 미확인 상태로 두고 OpenFlow Port Description을 요청한다. 링크
+양쪽 포트의 현재 상태가 모두 정상으로 확인된 뒤에만 경로 계산에 포함한다.
 
 Table-Miss Rule:
 
@@ -184,6 +187,10 @@ Dijkstra는 정상 상태에서 `s1-s2-s4`를 선택한다. 동일 비용이면 
 경로를 사전순으로 비교한다. `PortStatus`가 `PORT_DOWN`, `LINK_DOWN`,
 `BLOCKED` 또는 Port DELETE를 알리면 링크 끝점 상태를 갱신한다. 양쪽 끝점이
 정상일 때만 활성 링크로 사용한다.
+
+Controller 재시작 시에도 스위치별 Port Description을 다시 조회한다. 따라서
+재시작 전에 내려가 있던 링크를 정상으로 가정하지 않고 Backup 경로 상태를
+유지한다.
 
 링크 상태가 바뀌면 기존 L2 Flow를 삭제한다. 다음 패킷은 변경된 그래프에서
 경로를 다시 계산하므로 Primary 장애 시 `s1-s3-s4`로 우회하고, 복구 시 다시
@@ -250,7 +257,8 @@ curl "http://<VM_IP>:8080/switches"
 - `pingall` 12/12
 - Primary와 Backup 출력 포트
 - 링크 down/up과 Flow 무효화
-- Controller 컨테이너 재시작과 스위치 4개 재연결
+- Primary 링크 down 상태의 Controller 재시작과 포트 상태 재동기화
+- 재시작 후 Backup 유지와 링크 복구 후 Primary 복귀
 - 호스트 재학습과 Primary Flow 복구
 - TCLink 지연과 `iperf3` 대역폭 제한
 - 종료 후 잔여 OVS 브리지 확인
@@ -273,6 +281,7 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 주요 이벤트:
 
 - `switch_connected`, `switch_reconnected`, `switch_disconnected`
+- `port_description_requested`, `port_description_synchronized`
 - `topology_switch_activated`
 - `topology_link_down`, `topology_link_up`
 - `host_learned`, `host_ip_updated`, `host_moved`
@@ -284,6 +293,6 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - REST API는 실제 Flow 설치/삭제 명령을 아직 제공하지 않는다.
 - 외부 Flow Rule acknowledgement와 lifecycle은 구현하지 않았다.
 - 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
-- Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거한 뒤
-  재학습하는 방식으로 확인한다.
+- Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
+  Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.
 - Analyzer는 아직 Mininet Mirror 인터페이스에 연결되지 않았다.

@@ -183,6 +183,11 @@ Controller는 OpenFlow `PortStatus`의 포트 설정과 `LINK_DOWN`, `BLOCKED`,
 그래프와 Flooding Tree를 사용하므로 Primary 장애 시 Backup으로 우회하고,
 Primary 복구 후에는 다시 비용이 낮은 경로로 복귀한다.
 
+스위치가 Controller에 새로 연결되거나 재연결되면 transit 포트는 즉시 활성화
+되지 않는다. Controller가 OpenFlow Port Description을 요청하고 링크 양쪽의
+실제 포트 상태를 확인한 뒤 활성화한다. 이 절차로 Primary가 down인 상태에서
+Controller가 재시작되어도 Backup 경로를 유지한다.
+
 Mininet CLI에서 다음 순서로 장애와 복구를 확인할 수 있다.
 
 ```text
@@ -232,9 +237,9 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 3. Controller Health의 연결 스위치 수
 4. 초기 `pingall`과 Primary `s1-s2-s4` Flow
 5. `s1-s2` 장애 후 Backup `s1-s3-s4` Flow
-6. 링크 복구 후 Primary 경로 복귀
-7. Controller 컨테이너 재시작과 OVS 스위치 4개 재연결
-8. 기존 L2 Flow와 ARP 제거 후 호스트 재학습, Primary Flow 및 `pingall`
+6. `s1-s2`가 down인 상태에서 Controller 재시작 후 Backup 경로 유지
+7. 링크 복구 후 Primary 경로 복귀
+8. 기존 L2 Flow와 ARP 제거 후 전체 호스트 재학습, Primary Flow 및 `pingall`
 9. Mininet 네트워크 및 인터페이스 정리
 
 장애·복구 시나리오가 끝나면 Primary의 `s1-s2`, `s2-s4`에 각각

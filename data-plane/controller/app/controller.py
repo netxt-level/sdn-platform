@@ -17,6 +17,7 @@ from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
 from app.flow_manager import install_l2_forwarding_flow
+from app.flow_manager import request_port_descriptions
 from app.flow_manager import send_packet_out
 from app.hosts import HostRegistry
 from app.packet_parser import classify_destination
@@ -99,6 +100,12 @@ class SwitchConnectionController(app_manager.OSKenApp):
             previous = self.datapaths.register(datapath)
             try:
                 topology_changed = self.topology.connect_switch(datapath.id)
+                if topology_changed:
+                    request_port_descriptions(datapath)
+                    self.logger.info(
+                        "port_description_requested dpid=%s",
+                        dpid,
+                    )
             except ValueError as error:
                 topology_changed = False
                 self.logger.warning(
@@ -173,6 +180,62 @@ class SwitchConnectionController(app_manager.OSKenApp):
 
         try:
             active = self._port_is_active(msg)
+        except ValueError as error:
+            self.logger.warning(
+                "topology_port_rejected dpid=%016x port=%d "
+                "source=port_status reason=%s",
+                datapath.id,
+                port,
+                error,
+            )
+            return
+
+        self._update_link_port_state(
+            datapath=datapath,
+            port=port,
+            neighbor=neighbor,
+            active=active,
+            source="port_status",
+        )
+
+    @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER)
+    def handle_port_description_reply(self, event):
+        msg = event.msg
+        datapath = msg.datapath
+        synchronized_ports = 0
+
+        for description in msg.body:
+            port = description.port_no
+            neighbor = get_neighbor_switch(datapath.id, port)
+            if neighbor is None:
+                continue
+            self._update_link_port_state(
+                datapath=datapath,
+                port=port,
+                neighbor=neighbor,
+                active=self._port_description_is_active(
+                    datapath,
+                    description,
+                ),
+                source="port_description",
+            )
+            synchronized_ports += 1
+
+        self.logger.info(
+            "port_description_synchronized dpid=%016x transit_ports=%d",
+            datapath.id,
+            synchronized_ports,
+        )
+
+    def _update_link_port_state(
+        self,
+        datapath,
+        port,
+        neighbor,
+        active,
+        source,
+    ):
+        try:
             topology_changed = self.topology.set_link_port_state(
                 datapath.id,
                 neighbor,
@@ -180,9 +243,11 @@ class SwitchConnectionController(app_manager.OSKenApp):
             )
         except ValueError as error:
             self.logger.warning(
-                "topology_port_rejected dpid=%016x port=%d reason=%s",
+                "topology_port_rejected dpid=%016x port=%d source=%s "
+                "reason=%s",
                 datapath.id,
                 port,
+                source,
                 error,
             )
             return
@@ -190,21 +255,24 @@ class SwitchConnectionController(app_manager.OSKenApp):
         if not topology_changed:
             self.logger.debug(
                 "topology_link_unchanged source=%016x destination=%016x "
-                "port=%d active=%s",
+                "port=%d active=%s event_source=%s",
                 datapath.id,
                 neighbor,
                 port,
                 active,
+                source,
             )
             return
 
         state = "up" if active else "down"
         self.logger.info(
-            "topology_link_%s source=%016x destination=%016x port=%d",
+            "topology_link_%s source=%016x destination=%016x port=%d "
+            "event_source=%s",
             state,
             datapath.id,
             neighbor,
             port,
+            source,
         )
         self._invalidate_all_l2_flows(
             reason=f"link_{state}:{datapath.id}-{neighbor}",
@@ -218,10 +286,18 @@ class SwitchConnectionController(app_manager.OSKenApp):
         if msg.reason not in (ofproto.OFPPR_ADD, ofproto.OFPPR_MODIFY):
             raise ValueError(f"unknown port status reason: {msg.reason}")
 
+        return SwitchConnectionController._port_description_is_active(
+            msg.datapath,
+            msg.desc,
+        )
+
+    @staticmethod
+    def _port_description_is_active(datapath, description):
+        ofproto = datapath.ofproto
         inactive_state = ofproto.OFPPS_LINK_DOWN | ofproto.OFPPS_BLOCKED
         return not (
-            msg.desc.config & ofproto.OFPPC_PORT_DOWN
-            or msg.desc.state & inactive_state
+            description.config & ofproto.OFPPC_PORT_DOWN
+            or description.state & inactive_state
         )
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)

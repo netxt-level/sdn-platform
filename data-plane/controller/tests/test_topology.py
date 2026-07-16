@@ -77,18 +77,40 @@ class ActiveTopologyTests(unittest.TestCase):
     def setUp(self):
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
 
+    def connect_all_switches(self):
+        for dpid in WEIGHTED_SWITCH_GRAPH:
+            self.topology.connect_switch(dpid)
+        for source, neighbors in WEIGHTED_SWITCH_GRAPH.items():
+            for destination in neighbors:
+                self.topology.set_link_port_state(
+                    source,
+                    destination,
+                    True,
+                )
+
     def test_snapshot_contains_only_connected_switches_and_links(self):
         self.topology.connect_switch(1)
         self.topology.connect_switch(2)
+        self.topology.set_link_port_state(1, 2, True)
+        self.topology.set_link_port_state(2, 1, True)
 
         self.assertEqual(
             {1: {2: 1}, 2: {1: 1}},
             self.topology.snapshot(),
         )
 
+    def test_connected_link_stays_pending_until_both_ports_are_synchronized(self):
+        self.topology.connect_switch(1)
+        self.topology.connect_switch(2)
+
+        self.assertNotIn(2, self.topology.snapshot()[1])
+        self.topology.set_link_port_state(1, 2, True)
+        self.assertNotIn(2, self.topology.snapshot()[1])
+        self.topology.set_link_port_state(2, 1, True)
+        self.assertEqual(1, self.topology.snapshot()[1][2])
+
     def test_disconnect_removes_switch_and_attached_links(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
 
         self.topology.disconnect_switch(2)
 
@@ -101,9 +123,8 @@ class ActiveTopologyTests(unittest.TestCase):
             self.topology.snapshot(),
         )
 
-    def test_reconnect_clears_stale_port_state_for_each_endpoint(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+    def test_reconnect_requires_fresh_state_for_each_port_endpoint(self):
+        self.connect_all_switches()
         self.topology.set_link_port_state(1, 2, False)
         self.topology.set_link_port_state(2, 1, False)
 
@@ -113,11 +134,14 @@ class ActiveTopologyTests(unittest.TestCase):
         self.assertNotIn(2, self.topology.snapshot()[1])
 
         self.topology.connect_switch(2)
+        self.assertNotIn(2, self.topology.snapshot()[1])
+        self.topology.set_link_port_state(1, 2, True)
+        self.assertNotIn(2, self.topology.snapshot()[1])
+        self.topology.set_link_port_state(2, 1, True)
         self.assertEqual(1, self.topology.snapshot()[1][2])
 
     def test_link_state_removes_and_restores_both_directions(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
 
         self.assertTrue(self.topology.set_link_state(1, 2, False))
         graph = self.topology.snapshot()
@@ -130,8 +154,7 @@ class ActiveTopologyTests(unittest.TestCase):
         self.assertEqual(1, graph[2][1])
 
     def test_link_stays_down_until_both_port_endpoints_recover(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
 
         self.assertTrue(self.topology.set_link_port_state(1, 2, False))
         self.assertFalse(self.topology.set_link_port_state(2, 1, False))
@@ -143,8 +166,7 @@ class ActiveTopologyTests(unittest.TestCase):
         self.assertEqual(1, self.topology.snapshot()[1][2])
 
     def test_active_flood_tree_uses_primary_links_normally(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
 
         self.assertEqual(
             ((1, 2), (2, 4), (1, 3)),
@@ -160,8 +182,7 @@ class ActiveTopologyTests(unittest.TestCase):
         )
 
     def test_active_flood_tree_moves_to_backup_after_primary_failure(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
         self.topology.set_link_port_state(1, 2, False)
 
         self.assertEqual(
@@ -182,8 +203,7 @@ class ActiveTopologyTests(unittest.TestCase):
         )
 
     def test_active_flood_tree_does_not_forward_from_non_tree_port(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
 
         self.assertEqual(
             (),
@@ -195,8 +215,7 @@ class ActiveTopologyTests(unittest.TestCase):
         )
 
     def test_manual_link_enable_does_not_override_down_port(self):
-        for dpid in WEIGHTED_SWITCH_GRAPH:
-            self.topology.connect_switch(dpid)
+        self.connect_all_switches()
 
         self.topology.set_link_port_state(1, 2, False)
         self.assertFalse(self.topology.set_link_state(1, 2, True))
@@ -213,6 +232,8 @@ class ActiveTopologyTests(unittest.TestCase):
     def test_snapshot_is_a_defensive_copy(self):
         self.topology.connect_switch(1)
         self.topology.connect_switch(2)
+        self.topology.set_link_port_state(1, 2, True)
+        self.topology.set_link_port_state(2, 1, True)
         snapshot = self.topology.snapshot()
 
         snapshot[1].clear()

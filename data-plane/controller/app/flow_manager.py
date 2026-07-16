@@ -50,6 +50,18 @@ def install_table_miss_flow(datapath):
     return flow_mod
 
 
+def build_port_description_request(datapath):
+    """Build a request for the switch's current OpenFlow port state."""
+    return datapath.ofproto_parser.OFPPortDescStatsRequest(datapath, 0)
+
+
+def request_port_descriptions(datapath):
+    """Request a fresh port-state snapshot after a switch connects."""
+    request = build_port_description_request(datapath)
+    datapath.send_msg(request)
+    return request
+
+
 def build_packet_out(datapath, buffer_id, in_port, output_ports, data):
     """Build a Packet-Out for the selected physical output ports."""
     parser = datapath.ofproto_parser

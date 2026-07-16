@@ -63,6 +63,37 @@ class PortStatusTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown port status reason"):
             SwitchConnectionController._port_is_active(self.message(99))
 
+    def test_port_description_uses_current_config_and_state(self):
+        datapath = SimpleNamespace(ofproto=ofproto_v1_3)
+        active = SimpleNamespace(config=0, state=0)
+        configured_down = SimpleNamespace(
+            config=ofproto_v1_3.OFPPC_PORT_DOWN,
+            state=0,
+        )
+        link_down = SimpleNamespace(
+            config=0,
+            state=ofproto_v1_3.OFPPS_LINK_DOWN,
+        )
+
+        self.assertTrue(
+            SwitchConnectionController._port_description_is_active(
+                datapath,
+                active,
+            )
+        )
+        self.assertFalse(
+            SwitchConnectionController._port_description_is_active(
+                datapath,
+                configured_down,
+            )
+        )
+        self.assertFalse(
+            SwitchConnectionController._port_description_is_active(
+                datapath,
+                link_down,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

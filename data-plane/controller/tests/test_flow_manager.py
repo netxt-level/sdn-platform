@@ -14,10 +14,12 @@ from app.flow_manager import L2_FORWARDING_PRIORITY
 from app.flow_manager import build_l2_forwarding_cookie
 from app.flow_manager import build_l2_forwarding_flow
 from app.flow_manager import build_packet_out
+from app.flow_manager import build_port_description_request
 from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
 from app.flow_manager import install_l2_forwarding_flow
+from app.flow_manager import request_port_descriptions
 from app.flow_manager import send_packet_out
 
 
@@ -52,6 +54,23 @@ class TableMissFlowTests(unittest.TestCase):
         action = instruction.actions[0]
         self.assertEqual(ofproto_v1_3.OFPP_CONTROLLER, action.port)
         self.assertEqual(ofproto_v1_3.OFPCML_NO_BUFFER, action.max_len)
+
+
+class PortDescriptionRequestTests(unittest.TestCase):
+    def test_builds_openflow_port_description_request(self):
+        datapath = FakeDatapath()
+
+        request = build_port_description_request(datapath)
+
+        self.assertIs(datapath, request.datapath)
+        self.assertEqual(0, request.flags)
+
+    def test_sends_openflow_port_description_request(self):
+        datapath = FakeDatapath()
+
+        request = request_port_descriptions(datapath)
+
+        self.assertEqual([request], datapath.sent_messages)
 
 
 class PacketOutTests(unittest.TestCase):

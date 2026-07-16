@@ -53,17 +53,16 @@ class ActiveTopology:
         self._inactive_link_endpoints = set()
 
     def connect_switch(self, dpid):
-        """Mark a configured switch connected and return whether state changed."""
+        """Connect a switch with transit ports pending state synchronization."""
         self._require_switch(dpid)
         previous_count = len(self._connected_switches)
         self._connected_switches.add(dpid)
         changed = len(self._connected_switches) != previous_count
         if changed:
-            self._inactive_link_endpoints = {
-                endpoint
-                for endpoint in self._inactive_link_endpoints
-                if endpoint[0] != dpid
-            }
+            self._inactive_link_endpoints.update(
+                (dpid, neighbor)
+                for neighbor in self._configured_graph[dpid]
+            )
         return changed
 
     def disconnect_switch(self, dpid):
@@ -172,6 +171,8 @@ class ActiveTopology:
         source, destination = link
         return (
             link in self._active_links
+            and source in self._connected_switches
+            and destination in self._connected_switches
             and (source, destination) not in self._inactive_link_endpoints
             and (destination, source) not in self._inactive_link_endpoints
         )
