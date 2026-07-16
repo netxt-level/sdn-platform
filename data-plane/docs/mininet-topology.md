@@ -208,8 +208,9 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 4. 초기 `pingall`과 Primary `s1-s2-s4` Flow
 5. `s1-s2` 장애 후 Backup `s1-s3-s4` Flow
 6. 링크 복구 후 Primary 경로 복귀
-7. 최종 `pingall` 12/12 수신
-8. Mininet 네트워크 및 인터페이스 정리
+7. Controller 컨테이너 재시작과 OVS 스위치 4개 재연결
+8. 기존 L2 Flow와 ARP 제거 후 호스트 재학습, Primary Flow 및 `pingall`
+9. Mininet 네트워크 및 인터페이스 정리
 
 경로 검증은 ping 결과만 확인하지 않고 `ovs-ofctl dump-flows` 출력의
 `h1 → web` IPv4 Flow와 각 스위치 출력 포트를 비교한다. 실패하더라도

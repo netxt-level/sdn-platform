@@ -4,6 +4,7 @@
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
 import time
 from urllib.error import URLError
@@ -24,6 +25,7 @@ WEB_MAC = "00:00:00:00:01:00"
 WEB_IP = "10.0.0.100"
 H1_IP = "10.0.0.1"
 L2_COOKIE_PREFIX = "cookie=0x53444e10"
+L2_COOKIE_MATCH = "cookie=0x53444e1000000000/0xffffffff00000000"
 
 PRIMARY_OUTPUTS = {
     "s1": 4,
@@ -48,12 +50,13 @@ def parse_args():
     parser.add_argument("--controller-host", default="127.0.0.1")
     parser.add_argument("--controller-port", type=int, default=6653)
     parser.add_argument("--controller-rest-port", type=int, default=8080)
-    parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--controller-container", default="sdn-controller")
+    parser.add_argument("--timeout", type=float, default=20.0)
     return parser.parse_args()
 
 
 def checkpoint(number, message):
-    print(f"[{number}/8] PASS {message}")
+    print(f"[{number}/9] PASS {message}")
 
 
 def wait_for_controller_health(host, port, expected_switches, timeout):
@@ -131,9 +134,45 @@ def wait_for_l2_flow_removal(network, timeout):
     raise ScenarioFailure("Controller-managed L2 flows were not invalidated")
 
 
+def delete_managed_l2_flows(network, timeout):
+    for switch in network.switches:
+        switch.cmd(
+            f"ovs-ofctl -O OpenFlow13 del-flows {switch.name} "
+            f"'{L2_COOKIE_MATCH}'"
+        )
+    wait_for_l2_flow_removal(network, timeout)
+
+
 def clear_arp(source, destination):
     source.cmd("arp", "-d", destination.IP())
     destination.cmd("arp", "-d", source.IP())
+
+
+def clear_all_arp(network):
+    for source in network.hosts:
+        for destination in network.hosts:
+            if source is not destination:
+                source.cmd("arp", "-d", destination.IP())
+
+
+def restart_controller(container, timeout):
+    try:
+        subprocess.run(
+            ["docker", "restart", "--time", "5", container],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ScenarioFailure(
+            f"Controller restart exceeded {timeout} seconds"
+        ) from error
+    except subprocess.CalledProcessError as error:
+        reason = error.stderr.strip() or error.stdout.strip() or str(error)
+        raise ScenarioFailure(f"Controller restart failed: {reason}") from error
+    except OSError as error:
+        raise ScenarioFailure(f"Controller restart failed: {error}") from error
 
 
 def require_ping(source, destination, count=3):
@@ -219,9 +258,26 @@ def run(args):
         require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
         checkpoint(6, "Primary recovery restored path s1-s2-s4")
 
+        restart_controller(args.controller_container, args.timeout)
+        if not wait_for_controller_connections(network, args.timeout):
+            print_connection_status(network)
+            raise ScenarioFailure(
+                "switches did not reconnect after Controller restart"
+            )
+        wait_for_controller_health(
+            args.controller_host,
+            args.controller_rest_port,
+            expected_switches=4,
+            timeout=args.timeout,
+        )
+        checkpoint(7, "Controller restarted and four switches reconnected")
+
+        delete_managed_l2_flows(network, args.timeout)
+        clear_all_arp(network)
         if network.pingAll(timeout=1) != 0.0:
-            raise ScenarioFailure("final pingall failed")
-        checkpoint(7, "final pingall received all 12 packets")
+            raise ScenarioFailure("post-restart pingall failed")
+        require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
+        checkpoint(8, "host learning and Primary flows recovered after restart")
         return 0
     except ScenarioFailure as error:
         print(f"FAIL {error}", file=sys.stderr)
@@ -230,7 +286,7 @@ def run(args):
         return 1
     finally:
         network.stop()
-        checkpoint(8, "Mininet network stopped and interfaces removed")
+        checkpoint(9, "Mininet network stopped and interfaces removed")
 
 
 def main():
