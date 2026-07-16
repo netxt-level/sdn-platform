@@ -12,7 +12,7 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 
 현재 구현된 기능:
 
-- OpenFlow 1.3 전용 Listener와 Table-Miss Rule
+- OpenFlow 1.3 전용 Listener와 확인 가능한 Table-Miss Rule
 - Datapath 연결·해제·재연결 관리
 - ARP/IPv4 Packet-In과 첫 패킷 Packet-Out
 - 호스트 MAC/IP/DPID/Port 학습
@@ -85,6 +85,7 @@ data-plane/controller/
 │   ├── hosts.py
 │   ├── packet_parser.py
 │   ├── routing.py
+│   ├── table_miss.py
 │   └── topology.py
 ├── tests/
 ├── Dockerfile
@@ -100,6 +101,7 @@ data-plane/controller/
 | `topology.py` | 고정 포트 맵, 활성 스위치·링크, Flooding Tree |
 | `routing.py` | 순수 Dijkstra와 출력 포트 계산 |
 | `flow_manager.py` | Table-Miss, L2 Flow, Packet-Out, Flow 삭제 메시지 |
+| `table_miss.py` | Barrier/Error/timeout 기반 Table-Miss 상태 추적 |
 | `api.py` | `/health`, `/switches` 읽기 전용 API |
 | `config.py` | OpenFlow/REST 포트 환경변수 검증 |
 
@@ -113,6 +115,8 @@ OVS TCP connect
 → OpenFlow 1.3 negotiation
 → Switch Features
 → Table-Miss Flow-Mod
+→ Barrier Request
+→ Barrier Reply 또는 OpenFlow Error
 → MAIN_DISPATCHER Datapath registration
 → transit ports pending
 → Port Description request/reply
@@ -135,9 +139,21 @@ Table-Miss Rule:
 | Idle/Hard timeout | `0 / 0` |
 | Cookie | `0x53444e0000000001` |
 
-현재 API의 `table_miss_installed`는 Switch Features 처리 시 Flow-Mod를
-전송했다는 의미다. Barrier Reply 기반 설치 확인과 외부 Rule lifecycle은
-후속 Flow Rule 관리 단계의 범위다.
+Table-Miss 상태는 다음 lifecycle을 사용한다.
+
+```text
+unknown → pending → installed
+                  ↘ failed
+```
+
+- `pending`: Flow-Mod와 Barrier Request를 전송한 상태
+- `installed`: 일치하는 Barrier Reply를 받고 앞선 Flow-Mod 관련 Error가 없는 상태
+- `failed`: 일치하는 OpenFlow Error를 받거나 5초 안에 Barrier Reply가 없는 상태
+
+DPID뿐 아니라 현재 Datapath 객체와 Flow/Barrier XID를 함께 비교한다. 따라서
+재연결 전 Datapath에서 늦게 도착한 Reply, Error, disconnect가 새 연결 상태를
+변경하지 않는다. 이 확인 구조는 현재 Table-Miss에만 적용하며 외부 Flow Rule
+lifecycle은 후속 연동 단계에서 구현한다.
 
 ## Packet-In과 호스트 학습
 
@@ -219,7 +235,9 @@ Backup 경로를 통과할 수 있다.
     {
       "dpid": "0000000000000001",
       "state": "connected",
-      "table_miss_installed": true
+      "table_miss_state": "installed",
+      "table_miss_installed": true,
+      "table_miss_error": null
     }
   ]
 }
@@ -268,6 +286,7 @@ CONTROLLER_REBUILD=true ./data-plane/scripts/start.sh
 자동 검증은 다음을 포함한다.
 
 - `pingall` 12/12
+- 연결된 스위치 4개의 Table-Miss Barrier 확인
 - Primary와 Backup 출력 포트
 - 링크 down/up과 Flow 무효화
 - Primary 링크 down 상태의 Controller 재시작과 포트 상태 재동기화
@@ -294,6 +313,7 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 주요 이벤트:
 
 - `switch_connected`, `switch_reconnected`, `switch_disconnected`
+- `table_miss_pending`, `table_miss_installed`, `table_miss_failed`
 - `port_description_requested`, `port_description_synchronized`
 - `topology_switch_activated`
 - `topology_link_down`, `topology_link_up`
@@ -304,7 +324,8 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 
 - OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
 - REST API는 실제 Flow 설치/삭제 명령을 아직 제공하지 않는다.
-- 외부 Flow Rule acknowledgement와 lifecycle은 구현하지 않았다.
+- Barrier/Error 확인은 Table-Miss에만 적용되며 외부 Flow Rule lifecycle은
+  구현하지 않았다.
 - 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
 - Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
   Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.

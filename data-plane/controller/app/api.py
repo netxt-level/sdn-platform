@@ -16,20 +16,25 @@ def build_health_response(datapaths, settings):
     }
 
 
-def build_switches_response(datapaths):
+def build_switches_response(datapaths, table_miss_statuses):
+    switches = []
+    for datapath in datapaths.snapshot():
+        status = table_miss_statuses.get(datapath)
+        state = "unknown" if status is None else status.state
+        switches.append({
+            "dpid": f"{datapath.id:016x}",
+            "state": "connected",
+            "table_miss_state": state,
+            "table_miss_installed": state == "installed",
+            "table_miss_error": None if status is None else status.error,
+        })
+
     return {
-        "switches": [
-            {
-                "dpid": f"{datapath.id:016x}",
-                "state": "connected",
-                "table_miss_installed": True,
-            }
-            for datapath in datapaths.snapshot()
-        ]
+        "switches": switches,
     }
 
 
-def create_api(datapaths, settings):
+def create_api(datapaths, table_miss_statuses, settings):
     app = FastAPI(
         title="SDN Controller API",
         docs_url=None,
@@ -43,7 +48,7 @@ def create_api(datapaths, settings):
 
     @app.get("/switches")
     def switches():
-        return build_switches_response(datapaths)
+        return build_switches_response(datapaths, table_miss_statuses)
 
     return app
 
@@ -51,9 +56,9 @@ def create_api(datapaths, settings):
 class ControllerApiServer:
     """Run Uvicorn in a native daemon thread beside OS-Ken."""
 
-    def __init__(self, datapaths, settings):
+    def __init__(self, datapaths, table_miss_statuses, settings):
         config = uvicorn.Config(
-            app=create_api(datapaths, settings),
+            app=create_api(datapaths, table_miss_statuses, settings),
             host=settings.rest_host,
             port=settings.rest_port,
             log_level="warning",

@@ -15,7 +15,7 @@ from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
 from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
-from app.flow_manager import install_table_miss_flow
+from app.flow_manager import install_table_miss_with_barrier
 from app.flow_manager import install_l2_forwarding_flow
 from app.flow_manager import request_port_descriptions
 from app.flow_manager import send_packet_out
@@ -24,6 +24,7 @@ from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
 from app.routing import RoutingError
 from app.routing import calculate_weighted_bidirectional_routes
+from app.table_miss import TableMissRegistry
 from app.topology import ActiveTopology
 from app.topology import get_neighbor_switch
 from app.topology import is_host_facing_port
@@ -50,10 +51,12 @@ class SwitchConnectionController(app_manager.OSKenApp):
         super().__init__(*args, **kwargs)
         self.settings = load_settings()
         self.datapaths = DatapathRegistry()
+        self.table_miss_statuses = TableMissRegistry()
         self.hosts = HostRegistry()
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
         self.api_server = ControllerApiServer(
             self.datapaths,
+            self.table_miss_statuses,
             self.settings,
         )
 
@@ -73,12 +76,71 @@ class SwitchConnectionController(app_manager.OSKenApp):
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, event):
         datapath = event.msg.datapath
-        install_table_miss_flow(datapath)
+        flow_mod, barrier_request = install_table_miss_with_barrier(datapath)
+        self.table_miss_statuses.begin(
+            datapath,
+            flow_xid=flow_mod.xid,
+            barrier_xid=barrier_request.xid,
+        )
         self.logger.info(
-            "table_miss_installed dpid=%016x cookie=0x%016x",
+            "table_miss_pending dpid=%016x cookie=0x%016x "
+            "flow_xid=%d barrier_xid=%d",
             datapath.id,
             TABLE_MISS_COOKIE,
+            flow_mod.xid,
+            barrier_request.xid,
         )
+
+    @set_ev_cls(
+        ofp_event.EventOFPBarrierReply,
+        [CONFIG_DISPATCHER, MAIN_DISPATCHER],
+    )
+    def handle_barrier_reply(self, event):
+        msg = event.msg
+        if self.table_miss_statuses.mark_installed(
+            msg.datapath,
+            msg.xid,
+        ):
+            self.logger.info(
+                "table_miss_installed dpid=%016x barrier_xid=%d",
+                msg.datapath.id,
+                msg.xid,
+            )
+        else:
+            self.logger.debug(
+                "barrier_reply_untracked dpid=%016x xid=%d",
+                msg.datapath.id,
+                msg.xid,
+            )
+
+    @set_ev_cls(
+        ofp_event.EventOFPErrorMsg,
+        [CONFIG_DISPATCHER, MAIN_DISPATCHER],
+    )
+    def handle_openflow_error(self, event):
+        msg = event.msg
+        reason = f"OpenFlow error type={msg.type} code={msg.code}"
+        if self.table_miss_statuses.mark_failed(
+            msg.datapath,
+            msg.xid,
+            reason,
+        ):
+            self.logger.error(
+                "table_miss_failed dpid=%016x xid=%d type=%d code=%d",
+                msg.datapath.id,
+                msg.xid,
+                msg.type,
+                msg.code,
+            )
+        else:
+            self.logger.warning(
+                "openflow_error_untracked dpid=%016x xid=%d "
+                "type=%d code=%d",
+                msg.datapath.id,
+                msg.xid,
+                msg.type,
+                msg.code,
+            )
 
     @set_ev_cls(
         ofp_event.EventOFPStateChange,
@@ -136,6 +198,7 @@ class SwitchConnectionController(app_manager.OSKenApp):
                 )
         elif event.state == DEAD_DISPATCHER:
             if self.datapaths.unregister(datapath):
+                self.table_miss_statuses.remove(datapath)
                 topology_changed = False
                 try:
                     topology_changed = self.topology.disconnect_switch(

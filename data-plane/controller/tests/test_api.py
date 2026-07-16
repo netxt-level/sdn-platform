@@ -5,6 +5,7 @@ from app.api import build_switches_response
 from app.api import create_api
 from app.config import ControllerSettings
 from app.datapaths import DatapathRegistry
+from app.table_miss import TableMissRegistry
 
 
 class FakeDatapath:
@@ -15,6 +16,7 @@ class FakeDatapath:
 class ControllerApiTests(unittest.TestCase):
     def setUp(self):
         self.datapaths = DatapathRegistry()
+        self.table_miss_statuses = TableMissRegistry()
         self.settings = ControllerSettings(
             openflow_port=6653,
             rest_host="127.0.0.1",
@@ -36,10 +38,18 @@ class ControllerApiTests(unittest.TestCase):
         )
 
     def test_switches_are_sorted_and_do_not_expose_datapath_objects(self):
-        self.datapaths.register(FakeDatapath(4))
-        self.datapaths.register(FakeDatapath(1))
+        dpid4 = FakeDatapath(4)
+        dpid1 = FakeDatapath(1)
+        self.datapaths.register(dpid4)
+        self.datapaths.register(dpid1)
+        self.table_miss_statuses.begin(dpid4, 41, 42)
+        self.table_miss_statuses.begin(dpid1, 11, 12)
+        self.table_miss_statuses.mark_installed(dpid1, 12)
 
-        response = build_switches_response(self.datapaths)
+        response = build_switches_response(
+            self.datapaths,
+            self.table_miss_statuses,
+        )
 
         self.assertEqual(
             {
@@ -47,12 +57,16 @@ class ControllerApiTests(unittest.TestCase):
                     {
                         "dpid": "0000000000000001",
                         "state": "connected",
+                        "table_miss_state": "installed",
                         "table_miss_installed": True,
+                        "table_miss_error": None,
                     },
                     {
                         "dpid": "0000000000000004",
                         "state": "connected",
-                        "table_miss_installed": True,
+                        "table_miss_state": "pending",
+                        "table_miss_installed": False,
+                        "table_miss_error": None,
                     },
                 ]
             },
@@ -60,7 +74,11 @@ class ControllerApiTests(unittest.TestCase):
         )
 
     def test_only_health_and_switch_routes_are_exposed(self):
-        app = create_api(self.datapaths, self.settings)
+        app = create_api(
+            self.datapaths,
+            self.table_miss_statuses,
+            self.settings,
+        )
 
         routes = {
             route.path

@@ -50,6 +50,14 @@ def install_table_miss_flow(datapath):
     return flow_mod
 
 
+def install_table_miss_with_barrier(datapath):
+    """Install Table-Miss and request completion of preceding messages."""
+    flow_mod = install_table_miss_flow(datapath)
+    barrier_request = datapath.ofproto_parser.OFPBarrierRequest(datapath)
+    datapath.send_msg(barrier_request)
+    return flow_mod, barrier_request
+
+
 def build_port_description_request(datapath):
     """Build a request for the switch's current OpenFlow port state."""
     return datapath.ofproto_parser.OFPPortDescStatsRequest(datapath, 0)

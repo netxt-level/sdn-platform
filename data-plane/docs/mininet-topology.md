@@ -237,7 +237,7 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 
 1. OpenFlow 1.3 스위치 4개 연결
 2. 고정 Host IP/MAC 및 Switch Port 구성
-3. Controller Health의 연결 스위치 수
+3. 연결 스위치 4개의 Table-Miss Barrier 설치 확인
 4. 초기 `pingall`과 Primary `s1-s2-s4` Flow
 5. `s1-s2` 장애 후 Backup `s1-s3-s4` Flow
 6. `s1-s2`가 down인 상태에서 Controller 재시작 후 Backup 경로 유지

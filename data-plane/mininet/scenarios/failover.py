@@ -81,6 +81,31 @@ def wait_for_controller_health(host, port, expected_switches, timeout):
     raise ScenarioFailure(last_error)
 
 
+def wait_for_table_miss_installation(host, port, expected_switches, timeout):
+    deadline = time.monotonic() + timeout
+    url = f"http://{host}:{port}/switches"
+    last_error = "switch endpoint did not report installed Table-Miss rules"
+
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(url, timeout=1) as response:
+                payload = json.load(response)
+            switches = payload.get("switches", [])
+            if len(switches) == expected_switches and all(
+                item.get("table_miss_state") == "installed"
+                and item.get("table_miss_installed") is True
+                and item.get("table_miss_error") is None
+                for item in switches
+            ):
+                return switches
+            last_error = f"unexpected switch response: {payload}"
+        except (OSError, URLError, ValueError) as error:
+            last_error = str(error)
+        time.sleep(0.2)
+
+    raise ScenarioFailure(last_error)
+
+
 def dump_flows(switch):
     return switch.cmd("ovs-ofctl -O OpenFlow13 dump-flows", switch.name)
 
@@ -237,7 +262,13 @@ def run(args):
             expected_switches=4,
             timeout=args.timeout,
         )
-        checkpoint(3, "Controller health reports four connected switches")
+        wait_for_table_miss_installation(
+            args.controller_host,
+            args.controller_rest_port,
+            expected_switches=4,
+            timeout=args.timeout,
+        )
+        checkpoint(3, "four switches confirmed installed Table-Miss rules")
 
         if network.pingAll(timeout=1) != 0.0:
             raise ScenarioFailure("initial pingall failed")
@@ -258,6 +289,12 @@ def run(args):
                 "switches did not reconnect after Controller restart"
             )
         wait_for_controller_health(
+            args.controller_host,
+            args.controller_rest_port,
+            expected_switches=4,
+            timeout=args.timeout,
+        )
+        wait_for_table_miss_installation(
             args.controller_host,
             args.controller_rest_port,
             expected_switches=4,

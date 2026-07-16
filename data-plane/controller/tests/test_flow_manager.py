@@ -18,6 +18,7 @@ from app.flow_manager import build_port_description_request
 from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
+from app.flow_manager import install_table_miss_with_barrier
 from app.flow_manager import install_l2_forwarding_flow
 from app.flow_manager import request_port_descriptions
 from app.flow_manager import send_packet_out
@@ -29,8 +30,12 @@ class FakeDatapath:
 
     def __init__(self):
         self.sent_messages = []
+        self.next_xid = 0
 
     def send_msg(self, message):
+        if message.xid is None:
+            self.next_xid += 1
+            message.set_xid(self.next_xid)
         self.sent_messages.append(message)
 
 
@@ -54,6 +59,18 @@ class TableMissFlowTests(unittest.TestCase):
         action = instruction.actions[0]
         self.assertEqual(ofproto_v1_3.OFPP_CONTROLLER, action.port)
         self.assertEqual(ofproto_v1_3.OFPCML_NO_BUFFER, action.max_len)
+
+    def test_sends_table_miss_before_barrier_request(self):
+        datapath = FakeDatapath()
+
+        flow_mod, barrier_request = install_table_miss_with_barrier(datapath)
+
+        self.assertEqual(
+            [flow_mod, barrier_request],
+            datapath.sent_messages,
+        )
+        self.assertEqual(1, flow_mod.xid)
+        self.assertEqual(2, barrier_request.xid)
 
 
 class PortDescriptionRequestTests(unittest.TestCase):
