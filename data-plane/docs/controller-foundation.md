@@ -15,7 +15,7 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 - OpenFlow 1.3 전용 Listener와 확인 가능한 Table-Miss Rule
 - Datapath 연결·해제·재연결 관리
 - ARP/IPv4 Packet-In과 첫 패킷 Packet-Out
-- 호스트 MAC/IP/DPID/Port 학습
+- 고정 접속 포트별 호스트 MAC/IP 검증과 위치 학습
 - 활성 토폴로지와 동적 Flooding Tree
 - Dijkstra Primary/Backup 경로 계산
 - 양방향 학습형 L2 Flow 설치
@@ -157,14 +157,16 @@ lifecycle은 후속 연동 단계에서 구현한다.
 
 ## Packet-In과 호스트 학습
 
-Controller는 고정된 호스트 연결 포트에서만 출발지 호스트를 학습한다.
+Controller는 고정된 호스트 연결 포트에서만 출발지 호스트를 학습하며, 각
+포트에 선언된 MAC/IP가 모두 일치하는 ARP·IPv4 패킷만 허용한다.
 
 - `s1`: 1번 `h1`, 2번 `h2`, 3번 `h3`
 - `s4`: 3번 `web`
 
-학습 정보는 MAC, IPv4, DPID, 입력 포트다. 호스트가 이동하면 해당 MAC이
-출발지 또는 목적지인 Controller 관리 L2 Flow를 모든 연결 스위치에서
-삭제한다.
+학습 정보는 MAC, IPv4, DPID, 입력 포트다. 선언과 다른 출발지는
+`host_spoof_rejected` 경고를 남기고 학습, Flooding, Packet-Out을 수행하지
+않는다. 미지원 Ethertype는 호스트 바인딩 경고를 만들지 않고 기존 정책대로
+무시한다.
 
 지원 전달 범위:
 
@@ -179,7 +181,7 @@ IPv6, LLDP 및 그 밖의 Ethertype는 현재 전달 대상에서 제외한다.
 
 | 항목 | 값 |
 |---|---|
-| Match | `eth_src`, `eth_dst`, `eth_type` |
+| Match | `in_port`, `eth_src`, `eth_dst`, `eth_type`, 출발지 IP |
 | Priority | `100` |
 | Idle timeout | `60초` |
 | Hard timeout | `0` |
@@ -189,6 +191,11 @@ IPv6, LLDP 및 그 밖의 Ethertype는 현재 전달 대상에서 제외한다.
 첫 패킷은 Packet-Out으로 전달하고 같은 통신의 이후 패킷은 OVS Flow가
 처리한다. 토폴로지 변경 시 Cookie mask로 Controller 관리 L2 Flow만 제거해
 Table-Miss와 향후 외부 Rule 영역을 보존한다.
+
+`in_port`는 출발 호스트 포트와 경로의 이전 스위치 포트로 계산한다. 따라서
+h3가 h1의 MAC을 복제해도 s1의 h1 전용 Flow는 입력 포트가 달라 재사용할 수
+없다. IPv4는 `ipv4_src`, ARP는 `arp_spa`를 함께 매치해 IP만 바꾸는 우회도
+막는다. Table-Miss로 올라온 패킷은 고정 바인딩 검증에서 차단된다.
 
 ## 경로와 장애 우회
 
@@ -292,6 +299,8 @@ CONTROLLER_REBUILD=true ./data-plane/scripts/start.sh
 - Primary 링크 down 상태의 Controller 재시작과 포트 상태 재동기화
 - 재시작 후 Backup 유지와 링크 복구 후 Primary 복귀
 - 호스트 재학습과 Primary Flow 복구
+- 고정 포트별 MAC/IP 바인딩과 기존 L2 Flow의 `in_port` 검증
+- h3의 MAC/IP 위조 차단, 정상 h1 영향 없음, 주소 복구 후 통신
 - TCLink 지연과 `iperf3` 대역폭 제한
 - 종료 후 잔여 OVS 브리지 확인
 
@@ -318,11 +327,14 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - `topology_switch_activated`
 - `topology_link_down`, `topology_link_up`
 - `host_learned`, `host_ip_updated`, `host_moved`
+- `host_spoof_rejected`
 - `l2_path_installed`, `l2_flows_invalidated`
 
 ## 알려진 제한사항
 
 - OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
+- 현재 Host 바인딩은 고정 Mininet 토폴로지의 네 호스트 전용이다. 동적 Host
+  이동, DHCP 주소 변경, 신규 access 포트 등록은 지원하지 않는다.
 - REST API는 실제 Flow 설치/삭제 명령을 아직 제공하지 않는다.
 - Barrier/Error 확인은 Table-Miss에만 적용되며 외부 Flow Rule lifecycle은
   구현하지 않았다.

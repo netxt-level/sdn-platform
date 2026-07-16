@@ -23,12 +23,15 @@ from app.hosts import HostRegistry
 from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
 from app.routing import RoutingError
+from app.routing import calculate_input_ports
 from app.routing import calculate_weighted_bidirectional_routes
 from app.table_miss import TableMissRegistry
 from app.topology import ActiveTopology
+from app.topology import get_host_binding
 from app.topology import get_neighbor_switch
 from app.topology import is_host_facing_port
 from app.topology import SWITCH_LINK_PORTS
+from app.topology import validate_host_source
 from app.topology import WEIGHTED_SWITCH_GRAPH
 
 
@@ -392,7 +395,38 @@ class SwitchConnectionController(app_manager.OSKenApp):
             )
             return
 
+        if metadata.ethertype not in FLOOD_ETHERTYPES:
+            self.logger.debug(
+                "packet_in_ignored reason=ethertype_not_supported "
+                "dpid=%016x port=%d ethertype=0x%04x",
+                datapath.id,
+                in_port,
+                metadata.ethertype,
+            )
+            return
+
         if is_host_facing_port(datapath.id, in_port):
+            rejection_reason = validate_host_source(
+                datapath.id,
+                in_port,
+                metadata.source_mac,
+                metadata.source_ipv4,
+            )
+            if rejection_reason is not None:
+                binding = get_host_binding(datapath.id, in_port)
+                self.logger.warning(
+                    "host_spoof_rejected dpid=%016x port=%d reason=%s "
+                    "expected_mac=%s expected_ipv4=%s observed_mac=%s "
+                    "observed_ipv4=%s",
+                    datapath.id,
+                    in_port,
+                    rejection_reason,
+                    binding.mac,
+                    binding.ipv4,
+                    metadata.source_mac,
+                    metadata.source_ipv4 or "unknown",
+                )
+                return
             self._learn_source_host(datapath, in_port, metadata)
 
         if (
@@ -526,13 +560,17 @@ class SwitchConnectionController(app_manager.OSKenApp):
             routes.forward,
             route_datapaths,
             source.mac,
+            source.ipv4,
             destination.mac,
+            source.port,
         )
         self._install_route_flows(
             routes.reverse,
             route_datapaths,
             destination.mac,
+            destination.ipv4,
             source.mac,
+            destination.port,
         )
         send_packet_out(
             datapath=msg.datapath,
@@ -551,14 +589,28 @@ class SwitchConnectionController(app_manager.OSKenApp):
         return True
 
     @staticmethod
-    def _install_route_flows(route, datapaths, source_mac, destination_mac):
-        for hop in route.hops:
+    def _install_route_flows(
+        route,
+        datapaths,
+        source_mac,
+        source_ipv4,
+        destination_mac,
+        source_port,
+    ):
+        input_ports = calculate_input_ports(
+            route.switches,
+            SWITCH_LINK_PORTS,
+            source_port,
+        )
+        for hop, input_port in zip(route.hops, input_ports):
             for ethertype in L2_FORWARDING_ETHERTYPES:
                 install_l2_forwarding_flow(
                     datapath=datapaths[hop.dpid],
                     source_mac=source_mac,
+                    source_ipv4=source_ipv4,
                     destination_mac=destination_mac,
                     ethertype=ethertype,
+                    input_port=input_port,
                     output_port=hop.output_port,
                 )
 

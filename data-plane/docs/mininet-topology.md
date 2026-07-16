@@ -78,8 +78,9 @@ multipass exec sdn-lab -- sudo python3 \
 
 Controller는 Packet-In의 Ethernet 출발지와 ARP 또는 IPv4 출발지 주소를
 이용해 호스트의 MAC, IPv4, DPID 및 입력 포트를 학습한다. 현재 고정
-토폴로지에서 호스트 연결 포트로 지정된 `s1`의 1~3번과 `s4`의 3번만 학습
-대상이며, 스위치 간 transit 포트에서 관측한 MAC은 호스트로 등록하지 않는다.
+토폴로지에서 `s1`의 1~3번과 `s4`의 3번은 위 호스트 주소 표의 MAC/IP와
+일대일로 바인딩된다. 선언과 다른 출발지 패킷은 학습하거나 전달하지 않으며,
+스위치 간 transit 포트에서 관측한 MAC도 호스트로 등록하지 않는다.
 
 학습 로그는 다음 명령으로 확인한다.
 
@@ -88,7 +89,8 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 ```
 
 `host_learned`, `host_ip_updated`, `host_moved` 로그에는 학습한 MAC, IPv4,
-DPID와 입력 포트가 포함된다. 두 호스트의 위치를 모두 알면 목적지별
+DPID와 입력 포트가 포함된다. 고정 바인딩 위반은 예상값과 관측값을 포함한
+`host_spoof_rejected` 로그로 남는다. 두 호스트의 위치를 모두 알면 목적지별
 Unicast Flow 설치에 이 정보를 사용한다.
 
 ## Flooding Tree와 Unknown Unicast 정책
@@ -128,7 +130,7 @@ web   → s4(port 1) → s2(port 1) → s1(port 1) → h1
 
 동일 스위치에 연결된 호스트는 해당 스위치의 목적지 호스트 포트만 출력
 포트로 사용한다. 경로 계산 모듈은 OpenFlow 객체와 분리되어 있으며,
-스위치 경로와 각 스위치의 출력 포트만 반환한다.
+스위치 경로와 각 스위치의 입력·출력 포트를 계산한다.
 
 ## 학습 기반 Unicast Flow
 
@@ -138,7 +140,7 @@ web   → s4(port 1) → s2(port 1) → s1(port 1) → h1
 
 | 항목 | 값 |
 |---|---|
-| Match | `eth_src`, `eth_dst`, `eth_type` |
+| Match | `in_port`, `eth_src`, `eth_dst`, `eth_type`, 출발지 IP |
 | 지원 Ethertype | ARP `0x0806`, IPv4 `0x0800` |
 | Action | 계산된 포트로 `OUTPUT` |
 | Priority | `100` |
@@ -146,9 +148,14 @@ web   → s4(port 1) → s2(port 1) → s1(port 1) → h1
 | Hard timeout | `0` |
 | Cookie prefix | `0x53444e10` |
 
-호스트의 스위치 또는 포트가 변경되면 해당 MAC이 출발지나 목적지인 내부 L2
-Flow를 모든 연결 스위치에서 제거한다. Broadcast, 목적지 위치를 모르는
-Unicast, IPv6 및 미지원 Ethertype 정책은 이전 단계와 동일하다.
+현재 고정 토폴로지에서는 다른 스위치나 포트로 이동한 호스트 패킷을
+바인딩 위반으로 거부한다. Broadcast, 목적지 위치를 모르는 Unicast, IPv6 및
+미지원 Ethertype 정책은 이전 단계와 동일하다.
+
+경로의 첫 스위치는 출발 호스트 포트를, 이후 스위치는 이전 hop과 연결된
+포트를 `in_port`로 사용한다. 이 조건으로 다른 access 포트의 호스트가 기존
+정상 호스트 Flow를 MAC 위조만으로 재사용하는 것을 막는다. IPv4 Flow의
+`ipv4_src`와 ARP Flow의 `arp_spa`는 정상 MAC을 유지한 IP 위조 우회도 막는다.
 
 설치된 Rule은 Mininet 실행 중 다음 명령으로 확인한다.
 
@@ -245,13 +252,16 @@ macOS 프로젝트 루트에서 다음 한 명령으로 전체 인프라 시나�
 8. 기존 L2 Flow와 ARP 제거 후 전체 호스트 재학습, Primary Flow 및 `pingall`
 9. Mininet 네트워크 및 인터페이스 정리
 
-장애·복구 시나리오가 끝나면 Primary의 `s1-s2`, `s2-s4`에 각각
+장애·복구 시나리오가 끝나면 별도 네트워크에서 h3의 MAC 또는 IP를 h1 값으로
+변경해 web 도달이 차단되는지, 동시에 정상 h1은 계속 통신하는지, h3 주소
+복구 후 다시 통신하는지를 `tcpdump`와 ping으로 확인한다. 그 다음 Primary의
+`s1-s2`, `s2-s4`에 각각
 `10 Mbps`, `5 ms`, `0% loss`를 설정한 별도 네트워크를 시작한다. ICMP 평균
 RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범위에 있는지
 검증한 뒤 네트워크를 정리한다.
 
 경로 검증은 ping 결과만 확인하지 않고 `ovs-ofctl dump-flows` 출력의
-`h1 → web` IPv4 Flow와 각 스위치 출력 포트를 비교한다. 실패하더라도
+`h1 → web` IPv4 Flow와 각 스위치 입력·출력 포트를 비교한다. 실패하더라도
 시나리오의 `finally`에서 Mininet을 중지하며, 강제 종료 등으로 상태가
 남았을 때는 다음 명령으로 정리한다.
 
@@ -259,15 +269,19 @@ RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범�
 ./data-plane/scripts/cleanup.sh
 ```
 
-자동 검증의 실제 시나리오는 다음 두 파일로 분리되어 있다.
+자동 검증의 실제 시나리오는 다음 세 파일로 분리되어 있다.
 
 - `data-plane/mininet/scenarios/failover.py`: Primary/Backup 전환, 복구,
   Controller 재시작 검증
+- `data-plane/mininet/scenarios/host_spoofing.py`: 고정 MAC/IP 바인딩과 기존
+  Flow 우회 차단 검증
 - `data-plane/mininet/scenarios/link_performance.py`: TCLink 지연과 대역폭
   제한 검증
 
 ## 현재 제한사항
 
+- Host MAC/IP와 access 포트는 위 표의 네 호스트로 고정된다. 동적 Host 이동,
+  DHCP 주소 변경, 신규 Host 자동 등록은 지원하지 않는다.
 - Dijkstra 링크 비용과 Mininet의 `bw`, `delay`, `loss` 값은 독립된 설정이다.
   현재 경로 선택 비용은 Controller 토폴로지의 고정 Primary/Backup 정책을
   사용한다.

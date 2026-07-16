@@ -1,9 +1,29 @@
-"""Configured port roles and active state for the Mininet topology."""
+"""Configured host bindings, port roles, and active Mininet topology."""
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class HostBinding:
+    name: str
+    mac: str
+    ipv4: str
+
+
+HOST_BINDINGS = {
+    1: {
+        1: HostBinding("h1", "00:00:00:00:00:01", "10.0.0.1"),
+        2: HostBinding("h2", "00:00:00:00:00:02", "10.0.0.2"),
+        3: HostBinding("h3", "00:00:00:00:00:03", "10.0.0.3"),
+    },
+    4: {
+        3: HostBinding("web", "00:00:00:00:01:00", "10.0.0.100"),
+    },
+}
 
 HOST_FACING_PORTS = {
-    1: frozenset({1, 2, 3}),
-    4: frozenset({3}),
+    dpid: frozenset(bindings)
+    for dpid, bindings in HOST_BINDINGS.items()
 }
 
 SWITCH_LINK_PORTS = {
@@ -214,6 +234,23 @@ def calculate_flood_tree_links(graph):
 def is_host_facing_port(dpid, port):
     """Return whether a switch port is an allowed host attachment point."""
     return port in HOST_FACING_PORTS.get(dpid, ())
+
+
+def get_host_binding(dpid, port):
+    """Return the fixed host identity assigned to one access port."""
+    return HOST_BINDINGS.get(dpid, {}).get(port)
+
+
+def validate_host_source(dpid, port, mac, ipv4):
+    """Return a rejection reason when a source violates its fixed binding."""
+    binding = get_host_binding(dpid, port)
+    if binding is None:
+        return "unknown_attachment"
+    if not isinstance(mac, str) or mac.lower() != binding.mac:
+        return "mac_mismatch"
+    if ipv4 != binding.ipv4:
+        return "ipv4_mismatch"
+    return None
 
 
 def get_neighbor_switch(dpid, port):

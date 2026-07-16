@@ -5,6 +5,7 @@ from app.routing import RoutingError
 from app.routing import WeightedPath
 from app.routing import calculate_bidirectional_routes
 from app.routing import calculate_dijkstra_path
+from app.routing import calculate_input_ports
 from app.routing import calculate_output_hops
 from app.routing import calculate_unweighted_path
 from app.routing import calculate_weighted_bidirectional_routes
@@ -102,6 +103,36 @@ class OutputPortCalculationTests(unittest.TestCase):
             calculate_output_hops((1, 2), {1: {}}, 3)
         with self.assertRaisesRegex(RoutingError, "invalid destination port"):
             calculate_output_hops((1,), SWITCH_LINK_PORTS, 0)
+
+
+class InputPortCalculationTests(unittest.TestCase):
+    def test_calculates_primary_path_input_ports(self):
+        self.assertEqual(
+            (1, 1, 1),
+            calculate_input_ports((1, 2, 4), SWITCH_LINK_PORTS, 1),
+        )
+
+    def test_calculates_backup_and_reverse_input_ports(self):
+        self.assertEqual(
+            (1, 1, 2),
+            calculate_input_ports((1, 3, 4), SWITCH_LINK_PORTS, 1),
+        )
+        self.assertEqual(
+            (3, 2, 4),
+            calculate_input_ports((4, 2, 1), SWITCH_LINK_PORTS, 3),
+        )
+
+    def test_same_switch_path_uses_source_host_port(self):
+        self.assertEqual(
+            (2,),
+            calculate_input_ports((1,), SWITCH_LINK_PORTS, 2),
+        )
+
+    def test_rejects_missing_link_port_or_invalid_source_port(self):
+        with self.assertRaisesRegex(RoutingError, "missing input port"):
+            calculate_input_ports((1, 2), {2: {}}, 1)
+        with self.assertRaisesRegex(RoutingError, "invalid source port"):
+            calculate_input_ports((1,), SWITCH_LINK_PORTS, 0)
 
 
 class DijkstraPathCalculationTests(unittest.TestCase):

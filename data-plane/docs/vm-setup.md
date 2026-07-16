@@ -201,6 +201,8 @@ Controller 컨테이너와 잔여 Mininet/OVS 상태 정리:
 - Primary/Backup 경로와 링크 장애·복구
 - Primary 링크 down 상태의 Controller 재시작과 OVS 포트 상태 재동기화
 - 호스트 재학습과 Primary Flow 복구
+- L2 Flow의 경로별 `in_port`와 고정 Host MAC/IP 바인딩
+- h3의 MAC/IP 위조 차단과 정상 호스트 통신 회귀
 - TCLink 지연과 `iperf3` 대역폭 제한
 - 종료 후 잔여 OVS 브리지 부재
 

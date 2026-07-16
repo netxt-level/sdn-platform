@@ -2,15 +2,73 @@ import unittest
 
 from app.topology import ActiveTopology
 from app.topology import calculate_flood_tree_links
+from app.topology import get_host_binding
 from app.topology import get_flood_output_ports
 from app.topology import get_neighbor_switch
 from app.topology import is_host_facing_port
 from app.topology import PRIMARY_SWITCH_GRAPH
 from app.topology import SWITCH_LINK_PORTS
+from app.topology import validate_host_source
 from app.topology import WEIGHTED_SWITCH_GRAPH
 
 
 class TopologyPortRoleTests(unittest.TestCase):
+    def test_returns_fixed_host_bindings(self):
+        self.assertEqual("h1", get_host_binding(1, 1).name)
+        self.assertEqual("10.0.0.3", get_host_binding(1, 3).ipv4)
+        self.assertEqual(
+            "00:00:00:00:01:00",
+            get_host_binding(4, 3).mac,
+        )
+        self.assertIsNone(get_host_binding(1, 4))
+
+    def test_accepts_only_the_identity_bound_to_each_access_port(self):
+        self.assertIsNone(
+            validate_host_source(
+                1,
+                1,
+                "00:00:00:00:00:01",
+                "10.0.0.1",
+            )
+        )
+        self.assertIsNone(
+            validate_host_source(
+                4,
+                3,
+                "00:00:00:00:01:00",
+                "10.0.0.100",
+            )
+        )
+
+    def test_rejects_mac_ip_and_attachment_mismatches(self):
+        self.assertEqual(
+            "mac_mismatch",
+            validate_host_source(
+                1,
+                3,
+                "00:00:00:00:00:01",
+                "10.0.0.3",
+            ),
+        )
+        self.assertEqual(
+            "ipv4_mismatch",
+            validate_host_source(
+                1,
+                3,
+                "00:00:00:00:00:03",
+                "10.0.0.1",
+            ),
+        )
+        self.assertEqual(
+            "unknown_attachment",
+            validate_host_source(
+                1,
+                4,
+                "00:00:00:00:00:03",
+                "10.0.0.3",
+            ),
+        )
+
     def test_accepts_configured_host_facing_ports(self):
         self.assertTrue(is_host_facing_port(1, 1))
         self.assertTrue(is_host_facing_port(1, 2))

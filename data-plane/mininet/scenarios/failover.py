@@ -27,15 +27,15 @@ H1_IP = "10.0.0.1"
 L2_COOKIE_PREFIX = "cookie=0x53444e10"
 L2_COOKIE_MATCH = "cookie=0x53444e1000000000/0xffffffff00000000"
 
-PRIMARY_OUTPUTS = {
-    "s1": 4,
-    "s2": 2,
-    "s4": 3,
+PRIMARY_PORTS = {
+    "s1": (1, 4),
+    "s2": (1, 2),
+    "s4": (1, 3),
 }
-BACKUP_OUTPUTS = {
-    "s1": 5,
-    "s3": 2,
-    "s4": 3,
+BACKUP_PORTS = {
+    "s1": (1, 5),
+    "s3": (1, 2),
+    "s4": (2, 3),
 }
 
 
@@ -110,35 +110,50 @@ def dump_flows(switch):
     return switch.cmd("ovs-ofctl -O OpenFlow13 dump-flows", switch.name)
 
 
-def is_forward_flow(line, switch_name, output_port):
+def is_forward_flow(line, switch_name, input_port, output_port):
     flow_matches = all(
         value in line
         for value in (
-            "priority=100,ip",
+            "priority=100",
+            ",ip,",
             f"dl_src={H1_MAC}",
             f"dl_dst={WEB_MAC}",
         )
+    )
+    input_matches = (
+        f"in_port={input_port}",
+        f'in_port="{switch_name}-eth{input_port}"',
     )
     output_actions = (
         f"actions=output:{output_port}",
         f'actions=output:"{switch_name}-eth{output_port}"',
     )
-    return flow_matches and any(action in line for action in output_actions)
+    return (
+        flow_matches
+        and any(match in line for match in input_matches)
+        and any(action in line for action in output_actions)
+    )
 
 
-def has_host_forward_flow(switch, output_port=None):
+def has_host_forward_flow(switch, input_port=None, output_port=None):
     for line in dump_flows(switch).splitlines():
         if output_port is None:
             if all(
                 value in line
                 for value in (
-                    "priority=100,ip",
+                    "priority=100",
+                    ",ip,",
                     f"dl_src={H1_MAC}",
                     f"dl_dst={WEB_MAC}",
                 )
             ):
                 return True
-        elif is_forward_flow(line, switch.name, output_port):
+        elif is_forward_flow(
+            line,
+            switch.name,
+            input_port,
+            output_port,
+        ):
             return True
     return False
 
@@ -215,12 +230,13 @@ def require_ping(source, destination, count=3):
         )
 
 
-def require_path(network, expected_outputs, excluded_switch):
-    for switch_name, output_port in expected_outputs.items():
+def require_path(network, expected_ports, excluded_switch):
+    for switch_name, (input_port, output_port) in expected_ports.items():
         switch = network.get(switch_name)
-        if not has_host_forward_flow(switch, output_port):
+        if not has_host_forward_flow(switch, input_port, output_port):
             raise ScenarioFailure(
-                f"{switch_name} does not have h1-to-web output:{output_port}"
+                f"{switch_name} does not have h1-to-web "
+                f"in_port:{input_port},output:{output_port}"
             )
 
     if has_host_forward_flow(network.get(excluded_switch)):
@@ -272,14 +288,14 @@ def run(args):
 
         if network.pingAll(timeout=1) != 0.0:
             raise ScenarioFailure("initial pingall failed")
-        require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
+        require_path(network, PRIMARY_PORTS, excluded_switch="s3")
         checkpoint(4, "Primary path s1-s2-s4 installed")
 
         network.configLinkStatus("s1", "s2", "down")
         wait_for_l2_flow_removal(network, args.timeout)
         clear_arp(network.get("h1"), network.get("web"))
         require_ping(network.get("h1"), network.get("web"))
-        require_path(network, BACKUP_OUTPUTS, excluded_switch="s2")
+        require_path(network, BACKUP_PORTS, excluded_switch="s2")
         checkpoint(5, "Primary failure rerouted traffic over s1-s3-s4")
 
         restart_controller(args.controller_container, args.timeout)
@@ -303,7 +319,7 @@ def run(args):
         delete_managed_l2_flows(network, args.timeout)
         clear_all_arp(network)
         require_ping(network.get("h1"), network.get("web"))
-        require_path(network, BACKUP_OUTPUTS, excluded_switch="s2")
+        require_path(network, BACKUP_PORTS, excluded_switch="s2")
         checkpoint(
             6,
             "Controller restart preserved the down link and Backup path",
@@ -313,14 +329,14 @@ def run(args):
         wait_for_l2_flow_removal(network, args.timeout)
         clear_arp(network.get("h1"), network.get("web"))
         require_ping(network.get("h1"), network.get("web"))
-        require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
+        require_path(network, PRIMARY_PORTS, excluded_switch="s3")
         checkpoint(7, "Primary recovery restored path s1-s2-s4")
 
         delete_managed_l2_flows(network, args.timeout)
         clear_all_arp(network)
         if network.pingAll(timeout=1) != 0.0:
             raise ScenarioFailure("post-restart pingall failed")
-        require_path(network, PRIMARY_OUTPUTS, excluded_switch="s3")
+        require_path(network, PRIMARY_PORTS, excluded_switch="s3")
         checkpoint(8, "host learning and Primary flows recovered after restart")
         return 0
     except ScenarioFailure as error:

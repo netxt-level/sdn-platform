@@ -182,19 +182,39 @@ class L2ForwardingFlowTests(unittest.TestCase):
         flow_mod = build_l2_forwarding_flow(
             datapath=datapath,
             source_mac=self.SOURCE_MAC,
+            source_ipv4="10.0.0.1",
             destination_mac=self.DESTINATION_MAC,
             ethertype=0x0800,
+            input_port=1,
             output_port=4,
         )
 
         self.assertEqual(L2_FORWARDING_PRIORITY, flow_mod.priority)
         self.assertEqual(L2_FORWARDING_IDLE_TIMEOUT, flow_mod.idle_timeout)
         self.assertEqual(L2_FORWARDING_HARD_TIMEOUT, flow_mod.hard_timeout)
+        self.assertEqual(1, flow_mod.match["in_port"])
         self.assertEqual(self.SOURCE_MAC, flow_mod.match["eth_src"])
         self.assertEqual(self.DESTINATION_MAC, flow_mod.match["eth_dst"])
         self.assertEqual(0x0800, flow_mod.match["eth_type"])
+        self.assertEqual("10.0.0.1", flow_mod.match["ipv4_src"])
         action = flow_mod.instructions[0].actions[0]
         self.assertEqual(4, action.port)
+
+    def test_binds_arp_rule_to_source_protocol_address(self):
+        datapath = FakeDatapath()
+
+        flow_mod = build_l2_forwarding_flow(
+            datapath=datapath,
+            source_mac=self.SOURCE_MAC,
+            source_ipv4="10.0.0.1",
+            destination_mac=self.DESTINATION_MAC,
+            ethertype=0x0806,
+            input_port=1,
+            output_port=4,
+        )
+
+        self.assertEqual("10.0.0.1", flow_mod.match["arp_spa"])
+        self.assertNotIn("ipv4_src", flow_mod.match)
 
     def test_installs_l2_forwarding_rule(self):
         datapath = FakeDatapath()
@@ -202,8 +222,10 @@ class L2ForwardingFlowTests(unittest.TestCase):
         flow_mod = install_l2_forwarding_flow(
             datapath,
             self.SOURCE_MAC,
+            "10.0.0.1",
             self.DESTINATION_MAC,
             0x0800,
+            1,
             4,
         )
 

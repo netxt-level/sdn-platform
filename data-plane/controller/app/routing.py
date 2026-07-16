@@ -136,6 +136,26 @@ def calculate_output_hops(path, link_ports, destination_port):
     return tuple(hops)
 
 
+def calculate_input_ports(path, link_ports, source_port):
+    """Convert a switch path into each switch's expected ingress port."""
+    if not path:
+        raise RoutingError("switch path must not be empty")
+    if not isinstance(source_port, int) or source_port <= 0:
+        raise RoutingError(f"invalid source port: {source_port}")
+
+    input_ports = [source_port]
+    for previous_hop, current in zip(path, path[1:]):
+        try:
+            input_port = link_ports[current][previous_hop]
+        except KeyError as error:
+            raise RoutingError(
+                f"missing input port on switch {current} from {previous_hop}"
+            ) from error
+        input_ports.append(input_port)
+
+    return tuple(input_ports)
+
+
 def calculate_route(
     graph,
     link_ports,
