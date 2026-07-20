@@ -8,6 +8,8 @@ from app.api import FlowRuleInstallRequest
 from app.config import ControllerSettings
 from app.datapaths import DatapathRegistry
 from app.flow_operations import FlowOperationRegistry
+from app.hosts import HostRegistry
+from app.meters import MeterRegistry
 from app.table_miss import TableMissRegistry
 
 
@@ -34,7 +36,9 @@ class AppliedFlowOperations:
             cookie=0x5344E20000000001,
             state="installed",
             flow_xid=11,
+            request_xids=(11,),
             barrier_xid=12,
+            meter_id=None,
             error=None,
         )
 
@@ -44,6 +48,8 @@ class ControllerApiTests(unittest.TestCase):
         self.datapaths = DatapathRegistry()
         self.table_miss_statuses = TableMissRegistry()
         self.flow_operations = FlowOperationRegistry()
+        self.meters = MeterRegistry()
+        self.hosts = HostRegistry()
         self.settings = ControllerSettings(
             openflow_port=6653,
             rest_host="127.0.0.1",
@@ -105,6 +111,8 @@ class ControllerApiTests(unittest.TestCase):
             self.datapaths,
             self.table_miss_statuses,
             self.flow_operations,
+            self.meters,
+            self.hosts,
             self.settings,
         )
 
@@ -115,7 +123,7 @@ class ControllerApiTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            {"/health", "/switches", "/flow-rules"},
+            {"/health", "/switches", "/flow-rules", "/meters"},
             routes,
         )
 
@@ -127,6 +135,8 @@ class ControllerApiTests(unittest.TestCase):
             self.datapaths,
             self.table_miss_statuses,
             operations,
+            self.meters,
+            self.hosts,
             self.settings,
         )
 
@@ -146,6 +156,42 @@ class ControllerApiTests(unittest.TestCase):
         self.assertEqual("APPLIED", response["status"])
         self.assertEqual("rule-1", response["controller_rule_id"])
         self.assertEqual(1, len(operations.submissions))
+
+    def test_missing_switch_is_resolved_from_learned_source_host(self):
+        self.datapaths.register(FakeDatapath(1))
+        self.hosts.learn(
+            mac="00:00:00:00:00:03",
+            ipv4="10.0.0.3",
+            dpid=1,
+            port=3,
+        )
+        operations = AppliedFlowOperations()
+        app = create_api(
+            self.datapaths,
+            self.table_miss_statuses,
+            operations,
+            self.meters,
+            self.hosts,
+            self.settings,
+        )
+        endpoint = next(
+            route.endpoint
+            for route in app.routes
+            if route.path == "/flow-rules" and "POST" in route.methods
+        )
+
+        response = endpoint(FlowRuleInstallRequest(
+            rule_id="auto-rule",
+            match={"ipv4_src": "10.0.0.3"},
+            action="DROP",
+            priority=500,
+        ))
+
+        self.assertEqual("s1", response["switch_id"])
+        self.assertEqual(
+            "s1",
+            operations.submissions[0]["switch_id"],
+        )
 
 
 if __name__ == "__main__":

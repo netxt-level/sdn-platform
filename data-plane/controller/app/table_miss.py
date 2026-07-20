@@ -12,9 +12,14 @@ TABLE_MISS_CONFIRM_TIMEOUT = 5.0
 @dataclass(frozen=True)
 class TableMissStatus:
     state: str
-    flow_xid: int
+    flow_xids: tuple[int, ...]
     barrier_xid: int
     error: str | None = None
+
+    @property
+    def flow_xid(self):
+        """Backward-compatible primary Flow-Mod XID."""
+        return self.flow_xids[0]
 
 
 @dataclass
@@ -57,12 +62,24 @@ class TableMissRegistry:
             raise ValueError(f"invalid {name}: {value}")
         return value
 
-    def begin(self, datapath, flow_xid, barrier_xid):
+    def begin(self, datapath, flow_xids, barrier_xid):
         """Start a pending confirmation for the latest Datapath generation."""
         dpid = self._dpid(datapath)
+        if isinstance(flow_xids, int) and not isinstance(flow_xids, bool):
+            flow_xids = (flow_xids,)
+        else:
+            try:
+                flow_xids = tuple(flow_xids)
+            except TypeError as error:
+                raise ValueError("invalid Flow-Mod XIDs") from error
+        if not flow_xids:
+            raise ValueError("at least one Flow-Mod XID is required")
         status = TableMissStatus(
             state="pending",
-            flow_xid=self._xid(flow_xid, "Flow-Mod XID"),
+            flow_xids=tuple(
+                self._xid(flow_xid, "Flow-Mod XID")
+                for flow_xid in flow_xids
+            ),
             barrier_xid=self._xid(barrier_xid, "Barrier XID"),
         )
         with self._lock:
@@ -88,7 +105,7 @@ class TableMissRegistry:
                 return False
             record.status = TableMissStatus(
                 state="installed",
-                flow_xid=record.status.flow_xid,
+                flow_xids=record.status.flow_xids,
                 barrier_xid=record.status.barrier_xid,
             )
             return True
@@ -108,14 +125,14 @@ class TableMissRegistry:
                 or record.datapath is not datapath
                 or record.status.state != "pending"
                 or request_xid not in (
-                    record.status.flow_xid,
+                    *record.status.flow_xids,
                     record.status.barrier_xid,
                 )
             ):
                 return False
             record.status = TableMissStatus(
                 state="failed",
-                flow_xid=record.status.flow_xid,
+                flow_xids=record.status.flow_xids,
                 barrier_xid=record.status.barrier_xid,
                 error=error,
             )
@@ -144,7 +161,7 @@ class TableMissRegistry:
             ):
                 record.status = TableMissStatus(
                     state="failed",
-                    flow_xid=record.status.flow_xid,
+                    flow_xids=record.status.flow_xids,
                     barrier_xid=record.status.barrier_xid,
                     error=(
                         "Barrier Reply timed out after "

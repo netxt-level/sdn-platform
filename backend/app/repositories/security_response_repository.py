@@ -96,3 +96,33 @@ class SecurityResponseRepository:
                 session.flush()
 
             return _to_dict(response)
+
+    def update_status(
+        self,
+        response_id: str,
+        *,
+        status: str,
+        response_payload: dict[str, Any] | None = None,
+        decision_reason: str | None = None,
+        approved_by: str | None = None,
+        approved_at: datetime | None = None,
+        requested_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any] | None:
+        with SessionLocal.begin() as session:
+            response = session.get(SecurityResponse, response_id)
+            if response is None:
+                return None
+
+            response.status = status
+            response.response_payload = response_payload
+            if decision_reason is not None:
+                response.decision_reason = decision_reason
+            response.approved_by = approved_by
+            response.approved_at = approved_at
+            response.requested_at = requested_at
+            response.completed_at = completed_at
+            response.error_message = error_message
+
+            return _to_dict(response)

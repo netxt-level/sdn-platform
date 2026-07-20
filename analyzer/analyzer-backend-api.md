@@ -351,8 +351,10 @@ POST /api/security/events
 
 - `backend/app/schemas/security.py`의 `SecurityEventPayload` / `SecurityEvent` 스키마로 요청을 검증한다.
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
-- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
-- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 저장한다.
+- 이벤트에 `mitigation`이 없으면 대응 내역을 `PENDING`으로 유지한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule을 생성하고 Controller에 자동 적용한다.
+- Controller 적용 결과에 따라 대응 내역과 flow rule을 `APPLIED` 또는 `FAILED`로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 - 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
 

@@ -1,8 +1,8 @@
 # OpenFlow Controller 인프라
 
-- 상태: Controller·L2·경로 우회 구현 및 자동 검증 완료
-- 적용 범위: `feat/data-plane-infrastructure`
-- 최종 수정일: 2026-07-16
+- 상태: Controller·L2·경로 우회·외부 Flow Rule·OVS Meter 구현 및 검증 완료
+- 적용 범위: `feat/analyzer-sensor-integration`
+- 최종 수정일: 2026-07-20
 
 ## 목표와 현재 범위
 
@@ -24,14 +24,13 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 - Controller 재시작 후 OVS 재연결과 호스트 재학습
 - Health/Switch REST API
 - Backend 요청 Flow Rule 설치 및 Barrier 기반 적용 확인
+- OVS Meter PKTPS 기반 `RATE_LIMIT`과 timeout cleanup
 
 현재 브랜치에서 제외하는 기능:
 
 - Flow Rule 삭제·만료 상태 동기화
 - `DELETE /flow-rules/{id}`, `GET /topology`
-- OVS Meter 기반 `RATE_LIMIT`
-- Analyzer OVS Mirror와 Mininet 트래픽 캡처
-- 보안 이벤트 기반 DROP/Rate Limit 종단 간 대응
+- Backend와 Controller의 만료 상태 재조정
 
 위 기능은 인프라 브랜치를 기반으로 별도 연동 브랜치에서 구현한다.
 
@@ -117,7 +116,7 @@ data-plane/controller/
 OVS TCP connect
 → OpenFlow 1.3 negotiation
 → Switch Features
-→ Table-Miss Flow-Mod
+→ Policy Table-Miss와 Forwarding Table-Miss Flow-Mod
 → Barrier Request
 → Barrier Reply 또는 OpenFlow Error
 → MAIN_DISPATCHER Datapath registration
@@ -131,16 +130,16 @@ DEAD_DISPATCHER 이벤트는 현재 연결을 제거하지 않는다. 스위치�
 transit 포트를 미확인 상태로 두고 OpenFlow Port Description을 요청한다. 링크
 양쪽 포트의 현재 상태가 모두 정상으로 확인된 뒤에만 경로 계산에 포함한다.
 
-Table-Miss Rule:
+Controller는 정책과 포워딩을 두 테이블로 분리한다.
 
-| 항목 | 값 |
-|---|---|
-| Table | `0` |
-| Priority | `0` |
-| Match | 전체 |
-| Action | `CONTROLLER` |
-| Idle/Hard timeout | `0 / 0` |
-| Cookie | `0x53444e0000000001` |
+| Table | 역할 | Table-Miss |
+|---|---|---|
+| `0` | 외부 보안 정책, DROP, RATE_LIMIT | `GOTO_TABLE:1` |
+| `1` | 학습형 L2 포워딩 | `CONTROLLER` |
+
+정책 Table-Miss cookie는 `0x53444e0000000002`, 포워딩 Table-Miss cookie는
+`0x53444e0000000001`이다. 두 Flow-Mod 뒤의 단일 Barrier Reply로 파이프라인
+전체 설치를 확인한다.
 
 Table-Miss 상태는 다음 lifecycle을 사용한다.
 
@@ -185,6 +184,7 @@ IPv6, LLDP 및 그 밖의 Ethertype는 현재 전달 대상에서 제외한다.
 | 항목 | 값 |
 |---|---|
 | Match | `in_port`, `eth_src`, `eth_dst`, `eth_type`, 출발지 IP |
+| Table | `1` |
 | Priority | `100` |
 | Idle timeout | `60초` |
 | Hard timeout | `0` |
@@ -265,11 +265,17 @@ ICMP type/code 및 Ethernet source/destination이다. IPv4 전제 필드는
 - `DROP`
 - `OUTPUT:<port>`
 - `OUTPUT:<인접 switch>` (예: `output:s2`)
+- `RATE_LIMIT` (`rate_limit_pps` 필수)
 
 Flow-Mod 전송 후 Barrier Reply를 확인한 경우에만 `APPLIED`를 반환한다.
 OpenFlow Error 또는 5초 timeout은 오류 응답에 원인을 포함한다. 동일한
 `rule_id`의 `pending`/`installed` 요청은 다시 전송하지 않는다.
-`RATE_LIMIT`은 OVS Meter 파이프라인이 구현되기 전까지 거부한다.
+
+`RATE_LIMIT`은 `rate_limit_pps`를 OpenFlow Meter `OFPMF_PKTPS` rate로
+그대로 변환한다. Meter의 drop band를 통과한 패킷은 Table 1의 기존 L2
+포워딩을 계속 사용하므로 Packet-In hot path를 증가시키지 않는다. 동일한
+switch와 rate를 쓰는 rule은 Meter를 안전하게 공유하며, 마지막 rule의
+idle/hard timeout이 발생하면 Meter를 삭제한다.
 
 ### `GET /flow-rules`
 
@@ -277,17 +283,33 @@ OpenFlow Error 또는 5초 timeout은 오류 응답에 원인을 포함한다. �
 이 목록은 메모리 상태이며 영속 상태의 기준은 PostgreSQL
 `sdn_controller.flow_rules`이다.
 
+### `GET /meters`
+
+현재 Controller가 할당한 `meter_id`, DPID, `rate_limit_pps`, 참조 rule ID를
+반환한다.
+
 API 문서 URL은 비활성화되어 있다.
 
 격리된 Mininet 설치 검증:
 
 ```bash
 sudo python3 data-plane/mininet/scenarios/external_flow.py
+sudo python3 data-plane/mininet/scenarios/rate_limit.py
+sudo python3 data-plane/mininet/scenarios/automatic_response.py \
+  --backend-url http://127.0.0.1:8000
+sudo python3 data-plane/mininet/scenarios/analyzer_detection_response.py \
+  --backend-url http://127.0.0.1:8000 \
+  --analyzer-id analyzer-1
 ```
 
 이 시나리오는 h1→web ICMP가 정상 전달되는지 먼저 확인한 뒤 s1에 우선순위
 500 DROP rule을 설치한다. REST 응답의 `APPLIED`, OVS flow dump의 cookie와
 DROP action, 이후 ICMP 차단을 차례로 검증하고 Mininet 상태를 정리한다.
+RATE_LIMIT 시나리오는 1200-byte UDP를 100Mbps로 전송해 baseline을 측정한 뒤
+100pps Meter 적용 후 대역폭 감소와 hard timeout 뒤 Meter 정리를 확인한다.
+자동 대응 시나리오는 Analyzer 형식 이벤트의 DB/Controller 적용을 확인하고,
+Analyzer 탐지 시나리오는 OVS Mirror로 복제한 실제 ICMP Flood를 Analyzer가
+탐지해 `security_responses`, `flow_rules`, s1 Meter까지 연결하는지 확인한다.
 
 ## 환경변수
 
@@ -367,6 +389,7 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - `host_spoof_rejected`
 - `l2_path_installed`, `l2_flows_invalidated`
 - `external_flow_installed`, `external_flow_failed`
+- `external_flow_expired`, `meter_removed`, `meters_released`
 
 ## 알려진 제한사항
 
@@ -374,8 +397,8 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - 현재 Host 바인딩은 고정 Mininet 토폴로지의 네 호스트 전용이다. 동적 Host
   이동, DHCP 주소 변경, 신규 access 포트 등록은 지원하지 않는다.
 - REST API는 Flow 설치를 지원하지만 삭제 명령은 아직 제공하지 않는다.
-- 외부 Flow Rule은 설치 확인까지만 구현되어 있으며 timeout 만료, Controller
-  재시작 및 외부 삭제를 Backend 상태에 재조정하는 기능은 아직 없다.
+- Controller는 timeout 만료와 Meter 정리를 추적하지만 이를 Backend의
+  `EXPIRED` 상태로 재조정하는 기능은 아직 없다.
 - 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
 - Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
   Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.

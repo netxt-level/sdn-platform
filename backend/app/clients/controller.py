@@ -56,6 +56,7 @@ class ControllerClient:
             "priority": flow_rule["priority"],
             "idle_timeout": flow_rule.get("idle_timeout"),
             "hard_timeout": flow_rule.get("hard_timeout"),
+            "rate_limit_pps": flow_rule.get("rate_limit_pps"),
         }
         return self._request("POST", "/flow-rules", payload)
 

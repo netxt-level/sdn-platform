@@ -12,7 +12,7 @@ class FlowOperationRegistryTests(unittest.TestCase):
 
     def sender(self):
         self.send_count += 1
-        return SimpleNamespace(xid=11), SimpleNamespace(xid=12)
+        return (SimpleNamespace(xid=11),), SimpleNamespace(xid=12)
 
     def submit(self, rule_id="rule-1"):
         return self.registry.submit(
@@ -51,6 +51,48 @@ class FlowOperationRegistryTests(unittest.TestCase):
         self.assertEqual("rule-1", rule_id)
         self.assertEqual("failed", failed.state)
         self.assertEqual("OpenFlow rejected the rule", failed.error)
+
+    def test_meter_request_error_is_tracked_and_expiration_is_recorded(self):
+        def meter_sender():
+            return (
+                SimpleNamespace(xid=10),
+                SimpleNamespace(xid=11),
+            ), SimpleNamespace(xid=12)
+
+        self.registry.submit(
+            self.datapath,
+            "meter-rule",
+            "s1",
+            0x1235,
+            meter_sender,
+            meter_id=7,
+        )
+        self.assertEqual(
+            "meter-rule",
+            self.registry.mark_failed(
+                self.datapath,
+                10,
+                "meter rejected",
+            ),
+        )
+
+        self.registry.submit(
+            self.datapath,
+            "meter-rule",
+            "s1",
+            0x1235,
+            meter_sender,
+            meter_id=7,
+        )
+        self.registry.mark_installed(self.datapath, 12)
+        expired = self.registry.mark_removed(
+            self.datapath,
+            0x1235,
+            "expired",
+        )
+
+        self.assertEqual("expired", expired.state)
+        self.assertEqual(7, expired.meter_id)
 
     def test_wait_timeout_fails_operation(self):
         self.submit()

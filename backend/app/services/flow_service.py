@@ -30,6 +30,12 @@ class FlowService:
             hard_timeout=data.get("hard_timeout"),
             rate_limit_pps=data.get("rate_limit_pps"),
         )
+        return self.apply_flow(flow_rule)
+
+    def apply_flow(self, flow_rule: dict) -> dict:
+        if flow_rule.get("status") in {"APPLIED", "APPLYING"}:
+            return flow_rule
+
         requested_at = datetime.now(timezone.utc)
         applying = self.flow_repository.update_status(
             flow_rule["id"],
@@ -55,6 +61,7 @@ class FlowService:
             status="APPLIED",
             controller_rule_id=controller_response["controller_rule_id"],
             controller_response=controller_response,
+            switch_id=controller_response.get("switch_id"),
             requested_at=requested_at,
             applied_at=datetime.now(timezone.utc),
         )

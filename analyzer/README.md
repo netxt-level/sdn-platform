@@ -71,7 +71,7 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 요청/응답 필드 상세는 `analyzer-backend-api.md`를 기준으로 한다.
 
-백엔드는 `POST /api/security/events`로 받은 이벤트를 Elasticsearch에 저장하고, 이벤트별 보안 대응 내역을 PostgreSQL `security_responses`에 생성한다. 이벤트에 `mitigation`이 있으면 PostgreSQL `flow_rules`에 `PENDING` 상태의 flow rule 후보도 생성한다.
+백엔드는 `POST /api/security/events`로 받은 이벤트를 Elasticsearch에 저장하고, 이벤트별 보안 대응 내역을 PostgreSQL `security_responses`에 생성한다. 이벤트에 `mitigation`이 있으면 PostgreSQL `flow_rules`에 flow rule을 생성하고 Controller에 자동 적용한 뒤 결과를 `APPLIED` 또는 `FAILED`로 저장한다.
 
 ## 현재 탐지 범위
 
@@ -87,7 +87,7 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 ## 개발 시 주의사항
 
 - 분석 서버는 컨트롤러에 직접 대응 요청을 보내지 않는다.
-- 자동 대응에 필요한 payload는 `mitigation`으로만 제안한다. 실제 승인, 저장, 컨트롤러 적용 여부는 백엔드/컨트롤러 쪽 책임이다.
+- 자동 대응에 필요한 payload는 `mitigation`으로만 제안한다. 실제 저장, 정책 승인 표시, Controller 적용과 결과 기록은 백엔드/Controller 책임이다.
 - `total_bps`, `total_pps`는 윈도우 내 누적 값을 `window_sec`로 나눈 초당 값이다.
 - 분석 루프와 상태 전송 루프는 예외가 발생해도 오류 상태를 기록하고 계속 실행된다.
 - 백엔드 전송 실패는 로그로 남기고 해당 전송은 실패 처리한다.

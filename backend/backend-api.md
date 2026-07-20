@@ -325,7 +325,7 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
       "source_event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
       "security_response_id": "resp-uuid-001",
       "analyzer_id": "analyzer-1",
-      "switch_id": null,
+      "switch_id": "s1",
       "target": "flow",
       "action": "RATE_LIMIT",
       "match": {
@@ -338,12 +338,16 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
       "idle_timeout": 60,
       "hard_timeout": 300,
       "rate_limit_pps": 100,
-      "status": "PENDING",
-      "controller_rule_id": null,
-      "controller_response": null,
+      "status": "APPLIED",
+      "controller_rule_id": "rule-uuid-001",
+      "controller_response": {
+        "status": "APPLIED",
+        "switch_id": "s1",
+        "meter_id": 494950321
+      },
       "error_message": null,
-      "requested_at": null,
-      "applied_at": null,
+      "requested_at": "2026-05-24T10:00:00+00:00",
+      "applied_at": "2026-05-24T10:00:01+00:00",
       "created_at": "2026-05-24T10:00:00+00:00",
       "updated_at": "2026-05-24T10:00:00+00:00",
       "timestamp": "2026-05-24T10:00:00+00:00",
@@ -410,9 +414,10 @@ OpenFlow Error 및 Barrier timeout은 `FAILED`로 기록하고 `controller_respo
 동일하며 성공 시 `status=APPLIED`, 실패 시 `status=FAILED`다. 실패한 요청도
 DB 레코드는 유지된다.
 
-현재 Controller 설치 action은 `DROP`과 `OUTPUT:<port|인접 switch>`를 지원한다.
-예: `OUTPUT:4`, `output:s2`. `RATE_LIMIT`은 OVS Meter 파이프라인이 추가되기
-전까지 명시적으로 실패 처리된다.
+현재 Controller 설치 action은 `DROP`, `OUTPUT:<port|인접 switch>`,
+`RATE_LIMIT`을 지원한다. 예: `OUTPUT:4`, `output:s2`. `RATE_LIMIT`은
+`rate_limit_pps`를 OpenFlow 1.3 Meter의 PKTPS 단위로 사용하며 적용된
+`meter_id`는 `controller_response`에 저장된다.
 
 ## 5. Path API
 
@@ -486,8 +491,10 @@ POST /api/security/events
 ### Side Effects
 
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
-- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
-- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 저장한다.
+- 이벤트에 `mitigation`이 없으면 대응 내역을 `PENDING`으로 유지한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule을 생성하고 Controller에 자동 전송한다.
+- Barrier 확인 결과에 따라 flow rule과 대응 내역을 `APPLIED` 또는 `FAILED`로 저장한다. Analyzer payload에 `switch_id`가 없으면 Controller가 학습한 `ipv4_src`의 접속 switch를 사용한다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 
 `security_responses`는 `event_fingerprint + response_action`, `flow_rules`는 `event_fingerprint + action` 기준으로 중복 생성을 방지한다.
@@ -581,18 +588,26 @@ PostgreSQL `sdn_controller.security_responses`에 저장된 최신 보안 대응
       "recommended_action": "rate_limit",
       "response_action": "RATE_LIMIT",
       "response_level": "L2",
-      "status": "PENDING",
-      "decision_reason": "created from analyzer security event recommendation",
+      "status": "APPLIED",
+      "decision_reason": "analyzer mitigation applied automatically",
       "mitigation": {
         "action": "RATE_LIMIT",
         "target": "flow"
       },
-      "response_payload": null,
-      "approved_by": null,
+      "response_payload": {
+        "flow_rule_id": "rule-uuid-001",
+        "controller_rule_id": "rule-uuid-001",
+        "controller_response": {
+          "status": "APPLIED",
+          "switch_id": "s1",
+          "meter_id": 494950321
+        }
+      },
+      "approved_by": "automatic-policy",
       "detected_at": "2026-05-24T10:00:00+00:00",
-      "approved_at": null,
-      "requested_at": null,
-      "completed_at": null,
+      "approved_at": "2026-05-24T10:00:00+00:00",
+      "requested_at": "2026-05-24T10:00:00+00:00",
+      "completed_at": "2026-05-24T10:00:01+00:00",
       "error_message": null,
       "created_at": "2026-05-24T10:00:00+00:00",
       "updated_at": "2026-05-24T10:00:00+00:00"

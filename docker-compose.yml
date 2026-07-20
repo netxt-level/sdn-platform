@@ -8,6 +8,9 @@ services:
     env_file:
       - .env
     environment:
+      POSTGRES_HOST: ${BACKEND_POSTGRES_HOST:-postgres}
+      INFLUXDB_HOST: ${BACKEND_INFLUXDB_HOST:-influxdb}
+      ELASTICSEARCH_HOST: ${BACKEND_ELASTICSEARCH_HOST:-elasticsearch}
       CONTROLLER_BASE_URL: ${CONTROLLER_BASE_URL:-http://host.docker.internal:8080}
       CONTROLLER_TIMEOUT_SECONDS: ${CONTROLLER_TIMEOUT_SECONDS:-8}
       CONTROLLER_MAX_ATTEMPTS: ${CONTROLLER_MAX_ATTEMPTS:-2}

@@ -150,6 +150,7 @@ class FlowRepository:
         status: str,
         controller_rule_id: str | None = None,
         controller_response: dict[str, Any] | None = None,
+        switch_id: str | None = None,
         error_message: str | None = None,
         requested_at: datetime | None = None,
         applied_at: datetime | None = None,
@@ -162,6 +163,8 @@ class FlowRepository:
             flow_rule.status = status
             flow_rule.controller_rule_id = controller_rule_id
             flow_rule.controller_response = controller_response
+            if switch_id is not None:
+                flow_rule.switch_id = switch_id
             flow_rule.error_message = error_message
             flow_rule.requested_at = requested_at
             flow_rule.applied_at = applied_at

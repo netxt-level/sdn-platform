@@ -23,16 +23,26 @@ class StubSecurityEventRepository:
 class StubSecurityResponseRepository:
     def __init__(self):
         self.events = []
+        self.status_updates = []
 
     def get_or_create_from_event(self, event):
         self.events.append(event)
         return {
             "id": f"response-{event['event_id']}",
             "event_id": event["event_id"],
+            "status": "PENDING",
         }
 
     def list_responses(self, limit):
         return [{"id": "response-1", "limit": limit}]
+
+    def update_status(self, response_id, **values):
+        self.status_updates.append((response_id, values))
+        return {
+            "id": response_id,
+            "event_id": response_id.removeprefix("response-"),
+            **values,
+        }
 
 
 class StubFlowRepository:
@@ -46,6 +56,39 @@ class StubFlowRepository:
         return {
             "id": f"flow-{event['event_id']}",
             "security_response_id": security_response_id,
+            "status": "PENDING",
+            "controller_rule_id": None,
+            "controller_response": None,
+            "error_message": None,
+        }
+
+
+class StubFlowService:
+    def __init__(self):
+        self.applied = []
+
+    def apply_flow(self, flow_rule):
+        self.applied.append(flow_rule)
+        return {
+            **flow_rule,
+            "status": "APPLIED",
+            "controller_rule_id": flow_rule["id"],
+            "controller_response": {
+                "status": "APPLIED",
+                "meter_id": 7,
+            },
+        }
+
+
+class FailedFlowService:
+    def apply_flow(self, flow_rule):
+        return {
+            **flow_rule,
+            "status": "FAILED",
+            "controller_response": {
+                "detail": "switch is not connected: s1",
+            },
+            "error_message": "switch is not connected: s1",
         }
 
 
@@ -69,10 +112,12 @@ def test_security_service_stores_events_and_broadcasts_response_context(
     event_repository = StubSecurityEventRepository()
     response_repository = StubSecurityResponseRepository()
     flow_repository = StubFlowRepository()
+    flow_service = StubFlowService()
     service = module.SecurityService(
         security_event_repository=event_repository,
         security_response_repository=response_repository,
         flow_repository=flow_repository,
+        flow_service=flow_service,
     )
     events = [
         {"event_id": "evt-alert", "mitigation": None},
@@ -88,24 +133,115 @@ def test_security_service_stores_events_and_broadcasts_response_context(
         (events[0], "response-evt-alert"),
         (events[1], "response-evt-rate-limit"),
     ]
+    assert [item["id"] for item in flow_service.applied] == [
+        "flow-evt-rate-limit"
+    ]
+    assert [
+        update[1]["status"]
+        for update in response_repository.status_updates
+    ] == ["APPLYING", "APPLIED"]
     assert manager.messages == [
         {
             "type": "security_events",
             "data": {
                 **payload,
                 "security_responses": [
-                    {"id": "response-evt-alert", "event_id": "evt-alert"},
+                    {
+                        "id": "response-evt-alert",
+                        "event_id": "evt-alert",
+                        "status": "PENDING",
+                    },
                     {
                         "id": "response-evt-rate-limit",
                         "event_id": "evt-rate-limit",
+                        "status": "APPLIED",
+                        "response_payload": {
+                            "flow_rule_id": "flow-evt-rate-limit",
+                            "controller_rule_id": "flow-evt-rate-limit",
+                            "controller_response": {
+                                "status": "APPLIED",
+                                "meter_id": 7,
+                            },
+                        },
+                        "decision_reason": (
+                            "analyzer mitigation applied automatically"
+                        ),
+                        "approved_by": "automatic-policy",
+                        "approved_at": (
+                            response_repository.status_updates[1][1][
+                                "approved_at"
+                            ]
+                        ),
+                        "requested_at": (
+                            response_repository.status_updates[1][1][
+                                "requested_at"
+                            ]
+                        ),
+                        "completed_at": (
+                            response_repository.status_updates[1][1][
+                                "completed_at"
+                            ]
+                        ),
+                        "error_message": None,
                     },
                 ],
                 "flow_rules": [
                     {
                         "id": "flow-evt-rate-limit",
                         "security_response_id": "response-evt-rate-limit",
+                        "status": "APPLIED",
+                        "controller_rule_id": "flow-evt-rate-limit",
+                        "controller_response": {
+                            "status": "APPLIED",
+                            "meter_id": 7,
+                        },
+                        "error_message": None,
                     }
                 ],
             },
         }
     ]
+
+
+def test_security_service_records_automatic_response_failure(
+    load_service_module,
+):
+    manager = RecordingManager()
+    module = load_service_module(
+        "security_service",
+        stubs={
+            "app.core.websocket": {"manager": manager},
+            "app.repositories.flow_repository": {"FlowRepository": StubFlowRepository},
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+            "app.repositories.security_response_repository": {
+                "SecurityResponseRepository": StubSecurityResponseRepository,
+            },
+        },
+    )
+    response_repository = StubSecurityResponseRepository()
+    service = module.SecurityService(
+        security_event_repository=StubSecurityEventRepository(),
+        security_response_repository=response_repository,
+        flow_repository=StubFlowRepository(),
+        flow_service=FailedFlowService(),
+    )
+
+    asyncio.run(service.receive_events({
+        "analyzer_id": "analyzer-1",
+        "events": [
+            {
+                "event_id": "evt-failed",
+                "mitigation": {"action": "RATE_LIMIT"},
+            },
+        ],
+    }))
+
+    final_update = response_repository.status_updates[-1][1]
+    assert final_update["status"] == "FAILED"
+    assert final_update["decision_reason"] == (
+        "automatic analyzer mitigation failed"
+    )
+    assert final_update["error_message"] == "switch is not connected: s1"
+    assert manager.messages[0]["data"]["flow_rules"][0]["status"] == "FAILED"

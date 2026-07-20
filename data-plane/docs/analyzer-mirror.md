@@ -133,6 +133,6 @@ Analyzer가 실행 중인 상태에서 `cleanup.sh`를 호출하면 Sensor veth�
 중지 절차를 안내한 뒤 실패해야 한다.
 
 Analyzer 연결 단계에서는 VM Analyzer를 host network로 실행하고
-`ANALYZER_INTERFACE=sdn-sensor0`을 지정한다. 이 문서의 현재 완료 범위는 실제
-OVS 복제와 VM host의 `tcpdump` 검증까지이며, Packet Summary와 Security Event
-종단 간 저장 검증은 다음 통합 단계에서 수행한다.
+`ANALYZER_INTERFACE=sdn-sensor0`을 지정한다. `analyzer_detection_response.py`
+시나리오는 실제 OVS 복제, ICMP Flood 탐지, Security Event/Response와 Flow Rule
+저장, Controller의 s1 Meter 설치까지 종단 간 검증한다.

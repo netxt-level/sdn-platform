@@ -4,6 +4,8 @@ from os_ken.ofproto import ofproto_v1_3
 from os_ken.ofproto import ofproto_v1_3_parser
 
 from app.flow_manager import TABLE_MISS_COOKIE
+from app.flow_manager import POLICY_TABLE_ID
+from app.flow_manager import FORWARDING_TABLE_ID
 from app.flow_manager import TABLE_MISS_PRIORITY
 from app.flow_manager import TABLE_MISS_TABLE_ID
 from app.flow_manager import L2_FORWARDING_COOKIE_MASK
@@ -14,6 +16,8 @@ from app.flow_manager import L2_FORWARDING_PRIORITY
 from app.flow_manager import EXTERNAL_FLOW_COOKIE_PREFIX
 from app.flow_manager import build_external_flow
 from app.flow_manager import build_external_flow_cookie
+from app.flow_manager import build_policy_table_miss_flow
+from app.flow_manager import build_rate_limit_meter
 from app.flow_manager import build_l2_forwarding_cookie
 from app.flow_manager import build_l2_forwarding_flow
 from app.flow_manager import build_packet_out
@@ -51,6 +55,7 @@ class TableMissFlowTests(unittest.TestCase):
         self.assertEqual([flow_mod], datapath.sent_messages)
         self.assertEqual(TABLE_MISS_COOKIE, flow_mod.cookie)
         self.assertEqual(TABLE_MISS_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(FORWARDING_TABLE_ID, flow_mod.table_id)
         self.assertEqual(TABLE_MISS_PRIORITY, flow_mod.priority)
         self.assertEqual(ofproto_v1_3.OFPFC_ADD, flow_mod.command)
         self.assertEqual(0, flow_mod.idle_timeout)
@@ -66,14 +71,23 @@ class TableMissFlowTests(unittest.TestCase):
     def test_sends_table_miss_before_barrier_request(self):
         datapath = FakeDatapath()
 
-        flow_mod, barrier_request = install_table_miss_with_barrier(datapath)
+        flow_mods, barrier_request = install_table_miss_with_barrier(datapath)
 
         self.assertEqual(
-            [flow_mod, barrier_request],
+            [*flow_mods, barrier_request],
             datapath.sent_messages,
         )
-        self.assertEqual(1, flow_mod.xid)
-        self.assertEqual(2, barrier_request.xid)
+        self.assertEqual([1, 2], [flow_mod.xid for flow_mod in flow_mods])
+        self.assertEqual(3, barrier_request.xid)
+
+    def test_policy_table_miss_continues_to_forwarding_table(self):
+        flow_mod = build_policy_table_miss_flow(FakeDatapath())
+
+        self.assertEqual(POLICY_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(
+            FORWARDING_TABLE_ID,
+            flow_mod.instructions[0].table_id,
+        )
 
 
 class PortDescriptionRequestTests(unittest.TestCase):
@@ -328,15 +342,31 @@ class ExternalFlowRuleTests(unittest.TestCase):
         action = flow_mod.instructions[0].actions[0]
         self.assertEqual(4, action.port)
 
-    def test_rejects_rate_limit_until_meter_pipeline_exists(self):
-        with self.assertRaisesRegex(ValueError, "OVS Meter pipeline"):
-            build_external_flow(
-                FakeDatapath(),
-                rule_id="rule-3",
-                match={"ipv4_src": "10.0.0.2"},
-                action="RATE_LIMIT",
-                priority=500,
-            )
+    def test_builds_rate_limit_rule_with_meter_and_goto(self):
+        flow_mod = build_external_flow(
+            FakeDatapath(),
+            rule_id="rule-3",
+            match={"ipv4_src": "10.0.0.2"},
+            action="RATE_LIMIT",
+            priority=500,
+            meter_id=7,
+            rate_limit_pps=100,
+        )
+
+        self.assertEqual(POLICY_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(7, flow_mod.instructions[0].meter_id)
+        self.assertEqual(
+            FORWARDING_TABLE_ID,
+            flow_mod.instructions[1].table_id,
+        )
+
+    def test_builds_packet_per_second_drop_meter(self):
+        meter_mod = build_rate_limit_meter(FakeDatapath(), 7, 100)
+
+        self.assertEqual(ofproto_v1_3.OFPMC_ADD, meter_mod.command)
+        self.assertEqual(ofproto_v1_3.OFPMF_PKTPS, meter_mod.flags)
+        self.assertEqual(7, meter_mod.meter_id)
+        self.assertEqual(100, meter_mod.bands[0].rate)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,10 @@ from pydantic import Field
 import uvicorn
 
 from app.flow_manager import build_external_flow_cookie
+from app.flow_manager import delete_rate_limit_meter
 from app.flow_manager import install_external_flow_with_barrier
+from app.flow_manager import install_rate_limited_flow_with_barrier
+from app.flow_manager import normalize_external_match
 from app.topology import SWITCH_LINK_PORTS
 
 
@@ -18,12 +21,13 @@ FLOW_CONFIRM_TIMEOUT_SECONDS = 5.0
 
 class FlowRuleInstallRequest(BaseModel):
     rule_id: str = Field(min_length=1, max_length=128)
-    switch_id: str = Field(min_length=1, max_length=64)
+    switch_id: str | None = Field(default=None, min_length=1, max_length=64)
     match: dict
     action: str = Field(min_length=1, max_length=64)
     priority: int = Field(ge=1, le=65535)
     idle_timeout: int | None = Field(default=None, ge=0, le=65535)
     hard_timeout: int | None = Field(default=None, ge=0, le=65535)
+    rate_limit_pps: int | None = Field(default=None, ge=1)
 
 
 def parse_switch_dpid(switch_id):
@@ -52,7 +56,9 @@ def build_flow_operation_response(status):
             "APPLIED" if status.state == "installed" else status.state.upper()
         ),
         "flow_xid": status.flow_xid,
+        "request_xids": status.request_xids,
         "barrier_xid": status.barrier_xid,
+        "meter_id": status.meter_id,
         "error": status.error,
     }
 
@@ -85,7 +91,14 @@ def build_switches_response(datapaths, table_miss_statuses):
     }
 
 
-def create_api(datapaths, table_miss_statuses, flow_operations, settings):
+def create_api(
+    datapaths,
+    table_miss_statuses,
+    flow_operations,
+    meters,
+    hosts,
+    settings,
+):
     app = FastAPI(
         title="SDN Controller API",
         docs_url=None,
@@ -110,29 +123,80 @@ def create_api(datapaths, table_miss_statuses, flow_operations, settings):
             ]
         }
 
+    @app.get("/meters")
+    def meter_list():
+        return {
+            "items": list(meters.snapshot()),
+        }
+
     @app.post("/flow-rules")
     def install_flow_rule(payload: FlowRuleInstallRequest):
-        try:
-            dpid = parse_switch_dpid(payload.switch_id)
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        if payload.switch_id is None:
+            source_ipv4 = payload.match.get("ipv4_src")
+            try:
+                host = hosts.get_by_ipv4(source_ipv4)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail="switch_id or a valid learned ipv4_src is required",
+                ) from error
+            if host is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "switch_id is missing and source host has not been "
+                        f"learned: {source_ipv4}"
+                    ),
+                )
+            dpid = host.dpid
+            resolved_switch_id = f"s{dpid}"
+        else:
+            try:
+                dpid = parse_switch_dpid(payload.switch_id)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=str(error),
+                ) from error
+            resolved_switch_id = payload.switch_id
 
         datapath = datapaths.get(dpid)
         if datapath is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"switch is not connected: {payload.switch_id}",
+                detail=f"switch is not connected: {resolved_switch_id}",
             )
 
         rule_id = payload.rule_id.strip()
         cookie = build_external_flow_cookie(rule_id)
+        meter_lease = None
         try:
-            flow_operations.submit(
-                datapath=datapath,
-                rule_id=rule_id,
-                switch_id=payload.switch_id,
-                cookie=cookie,
-                sender=lambda: install_external_flow_with_barrier(
+            normalize_external_match(payload.match)
+            if payload.action.strip().upper() == "RATE_LIMIT":
+                if payload.rate_limit_pps is None:
+                    raise ValueError(
+                        "RATE_LIMIT requires rate_limit_pps"
+                    )
+                meter_lease = meters.allocate(
+                    dpid,
+                    rule_id,
+                    payload.rate_limit_pps,
+                )
+                sender = lambda: install_rate_limited_flow_with_barrier(
+                    datapath,
+                    meter_id=meter_lease.meter_id,
+                    rate_limit_pps=meter_lease.rate_limit_pps,
+                    install_meter=meter_lease.created,
+                    rule_id=rule_id,
+                    match=payload.match,
+                    action=payload.action,
+                    priority=payload.priority,
+                    idle_timeout=payload.idle_timeout,
+                    hard_timeout=payload.hard_timeout,
+                    switch_link_ports=SWITCH_LINK_PORTS,
+                )
+            else:
+                sender = lambda: install_external_flow_with_barrier(
                     datapath,
                     rule_id=rule_id,
                     match=payload.match,
@@ -141,9 +205,22 @@ def create_api(datapaths, table_miss_statuses, flow_operations, settings):
                     idle_timeout=payload.idle_timeout,
                     hard_timeout=payload.hard_timeout,
                     switch_link_ports=SWITCH_LINK_PORTS,
+                )
+            flow_operations.submit(
+                datapath=datapath,
+                rule_id=rule_id,
+                switch_id=resolved_switch_id,
+                cookie=cookie,
+                sender=sender,
+                meter_id=(
+                    None if meter_lease is None else meter_lease.meter_id
                 ),
             )
         except (TypeError, ValueError) as error:
+            if meter_lease is not None:
+                unused_meter_id = meters.release(dpid, rule_id)
+                if unused_meter_id is not None:
+                    delete_rate_limit_meter(datapath, unused_meter_id)
             raise HTTPException(status_code=422, detail=str(error)) from error
 
         status = flow_operations.wait(
@@ -152,6 +229,10 @@ def create_api(datapaths, table_miss_statuses, flow_operations, settings):
         )
         response = build_flow_operation_response(status)
         if status.state != "installed":
+            if meter_lease is not None:
+                unused_meter_id = meters.release(dpid, rule_id)
+                if unused_meter_id is not None:
+                    delete_rate_limit_meter(datapath, unused_meter_id)
             raise HTTPException(status_code=502, detail=response)
         return response
 
@@ -166,6 +247,8 @@ class ControllerApiServer:
         datapaths,
         table_miss_statuses,
         flow_operations,
+        meters,
+        hosts,
         settings,
     ):
         config = uvicorn.Config(
@@ -173,6 +256,8 @@ class ControllerApiServer:
                 datapaths,
                 table_miss_statuses,
                 flow_operations,
+                meters,
+                hosts,
                 settings,
             ),
             host=settings.rest_host,

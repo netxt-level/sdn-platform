@@ -47,12 +47,14 @@ def test_install_sends_stable_backend_rule_id_to_controller():
             "priority": 500,
             "idle_timeout": None,
             "hard_timeout": None,
+            "rate_limit_pps": 100,
         })
 
     request = urlopen.call_args.args[0]
     payload = json.loads(request.data)
     assert result == response
     assert payload["rule_id"] == "rule-1"
+    assert payload["rate_limit_pps"] == 100
     assert request.full_url == "http://controller:8080/flow-rules"
 
 

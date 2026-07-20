@@ -13,7 +13,9 @@ class FlowOperationStatus:
     cookie: int
     state: str
     flow_xid: int
+    request_xids: tuple[int, ...]
     barrier_xid: int
+    meter_id: int | None = None
     error: str | None = None
 
 
@@ -31,7 +33,15 @@ class FlowOperationRegistry:
         self._records = {}
         self._lock = RLock()
 
-    def submit(self, datapath, rule_id, switch_id, cookie, sender):
+    def submit(
+        self,
+        datapath,
+        rule_id,
+        switch_id,
+        cookie,
+        sender,
+        meter_id=None,
+    ):
         """Submit idempotently; the lock closes the send/register reply race."""
         with self._lock:
             existing = self._records.get(rule_id)
@@ -41,7 +51,13 @@ class FlowOperationRegistry:
             }:
                 return existing.status
 
-            flow_mod, barrier_request = sender()
+            request_messages, barrier_request = sender()
+            request_messages = tuple(request_messages)
+            if not request_messages:
+                raise ValueError(
+                    "Flow Rule submission requires at least one request"
+                )
+            flow_mod = request_messages[-1]
             status = FlowOperationStatus(
                 rule_id=rule_id,
                 switch_id=switch_id,
@@ -49,7 +65,11 @@ class FlowOperationRegistry:
                 cookie=cookie,
                 state="pending",
                 flow_xid=flow_mod.xid,
+                request_xids=tuple(
+                    message.xid for message in request_messages
+                ),
                 barrier_xid=barrier_request.xid,
+                meter_id=meter_id,
             )
             self._records[rule_id] = _TrackedFlowOperation(
                 datapath=datapath,
@@ -102,7 +122,10 @@ class FlowOperationRegistry:
                 if (
                     record.datapath is datapath
                     and status.state == "pending"
-                    and request_xid in (status.flow_xid, status.barrier_xid)
+                    and request_xid in (
+                        *status.request_xids,
+                        status.barrier_xid,
+                    )
                 ):
                     record.status = self._replace(
                         status,
@@ -130,6 +153,22 @@ class FlowOperationRegistry:
                     failed.append(record.status.rule_id)
         return tuple(failed)
 
+    def mark_removed(self, datapath, cookie, reason):
+        with self._lock:
+            for record in self._records.values():
+                status = record.status
+                if (
+                    record.datapath is datapath
+                    and status.cookie == cookie
+                    and status.state == "installed"
+                ):
+                    record.status = self._replace(
+                        status,
+                        state=reason,
+                    )
+                    return record.status
+        return None
+
     def snapshot(self):
         with self._lock:
             return tuple(
@@ -146,6 +185,8 @@ class FlowOperationRegistry:
             cookie=status.cookie,
             state=state,
             flow_xid=status.flow_xid,
+            request_xids=status.request_xids,
             barrier_xid=status.barrier_xid,
+            meter_id=status.meter_id,
             error=error,
         )

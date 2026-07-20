@@ -278,8 +278,8 @@ multipass exec sdn-lab -- sudo ovs-vsctl list-br
 - 공격·Flood·부하 생성은 격리된 Mininet namespace 안에서만 수행한다.
 - Analyzer의 기본 VM NIC에서는 Mininet host-to-host 트래픽이 보이지 않는다.
   `ANALYZER_INTERFACE=sdn-sensor0`과 실행 중인 OVS Mirror가 필요하다.
-- Sensor veth와 Mirror의 패킷 복제는 구현됐지만 Analyzer/Backend 종단 간 저장
-  검증은 아직 자동화하지 않았다.
+- Sensor veth와 Mirror의 패킷 복제부터 Analyzer 탐지, Backend 저장,
+  Controller Meter 설치까지 `analyzer_detection_response.py`로 검증할 수 있다.
 - 호스트 방화벽이 VM의 Backend/Frontend 접근을 차단하면 부트스트랩 검증이
   실패할 수 있다.
 - Windows에서도 같은 Ubuntu 구성을 만들지만 Multipass/Hyper-V 설정에 따라

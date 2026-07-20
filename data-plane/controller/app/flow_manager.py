@@ -5,8 +5,11 @@ import zlib
 
 
 TABLE_MISS_COOKIE = 0x53444E0000000001
+POLICY_TABLE_MISS_COOKIE = 0x53444E0000000002
 TABLE_MISS_PRIORITY = 0
-TABLE_MISS_TABLE_ID = 0
+POLICY_TABLE_ID = 0
+FORWARDING_TABLE_ID = 1
+TABLE_MISS_TABLE_ID = FORWARDING_TABLE_ID
 L2_FORWARDING_COOKIE_PREFIX = 0x53444E1000000000
 L2_FORWARDING_COOKIE_MASK = 0xFFFFFFFF00000000
 L2_FORWARDING_PRIORITY = 100
@@ -14,7 +17,7 @@ L2_FORWARDING_IDLE_TIMEOUT = 60
 L2_FORWARDING_HARD_TIMEOUT = 0
 EXTERNAL_FLOW_COOKIE_PREFIX = 0x5344E20000000000
 EXTERNAL_FLOW_COOKIE_MASK = 0xFFFFFF0000000000
-EXTERNAL_FLOW_TABLE_ID = 0
+EXTERNAL_FLOW_TABLE_ID = POLICY_TABLE_ID
 
 EXTERNAL_MATCH_FIELDS = frozenset({
     "eth_src",
@@ -43,7 +46,7 @@ INTEGER_MATCH_FIELDS = frozenset({
 
 
 def build_table_miss_flow(datapath):
-    """Build the default rule that sends unmatched packets to the controller."""
+    """Build the forwarding-table miss that sends packets to the controller."""
     ofproto = datapath.ofproto
     parser = datapath.ofproto_parser
     actions = [
@@ -72,19 +75,40 @@ def build_table_miss_flow(datapath):
     )
 
 
+def build_policy_table_miss_flow(datapath):
+    """Build the policy-table miss that continues normal L2 processing."""
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+    return parser.OFPFlowMod(
+        datapath=datapath,
+        cookie=POLICY_TABLE_MISS_COOKIE,
+        table_id=POLICY_TABLE_ID,
+        command=ofproto.OFPFC_ADD,
+        idle_timeout=0,
+        hard_timeout=0,
+        priority=TABLE_MISS_PRIORITY,
+        match=parser.OFPMatch(),
+        instructions=[
+            parser.OFPInstructionGotoTable(FORWARDING_TABLE_ID),
+        ],
+    )
+
+
 def install_table_miss_flow(datapath):
-    """Install or replace the table-miss rule on a datapath."""
+    """Install or replace the forwarding-table miss rule on a datapath."""
     flow_mod = build_table_miss_flow(datapath)
     datapath.send_msg(flow_mod)
     return flow_mod
 
 
 def install_table_miss_with_barrier(datapath):
-    """Install Table-Miss and request completion of preceding messages."""
-    flow_mod = install_table_miss_flow(datapath)
+    """Install the two-table pipeline and confirm all preceding messages."""
+    policy_miss = build_policy_table_miss_flow(datapath)
+    datapath.send_msg(policy_miss)
+    forwarding_miss = install_table_miss_flow(datapath)
     barrier_request = datapath.ofproto_parser.OFPBarrierRequest(datapath)
     datapath.send_msg(barrier_request)
-    return flow_mod, barrier_request
+    return (policy_miss, forwarding_miss), barrier_request
 
 
 def build_port_description_request(datapath):
@@ -355,6 +379,8 @@ def build_external_flow(
     idle_timeout=0,
     hard_timeout=0,
     switch_link_ports=None,
+    meter_id=None,
+    rate_limit_pps=None,
 ):
     """Build a backend-managed DROP or OUTPUT OpenFlow 1.3 rule."""
     ofproto = datapath.ofproto
@@ -365,9 +391,22 @@ def build_external_flow(
     if normalized_action.upper() == "DROP":
         instructions = []
     elif normalized_action.upper() == "RATE_LIMIT":
-        raise ValueError(
-            "RATE_LIMIT requires the OVS Meter pipeline and is not supported yet"
-        )
+        if (
+            isinstance(meter_id, bool)
+            or not isinstance(meter_id, int)
+            or meter_id <= 0
+        ):
+            raise ValueError("RATE_LIMIT requires a positive meter_id")
+        if (
+            isinstance(rate_limit_pps, bool)
+            or not isinstance(rate_limit_pps, int)
+            or rate_limit_pps <= 0
+        ):
+            raise ValueError("RATE_LIMIT requires a positive rate_limit_pps")
+        instructions = [
+            parser.OFPInstructionMeter(meter_id),
+            parser.OFPInstructionGotoTable(FORWARDING_TABLE_ID),
+        ]
     elif normalized_action.upper().startswith("OUTPUT"):
         output_port = resolve_external_output_port(
             datapath,
@@ -403,4 +442,77 @@ def install_external_flow_with_barrier(datapath, **flow):
     datapath.send_msg(flow_mod)
     barrier_request = datapath.ofproto_parser.OFPBarrierRequest(datapath)
     datapath.send_msg(barrier_request)
-    return flow_mod, barrier_request
+    return (flow_mod,), barrier_request
+
+
+def build_rate_limit_meter(datapath, meter_id, rate_limit_pps):
+    """Build an OVS packet-per-second drop meter."""
+    if (
+        isinstance(meter_id, bool)
+        or not isinstance(meter_id, int)
+        or meter_id <= 0
+        or meter_id >= datapath.ofproto.OFPM_MAX
+    ):
+        raise ValueError(f"invalid meter_id: {meter_id}")
+    if (
+        isinstance(rate_limit_pps, bool)
+        or not isinstance(rate_limit_pps, int)
+        or rate_limit_pps <= 0
+    ):
+        raise ValueError("rate_limit_pps must be a positive integer")
+    parser = datapath.ofproto_parser
+    ofproto = datapath.ofproto
+    return parser.OFPMeterMod(
+        datapath=datapath,
+        command=ofproto.OFPMC_ADD,
+        flags=ofproto.OFPMF_PKTPS,
+        meter_id=meter_id,
+        bands=[
+            parser.OFPMeterBandDrop(rate=rate_limit_pps),
+        ],
+    )
+
+
+def delete_rate_limit_meter(datapath, meter_id):
+    """Delete an OVS meter after its final Flow Rule is gone."""
+    meter_mod = datapath.ofproto_parser.OFPMeterMod(
+        datapath=datapath,
+        command=datapath.ofproto.OFPMC_DELETE,
+        flags=datapath.ofproto.OFPMF_PKTPS,
+        meter_id=meter_id,
+        bands=[],
+    )
+    datapath.send_msg(meter_mod)
+    return meter_mod
+
+
+def install_rate_limited_flow_with_barrier(
+    datapath,
+    *,
+    meter_id,
+    rate_limit_pps,
+    install_meter,
+    **flow,
+):
+    """Install a packet-rate meter and a policy flow atomically by barrier."""
+    requests = []
+    if install_meter:
+        meter_mod = build_rate_limit_meter(
+            datapath,
+            meter_id,
+            rate_limit_pps,
+        )
+        datapath.send_msg(meter_mod)
+        requests.append(meter_mod)
+
+    flow_mod = build_external_flow(
+        datapath,
+        meter_id=meter_id,
+        rate_limit_pps=rate_limit_pps,
+        **flow,
+    )
+    datapath.send_msg(flow_mod)
+    requests.append(flow_mod)
+    barrier_request = datapath.ofproto_parser.OFPBarrierRequest(datapath)
+    datapath.send_msg(barrier_request)
+    return tuple(requests), barrier_request

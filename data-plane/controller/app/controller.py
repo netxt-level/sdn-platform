@@ -15,12 +15,14 @@ from app.datapaths import DatapathRegistry
 from app.flow_manager import TABLE_MISS_COOKIE
 from app.flow_manager import delete_all_l2_forwarding_flows
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
+from app.flow_manager import delete_rate_limit_meter
 from app.flow_manager import install_table_miss_with_barrier
 from app.flow_manager import install_l2_forwarding_flow
 from app.flow_manager import request_port_descriptions
 from app.flow_manager import send_packet_out
 from app.flow_operations import FlowOperationRegistry
 from app.hosts import HostRegistry
+from app.meters import MeterRegistry
 from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
 from app.routing import RoutingError
@@ -57,12 +59,15 @@ class SwitchConnectionController(app_manager.OSKenApp):
         self.datapaths = DatapathRegistry()
         self.table_miss_statuses = TableMissRegistry()
         self.flow_operations = FlowOperationRegistry()
+        self.meters = MeterRegistry()
         self.hosts = HostRegistry()
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
         self.api_server = ControllerApiServer(
             self.datapaths,
             self.table_miss_statuses,
             self.flow_operations,
+            self.meters,
+            self.hosts,
             self.settings,
         )
 
@@ -82,18 +87,18 @@ class SwitchConnectionController(app_manager.OSKenApp):
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, event):
         datapath = event.msg.datapath
-        flow_mod, barrier_request = install_table_miss_with_barrier(datapath)
+        flow_mods, barrier_request = install_table_miss_with_barrier(datapath)
         self.table_miss_statuses.begin(
             datapath,
-            flow_xid=flow_mod.xid,
+            flow_xids=tuple(flow_mod.xid for flow_mod in flow_mods),
             barrier_xid=barrier_request.xid,
         )
         self.logger.info(
             "table_miss_pending dpid=%016x cookie=0x%016x "
-            "flow_xid=%d barrier_xid=%d",
+            "flow_xids=%s barrier_xid=%d",
             datapath.id,
             TABLE_MISS_COOKIE,
-            flow_mod.xid,
+            ",".join(str(flow_mod.xid) for flow_mod in flow_mods),
             barrier_request.xid,
         )
 
@@ -173,6 +178,45 @@ class SwitchConnectionController(app_manager.OSKenApp):
                 msg.code,
             )
 
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def handle_flow_removed(self, event):
+        msg = event.msg
+        reasons = {
+            msg.datapath.ofproto.OFPRR_IDLE_TIMEOUT: "expired",
+            msg.datapath.ofproto.OFPRR_HARD_TIMEOUT: "expired",
+            msg.datapath.ofproto.OFPRR_DELETE: "removed",
+            msg.datapath.ofproto.OFPRR_GROUP_DELETE: "removed",
+        }
+        state = reasons.get(msg.reason, "removed")
+        status = self.flow_operations.mark_removed(
+            msg.datapath,
+            msg.cookie,
+            state,
+        )
+        if status is None:
+            return
+
+        if status.meter_id is not None:
+            unused_meter_id = self.meters.release(
+                status.dpid,
+                status.rule_id,
+            )
+            if unused_meter_id is not None:
+                delete_rate_limit_meter(msg.datapath, unused_meter_id)
+                self.logger.info(
+                    "meter_removed dpid=%016x meter_id=%d rule_id=%s",
+                    status.dpid,
+                    unused_meter_id,
+                    status.rule_id,
+                )
+        self.logger.info(
+            "external_flow_%s dpid=%016x rule_id=%s cookie=0x%016x",
+            state,
+            status.dpid,
+            status.rule_id,
+            status.cookie,
+        )
+
     @set_ev_cls(
         ofp_event.EventOFPStateChange,
         [MAIN_DISPATCHER, DEAD_DISPATCHER],
@@ -240,6 +284,13 @@ class SwitchConnectionController(app_manager.OSKenApp):
                         "reason=switch_disconnected",
                         dpid,
                         rule_id,
+                    )
+                released_meter_ids = self.meters.release_datapath(datapath.id)
+                if released_meter_ids:
+                    self.logger.info(
+                        "meters_released dpid=%s meter_ids=%s",
+                        dpid,
+                        ",".join(str(item) for item in released_meter_ids),
                     )
                 topology_changed = False
                 try:
