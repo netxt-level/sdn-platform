@@ -1,6 +1,6 @@
 # 재현 가능한 SDN Lab VM
 
-- 상태: macOS/Windows용 Multipass 자동 구성 구현 완료
+- 상태: macOS/Windows용 Multipass 자동 구성 완료, `s1` Sensor bootstrap 반영·검증 전
 - 기본 VM: Ubuntu 24.04, 4 CPU, 8 GB RAM, 40 GB Disk
 - 최종 수정일: 2026-07-16
 
@@ -29,9 +29,9 @@ Elasticsearch                        Open vSwitch s1~s4
 유지한다. VM에는 Controller와 Analyzer만 Docker로 실행하며 Mininet/OVS는
 VM Linux 환경에서 직접 실행한다.
 
-Analyzer 컨테이너가 실행된다는 사실은 Mininet 트래픽 캡처가 완료됐다는
-의미가 아니다. OVS Mirror와 전용 sensor 인터페이스는 후속 연동 브랜치의
-범위다.
+Analyzer 컨테이너가 실행된다는 사실만으로 Mininet 트래픽을 볼 수 있는 것은
+아니다. 전용 `sdn-sensor0` veth와 OVS Mirror 구현 및 `tcpdump` 검증은
+완료됐으며, 운영 시 해당 캡처 경로를 명시적으로 활성화해야 한다.
 
 ## 사전 요구사항
 
@@ -106,9 +106,11 @@ VM_ANALYZER_INTERFACE
 2. cloud-init 완료를 기다린다.
 3. Mininet, OVS, `iperf3`, `tcpdump`, Docker와 진단 도구를 설치한다.
 4. 생성 파일을 제외한 프로젝트를 tar로 묶어 VM에 동기화한다.
-5. 선택한 배치 프로필에 맞게 Compose 서비스를 시작한다.
-6. 데이터베이스 migration과 서비스 health를 확인한다.
-7. Mininet/OVS 기본 동작과 Controller health를 검증한다.
+5. `sdn-sensor0 ↔ sdn-mirror0` veth를 멱등 생성한다.
+6. 선택한 배치 프로필에 맞게 Compose 서비스를 시작한다. Analyzer는 Sensor
+   veth 생성이 성공한 뒤 시작한다.
+7. 데이터베이스 migration과 서비스 health를 확인한다.
+8. Mininet/OVS 기본 동작과 Controller health를 검증한다.
 
 VM 프로젝트 복사본은 `/home/ubuntu/sdn-platform`에 생성된다. 부트스트랩을
 다시 실행하면 이 디렉터리를 새 스냅샷으로 교체한다. Docker volume은 별도로
@@ -125,8 +127,9 @@ VM 프로젝트 복사본은 `/home/ubuntu/sdn-platform`에 생성된다. 부트
 - VM의 Backend/Frontend/DB 컨테이너가 실행 중이면 중지한다.
 - Analyzer는 Multipass 기본 게이트웨이를 통해 호스트 Backend 주소를 사용한다.
 
-Analyzer 인터페이스가 `auto`이면 VM 기본 경로 NIC를 사용한다. 이 설정은
-호스트-VM 통신 검증용이며 Mininet 패킷 관찰 경로는 아니다.
+Analyzer의 Mininet 패킷 관찰 인터페이스는 `sdn-sensor0`이다. `auto`로
+선택한 VM 기본 경로 NIC는 호스트-VM 통신 진단용으로만 사용하며 Sensor
+통합 구성에서는 Analyzer 캡처 인터페이스로 사용하지 않는다.
 
 ### `full` 프로필
 
@@ -159,6 +162,14 @@ Controller 시작:
 ./data-plane/scripts/start.sh
 ```
 
+Sensor veth는 VM bootstrap이 Analyzer 시작 전에 생성한다. OVS Mirror 운영은
+`data-plane/docs/analyzer-mirror.md`를 참고한다. 기존 VM 복구나 단독 진단에서
+veth만 다시 준비하려면 다음 명령을 사용한다.
+
+```bash
+./data-plane/scripts/setup-sensor.sh
+```
+
 현재 로컬 데이터 플레인만 VM에 동기화:
 
 ```bash
@@ -187,6 +198,10 @@ Controller 컨테이너와 잔여 Mininet/OVS 상태 정리:
 ./data-plane/scripts/cleanup.sh
 ```
 
+Analyzer가 실행 중이면 `cleanup.sh`는 Sensor veth를 삭제하지 않고 Analyzer
+중지 절차를 출력한 뒤 실패한다. Analyzer를 중지하고 같은 명령을 다시
+실행해야 전체 Sensor와 Mininet/OVS 상태를 제거한다.
+
 전체 인프라 검증:
 
 ```bash
@@ -204,6 +219,8 @@ Controller 컨테이너와 잔여 Mininet/OVS 상태 정리:
 - L2 Flow의 경로별 `in_port`와 고정 Host MAC/IP 바인딩
 - h3의 MAC/IP 위조 차단과 정상 호스트 통신 회귀
 - TCLink 지연과 `iperf3` 대역폭 제한
+- s1 OVS Mirror source/output 포트와 Sensor veth 상태
+- Primary/Backup 경로의 양방향 ICMP `tcpdump` 캡처
 - 종료 후 잔여 OVS 브리지 부재
 
 실패하거나 강제 종료해 상태가 남았으면 `cleanup.sh`를 실행한다.
@@ -260,7 +277,9 @@ multipass exec sdn-lab -- sudo ovs-vsctl list-br
 
 - 공격·Flood·부하 생성은 격리된 Mininet namespace 안에서만 수행한다.
 - Analyzer의 기본 VM NIC에서는 Mininet host-to-host 트래픽이 보이지 않는다.
-- OVS Mirror/sensor 인터페이스는 아직 자동 구성하지 않는다.
+  `ANALYZER_INTERFACE=sdn-sensor0`과 실행 중인 OVS Mirror가 필요하다.
+- Sensor veth와 Mirror의 패킷 복제는 구현됐지만 Analyzer/Backend 종단 간 저장
+  검증은 아직 자동화하지 않았다.
 - 호스트 방화벽이 VM의 Backend/Frontend 접근을 차단하면 부트스트랩 검증이
   실패할 수 있다.
 - Windows에서도 같은 Ubuntu 구성을 만들지만 Multipass/Hyper-V 설정에 따라

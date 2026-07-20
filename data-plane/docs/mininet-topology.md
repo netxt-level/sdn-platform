@@ -42,6 +42,7 @@ OpenFlow 1.3과 `secure` fail mode를 사용한다.
 | `s1` | 3 | `h3` |
 | `s1` | 4 | `s2` |
 | `s1` | 5 | `s3` |
+| `s1` | 6 | `sdn-mirror0` (선택적 Sensor Mirror output) |
 | `s2` | 1 | `s1` |
 | `s2` | 2 | `s4` |
 | `s3` | 1 | `s1` |
@@ -51,6 +52,11 @@ OpenFlow 1.3과 `secure` fail mode를 사용한다.
 | `s4` | 3 | `web` |
 
 각 호스트 인터페이스는 해당 네임스페이스의 0번 Mininet 포트를 사용한다.
+`s1`의 6번 포트는 `--sensor-mirror` 실행 중에만 OVS에 추가되며 일반
+토폴로지의 forwarding 포트에는 포함되지 않는다. `s1`의 1~5번 ingress
+트래픽을 `sdn-sensor0`으로 복제하며 Controller의 경로 계산과 Flooding
+대상에서는 제외한다. 상세 수명주기와 검증 방법은
+`data-plane/docs/analyzer-mirror.md`를 참고한다.
 
 ## 빠른 검증과 대화형 실행
 
@@ -269,7 +275,7 @@ RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범�
 ./data-plane/scripts/cleanup.sh
 ```
 
-자동 검증의 실제 시나리오는 다음 세 파일로 분리되어 있다.
+자동 검증의 실제 시나리오는 다음 네 파일로 분리되어 있다.
 
 - `data-plane/mininet/scenarios/failover.py`: Primary/Backup 전환, 복구,
   Controller 재시작 검증
@@ -277,6 +283,8 @@ RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범�
   Flow 우회 차단 검증
 - `data-plane/mininet/scenarios/link_performance.py`: TCLink 지연과 대역폭
   제한 검증
+- `data-plane/mininet/scenarios/mirror_capture.py`: s1 OVS Mirror 구성과
+  Primary/Backup 양방향 ICMP Sensor 캡처 검증
 
 ## 현재 제한사항
 
@@ -289,8 +297,9 @@ RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범�
   access 링크는 Mininet 기본값을 사용한다.
 - Packet loss는 확률적이므로 자동 성능 시나리오는 지연과 TCP 대역폭 제한을
   검증하고 loss 수치 자체는 판정하지 않는다.
-- Controller 외부 Flow Rule API, OVS Meter, Analyzer Mirror는 이 인프라
-  단계에서 아직 연결하지 않았다.
+- Analyzer Mirror는 기본 토폴로지와 분리된 선택 기능이며, 활성화할 때만
+  `s1` port 6을 추가한다. `s1` 연결 기준의 `tcpdump` 캡처와 Analyzer Packet
+  Summary/Security Event 종단 간 저장은 통합 단계에서 다시 검증한다.
 - Mininet 호스트와 OVS 스위치는 영구 VM이 아니라 시나리오 실행 중 생성되는
   Linux 네임스페이스와 가상 인터페이스다. 종료 후 `cleanup.sh`로 잔여 상태를
   제거한다.

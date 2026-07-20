@@ -14,6 +14,15 @@ from mininet.topo import Topo
 
 from link_config import canonical_link_name
 from link_config import parse_link_configs
+from sensor import DEFAULT_MIRROR_INTERFACE
+from sensor import DEFAULT_MIRROR_NAME
+from sensor import DEFAULT_MIRROR_PORT
+from sensor import DEFAULT_SENSOR_INTERFACE
+from sensor import DEFAULT_SOURCE_PORTS
+from sensor import DEFAULT_SWITCH
+from sensor import SensorConfig
+from sensor import attach_mirror
+from sensor import detach_mirror
 
 
 SWITCH_DPIDS = {
@@ -138,9 +147,34 @@ def parse_args():
         ),
     )
     parser.add_argument("--verify-timeout", type=float, default=10.0)
+    parser.add_argument(
+        "--sensor-mirror",
+        action="store_true",
+        help="Attach the persistent sensor veth as an ingress-only OVS Mirror.",
+    )
+    parser.add_argument("--sensor-interface", default=DEFAULT_SENSOR_INTERFACE)
+    parser.add_argument("--mirror-interface", default=DEFAULT_MIRROR_INTERFACE)
+    parser.add_argument("--mirror-switch", default=DEFAULT_SWITCH)
+    parser.add_argument("--mirror-name", default=DEFAULT_MIRROR_NAME)
+    parser.add_argument("--mirror-port", type=int, default=DEFAULT_MIRROR_PORT)
+    parser.add_argument(
+        "--mirror-source-port",
+        type=int,
+        action="append",
+        dest="mirror_source_ports",
+        help="Ingress source port to mirror; repeat for multiple ports.",
+    )
     args = parser.parse_args()
     try:
         args.link_configs = parse_link_configs(args.link_config)
+        args.sensor_config = SensorConfig(
+            sensor_interface=args.sensor_interface,
+            mirror_interface=args.mirror_interface,
+            switch=args.mirror_switch,
+            mirror_name=args.mirror_name,
+            mirror_port=args.mirror_port,
+            source_ports=tuple(args.mirror_source_ports or DEFAULT_SOURCE_PORTS),
+        )
     except ValueError as error:
         parser.error(str(error))
     return args
@@ -239,9 +273,20 @@ def run(args):
         link_configs=args.link_configs,
     )
 
+    mirror_attached = False
     try:
         network.build()
         network.start()
+
+        if args.sensor_mirror:
+            attach_mirror(args.sensor_config)
+            mirror_attached = True
+            print(
+                f"OVS Mirror {args.sensor_config.mirror_name} ready: "
+                f"{args.sensor_config.switch} ports "
+                f"{args.sensor_config.source_ports} -> "
+                f"{args.sensor_config.sensor_interface}"
+            )
 
         if args.verify:
             connected = wait_for_controller_connections(
@@ -258,6 +303,8 @@ def run(args):
         CLI(network)
         return 0
     finally:
+        if mirror_attached:
+            detach_mirror(args.sensor_config)
         network.stop()
 
 
