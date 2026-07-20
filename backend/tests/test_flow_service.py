@@ -28,6 +28,19 @@ class StubFlowRepository:
     def list_flows(self, src_ip=None):
         return []
 
+    def get_flow(self, flow_rule_id):
+        return {
+            "id": flow_rule_id,
+            "switch_id": "s1",
+            "match": {"ipv4_src": "10.0.0.2"},
+            "action": "DROP",
+            "priority": 500,
+            "status": "APPLIED",
+            "controller_rule_id": flow_rule_id,
+            "controller_response": {"status": "APPLIED"},
+            "applied_at": datetime.now(),
+        }
+
 
 class SuccessfulControllerClient:
     def __init__(self):
@@ -39,6 +52,14 @@ class SuccessfulControllerClient:
             "controller_rule_id": rule["id"],
             "status": "APPLIED",
             "cookie": "0x5344e20000000001",
+        }
+
+    def delete_flow_rule(self, rule):
+        self.rules.append(rule)
+        return {
+            "controller_rule_id": rule["id"],
+            "switch_id": "s1",
+            "status": "REMOVED",
         }
 
 
@@ -127,4 +148,80 @@ def test_controller_failure_is_stored_as_failed(load_service_module):
     assert [update[1]["status"] for update in repository.status_updates] == [
         "APPLYING",
         "FAILED",
+    ]
+
+
+def test_delete_flow_persists_removing_and_removed_lifecycle(
+    load_service_module,
+):
+    class StubControllerClientError(RuntimeError):
+        pass
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": SuccessfulControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    controller = SuccessfulControllerClient()
+    service = module.FlowService(repository, controller)
+
+    result = service.delete_flow("rule-1")
+
+    assert result["status"] == "REMOVED"
+    assert [update[1]["status"] for update in repository.status_updates] == [
+        "REMOVING",
+        "REMOVED",
+    ]
+    assert isinstance(result["removed_at"], datetime)
+    assert controller.rules[0]["status"] == "REMOVING"
+
+
+def test_delete_failure_is_stored_and_can_be_retried(
+    load_service_module,
+):
+    class StubControllerClientError(RuntimeError):
+        def __init__(self, message, response=None):
+            super().__init__(message)
+            self.response = response
+
+    class FailingDeleteControllerClient:
+        def delete_flow_rule(self, rule):
+            raise StubControllerClientError(
+                "Barrier Reply timed out",
+                {"status": "FAILED", "error": "Barrier Reply timed out"},
+            )
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": FailingDeleteControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    service = module.FlowService(
+        repository,
+        FailingDeleteControllerClient(),
+    )
+
+    result = service.delete_flow("rule-1")
+
+    assert result["status"] == "REMOVE_FAILED"
+    assert result["error_message"] == "Barrier Reply timed out"
+    assert [update[1]["status"] for update in repository.status_updates] == [
+        "REMOVING",
+        "REMOVE_FAILED",
     ]

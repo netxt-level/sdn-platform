@@ -9,11 +9,14 @@ from pydantic import Field
 import uvicorn
 
 from app.flow_manager import build_external_flow_cookie
+from app.flow_manager import delete_external_flow_with_barrier
 from app.flow_manager import delete_rate_limit_meter
 from app.flow_manager import install_external_flow_with_barrier
 from app.flow_manager import install_rate_limited_flow_with_barrier
 from app.flow_manager import normalize_external_match
 from app.topology import SWITCH_LINK_PORTS
+from app.topology import WEIGHTED_SWITCH_GRAPH
+from app.topology import get_host_binding
 
 
 FLOW_CONFIRM_TIMEOUT_SECONDS = 5.0
@@ -47,19 +50,66 @@ def parse_switch_dpid(switch_id):
 
 
 def build_flow_operation_response(status):
+    response_status = {
+        "installed": "APPLIED",
+        "delete_failed": "FAILED",
+    }.get(status.state, status.state.upper())
     return {
         "controller_rule_id": status.rule_id,
         "switch_id": status.switch_id,
         "dpid": f"{status.dpid:016x}",
         "cookie": f"0x{status.cookie:016x}",
-        "status": (
-            "APPLIED" if status.state == "installed" else status.state.upper()
-        ),
+        "status": response_status,
+        "operation": status.operation,
         "flow_xid": status.flow_xid,
         "request_xids": status.request_xids,
         "barrier_xid": status.barrier_xid,
         "meter_id": status.meter_id,
         "error": status.error,
+    }
+
+
+def build_topology_response(topology, hosts):
+    active_graph = topology.snapshot()
+    switches = [
+        {
+            "switch_id": f"s{dpid}",
+            "dpid": f"{dpid:016x}",
+            "state": "connected" if dpid in active_graph else "disconnected",
+        }
+        for dpid in sorted(WEIGHTED_SWITCH_GRAPH)
+    ]
+    links = [
+        {
+            "source": f"s{source}",
+            "destination": f"s{destination}",
+            "source_port": SWITCH_LINK_PORTS[source][destination],
+            "destination_port": SWITCH_LINK_PORTS[destination][source],
+            "cost": cost,
+            "state": (
+                "active"
+                if destination in active_graph.get(source, {})
+                else "inactive"
+            ),
+        }
+        for source, neighbors in sorted(WEIGHTED_SWITCH_GRAPH.items())
+        for destination, cost in sorted(neighbors.items())
+        if source < destination
+    ]
+    learned_hosts = []
+    for host in hosts.snapshot():
+        binding = get_host_binding(host.dpid, host.port)
+        learned_hosts.append({
+            "name": None if binding is None else binding.name,
+            "mac": host.mac,
+            "ipv4": host.ipv4,
+            "switch_id": f"s{host.dpid}",
+            "port": host.port,
+        })
+    return {
+        "switches": switches,
+        "links": links,
+        "hosts": learned_hosts,
     }
 
 
@@ -97,6 +147,8 @@ def create_api(
     flow_operations,
     meters,
     hosts,
+    topology,
+    path_recalculator,
     settings,
 ):
     app = FastAPI(
@@ -127,6 +179,21 @@ def create_api(
     def meter_list():
         return {
             "items": list(meters.snapshot()),
+        }
+
+    @app.get("/topology")
+    def topology_snapshot():
+        return build_topology_response(topology, hosts)
+
+    @app.post("/paths/recalculate")
+    def recalculate_paths():
+        invalidated_switches = path_recalculator(
+            "controller_api_request",
+        )
+        return {
+            "status": "RECALCULATED",
+            "invalidated_switches": invalidated_switches,
+            "topology": build_topology_response(topology, hosts),
         }
 
     @app.post("/flow-rules")
@@ -236,6 +303,94 @@ def create_api(
             raise HTTPException(status_code=502, detail=response)
         return response
 
+    @app.delete("/flow-rules/{rule_id}")
+    def delete_flow_rule(
+        rule_id: str,
+        switch_id: str | None = None,
+    ):
+        normalized_rule_id = rule_id.strip()
+        if not normalized_rule_id:
+            raise HTTPException(
+                status_code=422,
+                detail="rule_id must be a non-empty string",
+            )
+
+        existing = flow_operations.get(normalized_rule_id)
+        if existing is not None and existing.state == "removed":
+            return build_flow_operation_response(existing)
+
+        if existing is not None:
+            dpid = existing.dpid
+            resolved_switch_id = existing.switch_id
+            if switch_id is not None:
+                try:
+                    requested_dpid = parse_switch_dpid(switch_id)
+                except ValueError as error:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=str(error),
+                    ) from error
+                if requested_dpid != dpid:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"rule belongs to {resolved_switch_id}, "
+                            f"not {switch_id}"
+                        ),
+                    )
+        else:
+            if switch_id is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Flow Rule is not tracked; switch_id is required "
+                        "for cookie-based cleanup"
+                    ),
+                )
+            try:
+                dpid = parse_switch_dpid(switch_id)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=str(error),
+                ) from error
+            resolved_switch_id = switch_id
+
+        datapath = datapaths.get(dpid)
+        if datapath is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"switch is not connected: {resolved_switch_id}",
+            )
+
+        try:
+            flow_operations.submit_removal(
+                datapath=datapath,
+                rule_id=normalized_rule_id,
+                switch_id=resolved_switch_id,
+                cookie=build_external_flow_cookie(normalized_rule_id),
+                sender=lambda: delete_external_flow_with_barrier(
+                    datapath,
+                    normalized_rule_id,
+                ),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+        status = flow_operations.wait(
+            normalized_rule_id,
+            FLOW_CONFIRM_TIMEOUT_SECONDS,
+        )
+        response = build_flow_operation_response(status)
+        if status.state != "removed":
+            raise HTTPException(status_code=502, detail=response)
+
+        unused_meter_id = meters.release(dpid, normalized_rule_id)
+        if unused_meter_id is not None:
+            delete_rate_limit_meter(datapath, unused_meter_id)
+        response["meter_removed"] = unused_meter_id
+        return response
+
     return app
 
 
@@ -249,6 +404,8 @@ class ControllerApiServer:
         flow_operations,
         meters,
         hosts,
+        topology,
+        path_recalculator,
         settings,
     ):
         config = uvicorn.Config(
@@ -258,6 +415,8 @@ class ControllerApiServer:
                 flow_operations,
                 meters,
                 hosts,
+                topology,
+                path_recalculator,
                 settings,
             ),
             host=settings.rest_host,

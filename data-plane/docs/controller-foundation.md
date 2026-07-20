@@ -24,15 +24,13 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 - Controller 재시작 후 OVS 재연결과 호스트 재학습
 - Health/Switch REST API
 - Backend 요청 Flow Rule 설치 및 Barrier 기반 적용 확인
+- Backend 요청 Flow Rule 삭제 및 Barrier 기반 제거 확인
 - OVS Meter PKTPS 기반 `RATE_LIMIT`과 timeout cleanup
+- 활성 Topology 조회와 L2 경로 재계산 API
 
 현재 브랜치에서 제외하는 기능:
 
-- Flow Rule 삭제·만료 상태 동기화
-- `DELETE /flow-rules/{id}`, `GET /topology`
 - Backend와 Controller의 만료 상태 재조정
-
-위 기능은 인프라 브랜치를 기반으로 별도 연동 브랜치에서 구현한다.
 
 ## 기술 구성
 
@@ -283,10 +281,28 @@ idle/hard timeout이 발생하면 Meter를 삭제한다.
 이 목록은 메모리 상태이며 영속 상태의 기준은 PostgreSQL
 `sdn_controller.flow_rules`이다.
 
+### `DELETE /flow-rules/{rule_id}`
+
+안정적인 rule cookie와 exact cookie mask를 사용해 Table 0의 해당 정책만
+삭제한다. Flow-Mod 뒤의 Barrier Reply 또는 FlowRemoved를 확인한 경우에만
+`REMOVED`를 반환한다. 동일 rule의 반복 삭제는 멱등하게 처리한다. Controller
+재시작으로 메모리 기록이 없으면 `switch_id` query가 필요하며 Backend가 이를
+자동으로 전달한다. `RATE_LIMIT`의 마지막 참조가 제거되면 Meter도 삭제한다.
+
 ### `GET /meters`
 
 현재 Controller가 할당한 `meter_id`, DPID, `rate_limit_pps`, 참조 rule ID를
 반환한다.
+
+### `GET /topology`
+
+구성된 switch, 현재 활성/비활성 link와 양쪽 port, link cost, 학습된 Host
+위치를 반환한다.
+
+### `POST /paths/recalculate`
+
+현재 모든 학습형 L2 Flow를 제거한다. 다음 패킷이 활성 topology snapshot에서
+Primary/Backup 경로를 다시 계산하도록 한다.
 
 API 문서 URL은 비활성화되어 있다.
 
@@ -304,7 +320,8 @@ sudo python3 data-plane/mininet/scenarios/analyzer_detection_response.py \
 
 이 시나리오는 h1→web ICMP가 정상 전달되는지 먼저 확인한 뒤 s1에 우선순위
 500 DROP rule을 설치한다. REST 응답의 `APPLIED`, OVS flow dump의 cookie와
-DROP action, 이후 ICMP 차단을 차례로 검증하고 Mininet 상태를 정리한다.
+DROP action, ICMP 차단, topology 조회, 경로 재계산, `REMOVED`, 통신 복구를
+차례로 검증하고 Mininet 상태를 정리한다.
 RATE_LIMIT 시나리오는 1200-byte UDP를 100Mbps로 전송해 baseline을 측정한 뒤
 100pps Meter 적용 후 대역폭 감소와 hard timeout 뒤 Meter 정리를 확인한다.
 자동 대응 시나리오는 Analyzer 형식 이벤트의 DB/Controller 적용을 확인하고,
@@ -389,17 +406,15 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - `host_spoof_rejected`
 - `l2_path_installed`, `l2_flows_invalidated`
 - `external_flow_installed`, `external_flow_failed`
-- `external_flow_expired`, `meter_removed`, `meters_released`
+- `external_flow_removed`, `external_flow_expired`, `meter_removed`, `meters_released`
 
 ## 알려진 제한사항
 
 - OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
 - 현재 Host 바인딩은 고정 Mininet 토폴로지의 네 호스트 전용이다. 동적 Host
   이동, DHCP 주소 변경, 신규 access 포트 등록은 지원하지 않는다.
-- REST API는 Flow 설치를 지원하지만 삭제 명령은 아직 제공하지 않는다.
 - Controller는 timeout 만료와 Meter 정리를 추적하지만 이를 Backend의
   `EXPIRED` 상태로 재조정하는 기능은 아직 없다.
 - 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
 - Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
   Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.
-- Analyzer는 아직 Mininet Mirror 인터페이스에 연결되지 않았다.

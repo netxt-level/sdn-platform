@@ -68,6 +68,8 @@ class SwitchConnectionController(app_manager.OSKenApp):
             self.flow_operations,
             self.meters,
             self.hosts,
+            self.topology,
+            self._invalidate_all_l2_flows,
             self.settings,
         )
 
@@ -117,17 +119,26 @@ class SwitchConnectionController(app_manager.OSKenApp):
                 msg.datapath.id,
                 msg.xid,
             )
-        elif rule_id := self.flow_operations.mark_installed(
+        elif status := self.flow_operations.mark_confirmed(
             msg.datapath,
             msg.xid,
         ):
-            self.logger.info(
-                "external_flow_installed dpid=%016x rule_id=%s "
-                "barrier_xid=%d",
-                msg.datapath.id,
-                rule_id,
-                msg.xid,
-            )
+            if status.state == "installed":
+                self.logger.info(
+                    "external_flow_installed dpid=%016x rule_id=%s "
+                    "barrier_xid=%d",
+                    msg.datapath.id,
+                    status.rule_id,
+                    msg.xid,
+                )
+            else:
+                self.logger.info(
+                    "external_flow_removed dpid=%016x rule_id=%s "
+                    "barrier_xid=%d",
+                    msg.datapath.id,
+                    status.rule_id,
+                    msg.xid,
+                )
         else:
             self.logger.debug(
                 "barrier_reply_untracked dpid=%016x xid=%d",
@@ -580,6 +591,7 @@ class SwitchConnectionController(app_manager.OSKenApp):
             reason,
             len(datapaths),
         )
+        return len(datapaths)
 
     def _forward_known_unicast(self, msg, metadata):
         source = self.hosts.get(metadata.source_mac)

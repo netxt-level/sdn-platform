@@ -8,6 +8,8 @@ from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.request import Request
 from urllib.request import urlopen
+from urllib.parse import quote
+from urllib.parse import urlencode
 
 from app.core.config import settings
 
@@ -58,17 +60,40 @@ class ControllerClient:
             "hard_timeout": flow_rule.get("hard_timeout"),
             "rate_limit_pps": flow_rule.get("rate_limit_pps"),
         }
-        return self._request("POST", "/flow-rules", payload)
+        return self._request(
+            "POST",
+            "/flow-rules",
+            payload,
+            expected_status="APPLIED",
+        )
+
+    def delete_flow_rule(self, flow_rule: dict[str, Any]) -> dict[str, Any]:
+        path = f"/flow-rules/{quote(flow_rule['id'], safe='')}"
+        switch_id = flow_rule.get("switch_id")
+        if switch_id:
+            path = f"{path}?{urlencode({'switch_id': switch_id})}"
+        return self._request(
+            "DELETE",
+            path,
+            None,
+            expected_status="REMOVED",
+        )
 
     def _request(
         self,
         method: str,
         path: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None,
+        *,
+        expected_status: str,
     ) -> dict[str, Any]:
         request = Request(
             f"{self.base_url}{path}",
-            data=json.dumps(payload).encode("utf-8"),
+            data=(
+                None
+                if payload is None
+                else json.dumps(payload).encode("utf-8")
+            ),
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
@@ -84,11 +109,12 @@ class ControllerClient:
                 ) as response:
                     body = self._decode_json(response.read())
                 if (
-                    body.get("status") != "APPLIED"
+                    body.get("status") != expected_status
                     or not body.get("controller_rule_id")
                 ):
                     raise ControllerClientError(
-                        "controller did not confirm Flow Rule installation",
+                        "controller did not confirm Flow Rule "
+                        f"{method.lower()} operation",
                         response=body,
                     )
                 return body

@@ -6,6 +6,10 @@ from app.clients.controller import ControllerClientError
 from app.repositories.flow_repository import FlowRepository
 
 
+class FlowRuleNotFoundError(LookupError):
+    pass
+
+
 class FlowService:
     def __init__(
         self,
@@ -33,7 +37,14 @@ class FlowService:
         return self.apply_flow(flow_rule)
 
     def apply_flow(self, flow_rule: dict) -> dict:
-        if flow_rule.get("status") in {"APPLIED", "APPLYING"}:
+        if flow_rule.get("status") in {
+            "APPLIED",
+            "APPLYING",
+            "REMOVING",
+            "REMOVED",
+            "EXPIRED",
+            "REMOVE_FAILED",
+        }:
             return flow_rule
 
         requested_at = datetime.now(timezone.utc)
@@ -64,4 +75,56 @@ class FlowService:
             switch_id=controller_response.get("switch_id"),
             requested_at=requested_at,
             applied_at=datetime.now(timezone.utc),
+        )
+
+    def delete_flow(self, flow_rule_id: str) -> dict:
+        flow_rule = self.flow_repository.get_flow(flow_rule_id)
+        if flow_rule is None:
+            raise FlowRuleNotFoundError(flow_rule_id)
+        if flow_rule.get("status") == "REMOVED":
+            return flow_rule
+        if flow_rule.get("status") == "APPLYING":
+            raise RuntimeError(
+                "Flow Rule installation is still in progress"
+            )
+
+        requested_at = datetime.now(timezone.utc)
+        removing = self.flow_repository.update_status(
+            flow_rule_id,
+            status="REMOVING",
+            controller_rule_id=flow_rule.get("controller_rule_id"),
+            controller_response=flow_rule.get("controller_response"),
+            switch_id=flow_rule.get("switch_id"),
+            requested_at=requested_at,
+            applied_at=flow_rule.get("applied_at"),
+        )
+
+        try:
+            controller_response = self.controller_client.delete_flow_rule(
+                removing or flow_rule
+            )
+        except ControllerClientError as error:
+            return self.flow_repository.update_status(
+                flow_rule_id,
+                status="REMOVE_FAILED",
+                controller_rule_id=flow_rule.get("controller_rule_id"),
+                controller_response=error.response,
+                switch_id=flow_rule.get("switch_id"),
+                error_message=str(error),
+                requested_at=requested_at,
+                applied_at=flow_rule.get("applied_at"),
+            )
+
+        return self.flow_repository.update_status(
+            flow_rule_id,
+            status="REMOVED",
+            controller_rule_id=controller_response["controller_rule_id"],
+            controller_response=controller_response,
+            switch_id=(
+                controller_response.get("switch_id")
+                or flow_rule.get("switch_id")
+            ),
+            requested_at=requested_at,
+            applied_at=flow_rule.get("applied_at"),
+            removed_at=datetime.now(timezone.utc),
         )

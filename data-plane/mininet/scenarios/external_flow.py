@@ -32,8 +32,23 @@ def parse_args():
     return parser.parse_args()
 
 
+def controller_request(args, method, path, payload=None):
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        (
+            f"http://{args.controller_host}:"
+            f"{args.controller_rest_port}{path}"
+        ),
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(request, timeout=args.timeout) as response:
+        return json.load(response)
+
+
 def install_drop_rule(args):
-    payload = {
+    return controller_request(args, "POST", "/flow-rules", {
         "rule_id": "mininet-external-drop-smoke",
         "switch_id": "s1",
         "match": {
@@ -44,18 +59,7 @@ def install_drop_rule(args):
         "action": "DROP",
         "priority": 500,
         "hard_timeout": 30,
-    }
-    request = Request(
-        (
-            f"http://{args.controller_host}:"
-            f"{args.controller_rest_port}/flow-rules"
-        ),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request, timeout=args.timeout) as response:
-        return json.load(response)
+    })
 
 
 def dump_flows(switch):
@@ -90,6 +94,14 @@ def require_drop_flow(switch, cookie):
         )
 
 
+def require_flow_removed(switch, cookie):
+    flow_dump = dump_flows(switch).lower()
+    if cookie.lower() in flow_dump:
+        raise ScenarioFailure(
+            "deleted DROP flow still exists on s1:\n" + flow_dump
+        )
+
+
 def run(args):
     network = create_network(
         controller_host=args.controller_host,
@@ -114,10 +126,53 @@ def run(args):
             )
         require_drop_flow(network.get("s1"), response["cookie"])
         require_ping_blocked(h1, web)
+
+        topology = controller_request(args, "GET", "/topology")
+        if (
+            len(topology.get("switches", [])) != 4
+            or not any(
+                link["source"] == "s1"
+                and link["destination"] == "s2"
+                and link["state"] == "active"
+                for link in topology.get("links", [])
+            )
+        ):
+            raise ScenarioFailure(
+                f"Controller topology response is invalid: {topology}"
+            )
+        recalculated = controller_request(
+            args,
+            "POST",
+            "/paths/recalculate",
+        )
+        if (
+            recalculated.get("status") != "RECALCULATED"
+            or recalculated.get("invalidated_switches") != 4
+        ):
+            raise ScenarioFailure(
+                f"path recalculation failed: {recalculated}"
+            )
+
+        removed = controller_request(
+            args,
+            "DELETE",
+            (
+                f"/flow-rules/{response['controller_rule_id']}"
+                "?switch_id=s1"
+            ),
+        )
+        if removed.get("status") != "REMOVED":
+            raise ScenarioFailure(
+                f"Controller did not confirm Flow Rule removal: {removed}"
+            )
+        require_flow_removed(network.get("s1"), response["cookie"])
+        require_ping_success(h1, web)
         print(
             "External Flow Rule validation passed: "
             f"rule_id={response['controller_rule_id']} "
-            f"cookie={response['cookie']} status={response['status']}"
+            f"cookie={response['cookie']} "
+            f"install={response['status']} delete={removed['status']} "
+            "topology=passed recalculate=passed"
         )
     finally:
         if started:

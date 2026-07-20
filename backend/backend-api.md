@@ -348,6 +348,7 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
       "error_message": null,
       "requested_at": "2026-05-24T10:00:00+00:00",
       "applied_at": "2026-05-24T10:00:01+00:00",
+      "removed_at": null,
       "created_at": "2026-05-24T10:00:00+00:00",
       "updated_at": "2026-05-24T10:00:00+00:00",
       "timestamp": "2026-05-24T10:00:00+00:00",
@@ -418,6 +419,25 @@ DB 레코드는 유지된다.
 `RATE_LIMIT`을 지원한다. 예: `OUTPUT:4`, `output:s2`. `RATE_LIMIT`은
 `rate_limit_pps`를 OpenFlow 1.3 Meter의 PKTPS 단위로 사용하며 적용된
 `meter_id`는 `controller_response`에 저장된다.
+
+### 4.3 Flow Rule 삭제
+
+```http
+DELETE /api/flows/{flow_rule_id}
+```
+
+PostgreSQL의 Flow Rule을 조회한 뒤 Controller
+`DELETE /flow-rules/{controller_rule_id}`에 전달한다. Controller는 rule ID로
+계산한 정확한 cookie만 Table 0에서 삭제하고 Barrier Reply를 확인한다.
+
+```text
+APPLIED -> REMOVING -> REMOVED
+                    -> REMOVE_FAILED
+```
+
+성공 시 `removed_at`과 Controller의 `REMOVED` 응답을 저장한다. `RATE_LIMIT`
+규칙의 마지막 Meter 참조도 함께 해제한다. 이미 `REMOVED`인 규칙의 삭제는
+같은 결과를 반환하며, 존재하지 않는 Backend rule ID는 HTTP 404를 반환한다.
 
 ## 5. Path API
 

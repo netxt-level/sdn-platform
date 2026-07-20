@@ -180,11 +180,38 @@ def run(args):
         if f"meter={meter_id}" not in meter_dump:
             raise ScenarioFailure(f"automatic meter is missing:\n{meter_dump}")
 
+        removed_flow = request_json(
+            args,
+            "DELETE",
+            f"/api/flows/{flow['id']}",
+        )
+        if (
+            removed_flow.get("status") != "REMOVED"
+            or removed_flow.get("removed_at") is None
+            or (removed_flow.get("controller_response") or {}).get("status")
+            != "REMOVED"
+        ):
+            raise ScenarioFailure(
+                f"Backend Flow Rule removal failed: {removed_flow}"
+            )
+        meter_dump = network.get("s1").cmd(
+            "ovs-ofctl",
+            "-O",
+            "OpenFlow13",
+            "dump-meters",
+            "s1",
+        ).lower()
+        if f"meter={meter_id}" in meter_dump:
+            raise ScenarioFailure(
+                f"automatic meter remained after deletion:\n{meter_dump}"
+            )
+
         print(
             "Automatic response validation passed: "
             f"event={payload['events'][0]['event_id']} "
             f"flow={flow['id']} response={response['id']} "
-            f"switch={flow['switch_id']} meter_id={meter_id}"
+            f"switch={flow['switch_id']} meter_id={meter_id} "
+            f"delete={removed_flow['status']}"
         )
     finally:
         if started:

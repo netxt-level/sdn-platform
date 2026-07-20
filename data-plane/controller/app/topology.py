@@ -1,6 +1,7 @@
 """Configured host bindings, port roles, and active Mininet topology."""
 
 from dataclasses import dataclass
+from threading import RLock
 
 
 @dataclass(frozen=True)
@@ -71,27 +72,30 @@ class ActiveTopology:
             for destination in neighbors
         }
         self._inactive_link_endpoints = set()
+        self._lock = RLock()
 
     def connect_switch(self, dpid):
         """Connect a switch with transit ports pending state synchronization."""
         self._require_switch(dpid)
-        previous_count = len(self._connected_switches)
-        self._connected_switches.add(dpid)
-        changed = len(self._connected_switches) != previous_count
-        if changed:
-            self._inactive_link_endpoints.update(
-                (dpid, neighbor)
-                for neighbor in self._configured_graph[dpid]
-            )
-        return changed
+        with self._lock:
+            previous_count = len(self._connected_switches)
+            self._connected_switches.add(dpid)
+            changed = len(self._connected_switches) != previous_count
+            if changed:
+                self._inactive_link_endpoints.update(
+                    (dpid, neighbor)
+                    for neighbor in self._configured_graph[dpid]
+                )
+            return changed
 
     def disconnect_switch(self, dpid):
         """Mark a configured switch disconnected and return whether it existed."""
         self._require_switch(dpid)
-        if dpid not in self._connected_switches:
-            return False
-        self._connected_switches.remove(dpid)
-        return True
+        with self._lock:
+            if dpid not in self._connected_switches:
+                return False
+            self._connected_switches.remove(dpid)
+            return True
 
     def set_link_state(self, source, destination, active):
         """Update one configured bidirectional link and return whether it changed."""
@@ -100,12 +104,13 @@ class ActiveTopology:
         self._require_link(source, destination)
         link = self._link_key(source, destination)
 
-        was_active = self._is_link_usable(link)
-        if active:
-            self._active_links.add(link)
-        else:
-            self._active_links.discard(link)
-        return was_active != self._is_link_usable(link)
+        with self._lock:
+            was_active = self._is_link_usable(link)
+            if active:
+                self._active_links.add(link)
+            else:
+                self._active_links.discard(link)
+            return was_active != self._is_link_usable(link)
 
     def set_link_port_state(self, source, destination, active):
         """Update one link endpoint and report a link usability transition."""
@@ -114,20 +119,22 @@ class ActiveTopology:
         self._require_link(source, destination)
         link = self._link_key(source, destination)
         endpoint = (source, destination)
-        was_active = self._is_link_usable(link)
+        with self._lock:
+            was_active = self._is_link_usable(link)
 
-        if active:
-            self._inactive_link_endpoints.discard(endpoint)
-        else:
-            self._inactive_link_endpoints.add(endpoint)
+            if active:
+                self._inactive_link_endpoints.discard(endpoint)
+            else:
+                self._inactive_link_endpoints.add(endpoint)
 
-        return was_active != self._is_link_usable(link)
+            return was_active != self._is_link_usable(link)
 
     def snapshot(self):
         """Return a defensive weighted graph containing only usable links."""
-        connected = set(self._connected_switches)
-        active_links = set(self._active_links)
-        inactive_endpoints = set(self._inactive_link_endpoints)
+        with self._lock:
+            connected = set(self._connected_switches)
+            active_links = set(self._active_links)
+            inactive_endpoints = set(self._inactive_link_endpoints)
 
         return {
             source: {

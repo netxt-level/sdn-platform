@@ -117,6 +117,82 @@ class FlowOperationRegistryTests(unittest.TestCase):
             self.registry.wait("rule-1", 0.01).state,
         )
 
+    def test_removal_is_confirmed_by_barrier_and_is_idempotent(self):
+        self.submit()
+        self.registry.mark_installed(self.datapath, 12)
+
+        removing = self.registry.submit_removal(
+            self.datapath,
+            "rule-1",
+            "s1",
+            0x1234,
+            self.sender,
+        )
+        confirmed = self.registry.mark_confirmed(
+            self.datapath,
+            12,
+        )
+        removed = self.registry.wait("rule-1", 0.01)
+        repeated = self.registry.submit_removal(
+            self.datapath,
+            "rule-1",
+            "s1",
+            0x1234,
+            self.sender,
+        )
+
+        self.assertEqual("removing", removing.state)
+        self.assertEqual("removed", confirmed.state)
+        self.assertEqual("removed", removed.state)
+        self.assertEqual("removed", repeated.state)
+        self.assertEqual(2, self.send_count)
+
+    def test_flow_removed_event_completes_pending_removal(self):
+        self.submit()
+        self.registry.mark_installed(self.datapath, 12)
+        self.registry.submit_removal(
+            self.datapath,
+            "rule-1",
+            "s1",
+            0x1234,
+            self.sender,
+        )
+
+        removed = self.registry.mark_removed(
+            self.datapath,
+            0x1234,
+            "removed",
+        )
+
+        self.assertEqual("removed", removed.state)
+        self.assertEqual(
+            "removed",
+            self.registry.wait("rule-1", 0.01).state,
+        )
+
+    def test_removal_timeout_is_explicit_and_retryable(self):
+        self.submit()
+        self.registry.mark_installed(self.datapath, 12)
+        self.registry.submit_removal(
+            self.datapath,
+            "rule-1",
+            "s1",
+            0x1234,
+            self.sender,
+        )
+
+        failed = self.registry.wait("rule-1", 0.001)
+
+        self.assertEqual("delete_failed", failed.state)
+        retried = self.registry.submit_removal(
+            self.datapath,
+            "rule-1",
+            "s1",
+            0x1234,
+            self.sender,
+        )
+        self.assertEqual("removing", retried.state)
+
 
 if __name__ == "__main__":
     unittest.main()

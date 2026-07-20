@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Ban, GitBranch, Plus, Repeat2, ShieldAlert, Workflow } from "lucide-react";
+import { Ban, GitBranch, Plus, Repeat2, ShieldAlert, Trash2, Workflow } from "lucide-react";
 
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -68,6 +68,7 @@ export default function FlowRulesPage() {
   const [priority, setPriority] = useState("500");
   const [rateLimitPps, setRateLimitPps] = useState("100");
   const [message, setMessage] = useState("");
+  const [deletingRuleId, setDeletingRuleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const selectedRule = flowRules[0];
   const filteredRules = useMemo(
@@ -167,6 +168,38 @@ export default function FlowRulesPage() {
     }
   }
 
+  async function handleDelete(rule: FlowRule) {
+    if (!window.confirm(`Flow Rule ${rule.id}를 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    setDeletingRuleId(rule.id);
+    setMessage("");
+    try {
+      const response = await fetch(
+        `/api/flows/${encodeURIComponent(rule.id)}`,
+        { method: "DELETE" }
+      );
+      const result = (await response.json()) as FlowRule & { detail?: string };
+
+      if (!response.ok || result.status !== "REMOVED") {
+        setMessage(
+          `Flow Rule 삭제 실패: ${
+            result.error_message ?? result.detail ?? result.status ?? response.status
+          }`
+        );
+        return;
+      }
+
+      await loadFlowRules();
+      setMessage("Flow Rule이 스위치에서 제거되었습니다.");
+    } catch {
+      setMessage("Flow Rule 삭제 실패: Backend에 연결할 수 없습니다.");
+    } finally {
+      setDeletingRuleId(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -213,6 +246,7 @@ export default function FlowRulesPage() {
                   <th className="px-3 py-3 text-right font-black">Packets</th>
                   <th className="px-3 py-3 text-right font-black">Bytes</th>
                   <th className="px-3 py-3 font-black">상태</th>
+                  <th className="px-3 py-3 text-right font-black">작업</th>
                 </tr>
               </thead>
               <tbody>
@@ -225,11 +259,25 @@ export default function FlowRulesPage() {
                     <td className="px-3 py-3 text-right">{formatNumber(rule.packets ?? 0)}</td>
                     <td className="px-3 py-3 text-right">{formatNumber(rule.bytes ?? 0)}</td>
                     <td className="px-3 py-3"><StatusBadge value={rule.status.toLowerCase()} tone={rule.status === "APPLIED" ? "normal" : "muted"} /></td>
+                    <td className="px-3 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(rule)}
+                        disabled={
+                          deletingRuleId === rule.id
+                          || ["REMOVING", "REMOVED", "EXPIRED"].includes(rule.status)
+                        }
+                        className="inline-flex items-center gap-1 rounded border border-red/40 px-2 py-1 text-[9px] font-black text-red disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        {deletingRuleId === rule.id ? "삭제 중" : "삭제"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {!filteredRules.length && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-muted">
+                    <td colSpan={8} className="px-3 py-6 text-center text-muted">
                       {loading ? "Flow Rule 조회 중" : "Flow Rule이 없습니다."}
                     </td>
                   </tr>

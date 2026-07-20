@@ -320,7 +320,9 @@
 
 ## 7. Mitigation 후보 명세
 
-`mitigation`은 analyzer가 제안하는 대응 후보 payload다. analyzer는 이 payload를 생성할 수 있지만 직접 적용하지 않는다. 백엔드는 `mitigation`을 기반으로 `security_responses`와 `flow_rules`에 `PENDING` 후보를 저장한다. 컨트롤러가 실제 flow rule 적용 여부를 결정하는 단계는 아직 구현 범위 밖이다.
+`mitigation`은 analyzer가 제안하는 대응 payload다. analyzer는 직접 Controller를
+호출하지 않는다. Backend가 `security_responses`와 `flow_rules`를 생성하고
+Controller에 자동 적용한 뒤 `APPLIED` 또는 `FAILED` 결과를 저장한다.
 
 | 탐지 | 조건 | mitigation |
 |---|---|---|

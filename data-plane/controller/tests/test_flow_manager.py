@@ -15,6 +15,7 @@ from app.flow_manager import L2_FORWARDING_IDLE_TIMEOUT
 from app.flow_manager import L2_FORWARDING_PRIORITY
 from app.flow_manager import EXTERNAL_FLOW_COOKIE_PREFIX
 from app.flow_manager import build_external_flow
+from app.flow_manager import build_external_flow_delete
 from app.flow_manager import build_external_flow_cookie
 from app.flow_manager import build_policy_table_miss_flow
 from app.flow_manager import build_rate_limit_meter
@@ -23,6 +24,7 @@ from app.flow_manager import build_l2_forwarding_flow
 from app.flow_manager import build_packet_out
 from app.flow_manager import build_port_description_request
 from app.flow_manager import delete_all_l2_forwarding_flows
+from app.flow_manager import delete_external_flow_with_barrier
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
 from app.flow_manager import install_table_miss_with_barrier
@@ -367,6 +369,32 @@ class ExternalFlowRuleTests(unittest.TestCase):
         self.assertEqual(ofproto_v1_3.OFPMF_PKTPS, meter_mod.flags)
         self.assertEqual(7, meter_mod.meter_id)
         self.assertEqual(100, meter_mod.bands[0].rate)
+
+    def test_strict_delete_uses_exact_cookie_and_policy_table(self):
+        datapath = FakeDatapath()
+
+        flow_mod = build_external_flow_delete(datapath, "rule-1")
+
+        self.assertEqual(ofproto_v1_3.OFPFC_DELETE, flow_mod.command)
+        self.assertEqual(POLICY_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(
+            build_external_flow_cookie("rule-1"),
+            flow_mod.cookie,
+        )
+        self.assertEqual(0xFFFFFFFFFFFFFFFF, flow_mod.cookie_mask)
+        self.assertEqual(ofproto_v1_3.OFPP_ANY, flow_mod.out_port)
+        self.assertEqual(ofproto_v1_3.OFPG_ANY, flow_mod.out_group)
+
+    def test_delete_is_followed_by_barrier(self):
+        datapath = FakeDatapath()
+
+        flow_mods, barrier = delete_external_flow_with_barrier(
+            datapath,
+            "rule-1",
+        )
+
+        self.assertEqual([*flow_mods, barrier], datapath.sent_messages)
+        self.assertEqual([1, 2], [message.xid for message in datapath.sent_messages])
 
 
 if __name__ == "__main__":

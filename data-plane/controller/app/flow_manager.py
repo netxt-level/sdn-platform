@@ -17,6 +17,7 @@ L2_FORWARDING_IDLE_TIMEOUT = 60
 L2_FORWARDING_HARD_TIMEOUT = 0
 EXTERNAL_FLOW_COOKIE_PREFIX = 0x5344E20000000000
 EXTERNAL_FLOW_COOKIE_MASK = 0xFFFFFF0000000000
+EXTERNAL_FLOW_COOKIE_EXACT_MASK = 0xFFFFFFFFFFFFFFFF
 EXTERNAL_FLOW_TABLE_ID = POLICY_TABLE_ID
 
 EXTERNAL_MATCH_FIELDS = frozenset({
@@ -439,6 +440,31 @@ def build_external_flow(
 def install_external_flow_with_barrier(datapath, **flow):
     """Send one external Flow-Mod followed by a confirmation barrier."""
     flow_mod = build_external_flow(datapath, **flow)
+    datapath.send_msg(flow_mod)
+    barrier_request = datapath.ofproto_parser.OFPBarrierRequest(datapath)
+    datapath.send_msg(barrier_request)
+    return (flow_mod,), barrier_request
+
+
+def build_external_flow_delete(datapath, rule_id):
+    """Build a strict delete for one backend-managed policy cookie."""
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+    return parser.OFPFlowMod(
+        datapath=datapath,
+        cookie=build_external_flow_cookie(rule_id),
+        cookie_mask=EXTERNAL_FLOW_COOKIE_EXACT_MASK,
+        table_id=EXTERNAL_FLOW_TABLE_ID,
+        command=ofproto.OFPFC_DELETE,
+        out_port=ofproto.OFPP_ANY,
+        out_group=ofproto.OFPG_ANY,
+        match=parser.OFPMatch(),
+    )
+
+
+def delete_external_flow_with_barrier(datapath, rule_id):
+    """Delete one external policy and confirm completion with a barrier."""
+    flow_mod = build_external_flow_delete(datapath, rule_id)
     datapath.send_msg(flow_mod)
     barrier_request = datapath.ofproto_parser.OFPBarrierRequest(datapath)
     datapath.send_msg(barrier_request)

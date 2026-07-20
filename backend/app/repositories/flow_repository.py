@@ -30,6 +30,7 @@ def _to_dict(flow_rule: FlowRule) -> dict[str, Any]:
         "error_message": flow_rule.error_message,
         "requested_at": flow_rule.requested_at,
         "applied_at": flow_rule.applied_at,
+        "removed_at": flow_rule.removed_at,
         "created_at": flow_rule.created_at,
         "updated_at": flow_rule.updated_at,
         "timestamp": flow_rule.created_at,
@@ -69,6 +70,11 @@ class FlowRepository:
             flow_rules = session.execute(stmt).scalars().all()
 
         return [_to_dict(flow_rule) for flow_rule in flow_rules]
+
+    def get_flow(self, flow_rule_id: str) -> dict[str, Any] | None:
+        with SessionLocal() as session:
+            flow_rule = session.get(FlowRule, flow_rule_id)
+            return None if flow_rule is None else _to_dict(flow_rule)
 
     def create_manual_flow(
         self,
@@ -154,6 +160,7 @@ class FlowRepository:
         error_message: str | None = None,
         requested_at: datetime | None = None,
         applied_at: datetime | None = None,
+        removed_at: datetime | None = None,
     ) -> dict[str, Any] | None:
         with SessionLocal.begin() as session:
             flow_rule = session.get(FlowRule, flow_rule_id)
@@ -168,5 +175,6 @@ class FlowRepository:
             flow_rule.error_message = error_message
             flow_rule.requested_at = requested_at
             flow_rule.applied_at = applied_at
+            flow_rule.removed_at = removed_at
 
             return _to_dict(flow_rule)

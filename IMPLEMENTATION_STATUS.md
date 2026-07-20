@@ -109,6 +109,7 @@
 | `GET` | `/api/dashboard/suspicious-hosts` | InfluxDB 의심 호스트 조회 |
 | `GET` | `/api/flows` | PostgreSQL flow rule 목록 조회 |
 | `POST` | `/api/flows` | 수동 flow rule 생성 |
+| `DELETE` | `/api/flows/{id}` | Controller Flow Rule 제거 및 상태 저장 |
 | `GET` | `/api/path/status` | 경로 제어 상태 조회 |
 | `GET` | `/api/security/events` | Elasticsearch 탐지 이벤트 조회 |
 | `GET` | `/api/security/responses` | PostgreSQL 보안 대응 내역 조회 |
@@ -136,7 +137,7 @@
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 총 패킷 수, 총 byte 수, 최신 pps/bps, 네트워크 상태를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장한다. `mitigation`이 있으면 PostgreSQL에 보안 대응 내역과 flow rule을 생성하고 Controller에 자동 적용한 뒤 두 레코드의 최종 상태를 저장한다.
-- `/api/flows`는 DB 기반 flow rule 조회와 수동 flow rule 생성을 제공한다. 생성된 rule은 Controller로 전송되며 Barrier 확인 결과에 따라 `APPLIED` 또는 `FAILED` 상태와 Controller 응답이 저장된다.
+- `/api/flows`는 DB 기반 flow rule 조회·생성·삭제를 제공한다. 생성과 삭제는 Controller Barrier 확인 결과에 따라 최종 상태와 Controller 응답이 저장된다.
 - `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
 - InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
 - `backend/app/scripts/seed_suspicious_hosts.py`는 의심 호스트 테스트 데이터를 넣기 위한 보조 스크립트다.
@@ -209,7 +210,7 @@ Next.js rewrite 설정으로 프론트엔드의 `/api/:path*` 요청은 `${BACKE
 - WebSocket URL은 `NEXT_PUBLIC_WS_URL`이 없으면 현재 브라우저 host 기준 `:8000/ws/analyzer`로 fallback된다.
 - 프론트 타입에는 과거 호환용 `traffic_analysis`, `security_event`, `topology_update` 메시지가 남아 있지만, 현재 백엔드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_events`다.
 - `보안 규칙` 단독 페이지는 제거되었고, 보안 대응 흐름은 보안 이벤트, 경로 제어, Flow Rule 화면에서 관리한다.
-- 수동 Flow Rule 생성은 SDN Controller 설치까지 수행한다. `DROP`, `OUTPUT:<port|인접 switch>`, OVS Meter 기반 `RATE_LIMIT` 설치를 지원하며 삭제 API와 Backend 만료 상태 재조정은 추가 구현이 필요하다.
+- 수동 Flow Rule은 SDN Controller 설치와 삭제까지 수행한다. `DROP`, `OUTPUT:<port|인접 switch>`, OVS Meter 기반 `RATE_LIMIT`을 지원하며 삭제 시 `REMOVING -> REMOVED`를 저장한다. Backend 만료 상태 재조정은 추가 구현이 필요하다.
 
 ## 인프라 및 실행 구성
 

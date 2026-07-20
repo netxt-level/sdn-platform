@@ -120,3 +120,33 @@ def test_transient_connection_error_is_retried_with_same_request():
 
     assert result == response
     assert urlopen.call_count == 2
+
+
+def test_delete_sends_rule_id_and_switch_and_requires_removed_status():
+    client = ControllerClient(
+        base_url="http://controller:8080",
+        timeout_seconds=1,
+        max_attempts=1,
+    )
+    response = {
+        "controller_rule_id": "rule/1",
+        "switch_id": "s1",
+        "status": "REMOVED",
+    }
+
+    with patch(
+        "app.clients.controller.urlopen",
+        return_value=FakeResponse(response),
+    ) as urlopen:
+        result = client.delete_flow_rule({
+            "id": "rule/1",
+            "switch_id": "s1",
+        })
+
+    request = urlopen.call_args.args[0]
+    assert result == response
+    assert request.method == "DELETE"
+    assert request.data is None
+    assert request.full_url == (
+        "http://controller:8080/flow-rules/rule%2F1?switch_id=s1"
+    )
