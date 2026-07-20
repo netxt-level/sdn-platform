@@ -282,7 +282,7 @@ Alembic migration은 `migrations/`에 있다.
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장하고, PostgreSQL에 보안 대응 내역과 flow rule 후보를 생성한다.
-- `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 현재 `PENDING` 상태로 DB에 저장되며 컨트롤러에 실제 설치되지는 않는다.
+- `/api/flows`는 `sdn_controller.flow_rules` 조회와 수동 생성 기능을 제공한다. 생성된 rule은 컨트롤러로 전송되며 OpenFlow Barrier 응답에 따라 `APPLIED` 또는 `FAILED` 상태와 컨트롤러 응답을 저장한다.
 - `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
 - 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.

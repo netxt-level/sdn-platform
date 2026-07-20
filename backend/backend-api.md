@@ -361,7 +361,20 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
 POST /api/flows
 ```
 
-운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL `sdn_controller.flow_rules`에 `PENDING` 상태로 저장한다. 현재 구현은 DB 생성까지이며 SDN 컨트롤러 실제 설치는 수행하지 않는다.
+운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL
+`sdn_controller.flow_rules`에 저장하고 SDN Controller의
+`POST /flow-rules`로 전송한다. 저장 상태는 다음 순서로 변경된다.
+
+```text
+PENDING -> APPLYING -> APPLIED
+                    -> FAILED
+```
+
+`APPLIED`는 Controller가 Flow-Mod 뒤의 OpenFlow Barrier Reply를 받은 경우에만
+기록한다. Controller 연결 실패, 미연결 switch, 유효하지 않은 match/action,
+OpenFlow Error 및 Barrier timeout은 `FAILED`로 기록하고 `controller_response`와
+`error_message`를 보존한다. 네트워크 연결 오류는 동일한 backend rule ID로
+최대 `CONTROLLER_MAX_ATTEMPTS`만큼 재시도한다.
 
 ### Request Body
 
@@ -393,7 +406,13 @@ POST /api/flows
 
 ### Response Body
 
-생성된 flow rule 객체를 반환한다. 응답 필드는 `GET /api/flows`의 item과 동일하다.
+최종 저장된 flow rule 객체를 반환한다. 응답 필드는 `GET /api/flows`의 item과
+동일하며 성공 시 `status=APPLIED`, 실패 시 `status=FAILED`다. 실패한 요청도
+DB 레코드는 유지된다.
+
+현재 Controller 설치 action은 `DROP`과 `OUTPUT:<port|인접 switch>`를 지원한다.
+예: `OUTPUT:4`, `output:s2`. `RATE_LIMIT`은 OVS Meter 파이프라인이 추가되기
+전까지 명시적으로 실패 처리된다.
 
 ## 5. Path API
 

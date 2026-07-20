@@ -11,6 +11,9 @@ from app.flow_manager import L2_FORWARDING_COOKIE_PREFIX
 from app.flow_manager import L2_FORWARDING_HARD_TIMEOUT
 from app.flow_manager import L2_FORWARDING_IDLE_TIMEOUT
 from app.flow_manager import L2_FORWARDING_PRIORITY
+from app.flow_manager import EXTERNAL_FLOW_COOKIE_PREFIX
+from app.flow_manager import build_external_flow
+from app.flow_manager import build_external_flow_cookie
 from app.flow_manager import build_l2_forwarding_cookie
 from app.flow_manager import build_l2_forwarding_flow
 from app.flow_manager import build_packet_out
@@ -273,6 +276,67 @@ class L2ForwardingFlowTests(unittest.TestCase):
             [],
             flow_mod.match.to_jsondict()["OFPMatch"]["oxm_fields"],
         )
+
+
+class ExternalFlowRuleTests(unittest.TestCase):
+    def test_cookie_is_stable_and_in_external_range(self):
+        cookie = build_external_flow_cookie("rule-uuid-1")
+
+        self.assertEqual(
+            cookie,
+            build_external_flow_cookie("rule-uuid-1"),
+        )
+        self.assertEqual(
+            EXTERNAL_FLOW_COOKIE_PREFIX,
+            cookie & 0xFFFFFF0000000000,
+        )
+
+    def test_builds_drop_rule_with_ipv4_prerequisite(self):
+        datapath = FakeDatapath()
+
+        flow_mod = build_external_flow(
+            datapath,
+            rule_id="rule-1",
+            match={"ipv4_src": "10.0.0.2", "ip_proto": 1},
+            action="DROP",
+            priority=500,
+            idle_timeout=60,
+            hard_timeout=300,
+        )
+
+        self.assertEqual(0x0800, flow_mod.match["eth_type"])
+        self.assertEqual("10.0.0.2", flow_mod.match["ipv4_src"])
+        self.assertEqual(1, flow_mod.match["ip_proto"])
+        self.assertEqual([], flow_mod.instructions)
+        self.assertEqual(500, flow_mod.priority)
+        self.assertEqual(60, flow_mod.idle_timeout)
+        self.assertEqual(300, flow_mod.hard_timeout)
+
+    def test_resolves_adjacent_switch_output_action(self):
+        datapath = FakeDatapath()
+        datapath.id = 1
+
+        flow_mod = build_external_flow(
+            datapath,
+            rule_id="rule-2",
+            match={"ipv4_dst": "10.0.0.100"},
+            action="output:s2",
+            priority=500,
+            switch_link_ports={1: {2: 4}},
+        )
+
+        action = flow_mod.instructions[0].actions[0]
+        self.assertEqual(4, action.port)
+
+    def test_rejects_rate_limit_until_meter_pipeline_exists(self):
+        with self.assertRaisesRegex(ValueError, "OVS Meter pipeline"):
+            build_external_flow(
+                FakeDatapath(),
+                rule_id="rule-3",
+                match={"ipv4_src": "10.0.0.2"},
+                action="RATE_LIMIT",
+                priority=500,
+            )
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 import unittest
+from types import SimpleNamespace
 
 from app.api import build_health_response
 from app.api import build_switches_response
 from app.api import create_api
+from app.api import FlowRuleInstallRequest
 from app.config import ControllerSettings
 from app.datapaths import DatapathRegistry
+from app.flow_operations import FlowOperationRegistry
 from app.table_miss import TableMissRegistry
 
 
@@ -13,10 +16,34 @@ class FakeDatapath:
         self.id = dpid
 
 
+class AppliedFlowOperations:
+    def __init__(self):
+        self.submissions = []
+
+    def snapshot(self):
+        return ()
+
+    def submit(self, **submission):
+        self.submissions.append(submission)
+
+    def wait(self, rule_id, timeout_seconds):
+        return SimpleNamespace(
+            rule_id=rule_id,
+            switch_id="s1",
+            dpid=1,
+            cookie=0x5344E20000000001,
+            state="installed",
+            flow_xid=11,
+            barrier_xid=12,
+            error=None,
+        )
+
+
 class ControllerApiTests(unittest.TestCase):
     def setUp(self):
         self.datapaths = DatapathRegistry()
         self.table_miss_statuses = TableMissRegistry()
+        self.flow_operations = FlowOperationRegistry()
         self.settings = ControllerSettings(
             openflow_port=6653,
             rest_host="127.0.0.1",
@@ -73,10 +100,11 @@ class ControllerApiTests(unittest.TestCase):
             response,
         )
 
-    def test_only_health_and_switch_routes_are_exposed(self):
+    def test_health_switch_and_flow_rule_routes_are_exposed(self):
         app = create_api(
             self.datapaths,
             self.table_miss_statuses,
+            self.flow_operations,
             self.settings,
         )
 
@@ -86,7 +114,38 @@ class ControllerApiTests(unittest.TestCase):
             if getattr(route, "methods", None)
         }
 
-        self.assertEqual({"/health", "/switches"}, routes)
+        self.assertEqual(
+            {"/health", "/switches", "/flow-rules"},
+            routes,
+        )
+
+    def test_post_flow_rule_returns_only_after_applied_confirmation(self):
+        datapath = FakeDatapath(1)
+        self.datapaths.register(datapath)
+        operations = AppliedFlowOperations()
+        app = create_api(
+            self.datapaths,
+            self.table_miss_statuses,
+            operations,
+            self.settings,
+        )
+
+        endpoint = next(
+            route.endpoint
+            for route in app.routes
+            if route.path == "/flow-rules" and "POST" in route.methods
+        )
+        response = endpoint(FlowRuleInstallRequest(
+            rule_id="rule-1",
+            switch_id="s1",
+            match={"ipv4_src": "10.0.0.2"},
+            action="DROP",
+            priority=500,
+        ))
+
+        self.assertEqual("APPLIED", response["status"])
+        self.assertEqual("rule-1", response["controller_rule_id"])
+        self.assertEqual(1, len(operations.submissions))
 
 
 if __name__ == "__main__":

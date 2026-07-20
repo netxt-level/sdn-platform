@@ -10,6 +10,7 @@ CONTROLLER_CONTAINER="${CONTROLLER_CONTAINER:-sdn-controller}"
 FAILOVER_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/failover.py"
 HOST_SPOOFING_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/host_spoofing.py"
 PERFORMANCE_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/link_performance.py"
+EXTERNAL_FLOW_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/external_flow.py"
 MIRROR_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/mirror_capture.py"
 
 "${SCRIPT_DIR}/sync-vm.sh"
@@ -29,6 +30,11 @@ multipass exec "${VM_NAME}" -- sudo python3 -u "${PERFORMANCE_SCENARIO}" \
   --controller-host 127.0.0.1 \
   --controller-port "${CONTROLLER_OPENFLOW_PORT}"
 
+multipass exec "${VM_NAME}" -- sudo python3 -u "${EXTERNAL_FLOW_SCENARIO}" \
+  --controller-host 127.0.0.1 \
+  --controller-port "${CONTROLLER_OPENFLOW_PORT}" \
+  --controller-rest-port "${CONTROLLER_REST_PORT}"
+
 multipass exec "${VM_NAME}" -- sudo python3 -u "${MIRROR_SCENARIO}" \
   --controller-host 127.0.0.1 \
   --controller-port "${CONTROLLER_OPENFLOW_PORT}"
@@ -38,4 +44,4 @@ if [[ -n "$(multipass exec "${VM_NAME}" -- sudo ovs-vsctl list-br)" ]]; then
   exit 1
 fi
 
-echo "Data-plane routing, spoofing, performance, and OVS Mirror validation passed."
+echo "Data-plane routing, Flow Rule, performance, and mirror validation passed."

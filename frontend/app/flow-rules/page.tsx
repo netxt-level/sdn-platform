@@ -18,6 +18,7 @@ type FlowRule = {
   packets?: number;
   bytes?: number;
   status: string;
+  error_message?: string | null;
 };
 
 type FlowRulesResponse = {
@@ -63,7 +64,7 @@ export default function FlowRulesPage() {
   const [selectedSwitch, setSelectedSwitch] = useState("ALL");
   const [switchId, setSwitchId] = useState("s1");
   const [matchText, setMatchText] = useState("ipv4_src=10.0.0.2, ipv4_dst=10.0.0.4, ip_proto=1");
-  const [action, setAction] = useState("RATE_LIMIT");
+  const [action, setAction] = useState("DROP");
   const [priority, setPriority] = useState("500");
   const [rateLimitPps, setRateLimitPps] = useState("100");
   const [message, setMessage] = useState("");
@@ -153,8 +154,17 @@ export default function FlowRulesPage() {
       return;
     }
 
+    const created = (await response.json()) as FlowRule;
     await loadFlowRules();
-    setMessage("Flow Rule이 추가되었습니다.");
+    if (created.status === "APPLIED") {
+      setMessage("Flow Rule이 저장되고 스위치에 적용되었습니다.");
+    } else {
+      setMessage(
+        `Flow Rule은 저장되었지만 적용에 실패했습니다: ${
+          created.error_message ?? created.status
+        }`
+      );
+    }
   }
 
   return (

@@ -7,6 +7,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      CONTROLLER_BASE_URL: ${CONTROLLER_BASE_URL:-http://host.docker.internal:8080}
+      CONTROLLER_TIMEOUT_SECONDS: ${CONTROLLER_TIMEOUT_SECONDS:-8}
+      CONTROLLER_MAX_ATTEMPTS: ${CONTROLLER_MAX_ATTEMPTS:-2}
     ports:
       - "8000:8000"
     depends_on:

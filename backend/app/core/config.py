@@ -48,5 +48,23 @@ class Settings:
         port = get_env("ELASTICSEARCH_HTTP_PORT", "9200")
         return f"http://{host}:{port}"
 
+    @property
+    def controller_base_url(self) -> str:
+        return get_env("CONTROLLER_BASE_URL", "http://host.docker.internal:8080")
+
+    @property
+    def controller_timeout_seconds(self) -> float:
+        value = float(get_env("CONTROLLER_TIMEOUT_SECONDS", "8"))
+        if value <= 0:
+            raise RuntimeError("CONTROLLER_TIMEOUT_SECONDS must be positive")
+        return value
+
+    @property
+    def controller_max_attempts(self) -> int:
+        value = int(get_env("CONTROLLER_MAX_ATTEMPTS", "2"))
+        if value < 1:
+            raise RuntimeError("CONTROLLER_MAX_ATTEMPTS must be at least 1")
+        return value
+
 
 settings = Settings()

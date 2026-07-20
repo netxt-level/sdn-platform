@@ -22,12 +22,13 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 - PortStatus 기반 링크 down/up 감지
 - 토폴로지 변경 시 내부 L2 Flow 무효화
 - Controller 재시작 후 OVS 재연결과 호스트 재학습
-- 읽기 전용 Health/Switch REST API
+- Health/Switch REST API
+- Backend 요청 Flow Rule 설치 및 Barrier 기반 적용 확인
 
 현재 브랜치에서 제외하는 기능:
 
-- Backend Flow Rule 적용과 상태 동기화
-- `POST /flows`, `DELETE /flows/{id}`, `GET /topology`
+- Flow Rule 삭제·만료 상태 동기화
+- `DELETE /flow-rules/{id}`, `GET /topology`
 - OVS Meter 기반 `RATE_LIMIT`
 - Analyzer OVS Mirror와 Mininet 트래픽 캡처
 - 보안 이벤트 기반 DROP/Rate Limit 종단 간 대응
@@ -82,6 +83,7 @@ data-plane/controller/
 │   ├── controller.py
 │   ├── datapaths.py
 │   ├── flow_manager.py
+│   ├── flow_operations.py
 │   ├── hosts.py
 │   ├── packet_parser.py
 │   ├── routing.py
@@ -101,8 +103,9 @@ data-plane/controller/
 | `topology.py` | 고정 포트 맵, 활성 스위치·링크, Flooding Tree |
 | `routing.py` | 순수 Dijkstra와 출력 포트 계산 |
 | `flow_manager.py` | Table-Miss, L2 Flow, Packet-Out, Flow 삭제 메시지 |
+| `flow_operations.py` | Backend 요청 Flow-Mod의 Barrier/Error lifecycle 추적 |
 | `table_miss.py` | Barrier/Error/timeout 기반 Table-Miss 상태 추적 |
-| `api.py` | `/health`, `/switches` 읽기 전용 API |
+| `api.py` | Health, switch 조회, 외부 Flow Rule 설치 REST API |
 | `config.py` | OpenFlow/REST 포트 환경변수 검증 |
 
 경로 알고리즘과 활성 토폴로지 계산은 OpenFlow 객체와 분리되어 단위 테스트가
@@ -152,8 +155,8 @@ unknown → pending → installed
 
 DPID뿐 아니라 현재 Datapath 객체와 Flow/Barrier XID를 함께 비교한다. 따라서
 재연결 전 Datapath에서 늦게 도착한 Reply, Error, disconnect가 새 연결 상태를
-변경하지 않는다. 이 확인 구조는 현재 Table-Miss에만 적용하며 외부 Flow Rule
-lifecycle은 후속 연동 단계에서 구현한다.
+변경하지 않는다. 외부 Flow Rule도 별도 registry에서 동일하게 Barrier,
+OpenFlow Error 및 disconnect를 추적한다.
 
 ## Packet-In과 호스트 학습
 
@@ -250,7 +253,41 @@ Backup 경로를 통과할 수 있다.
 }
 ```
 
-현재 REST API는 읽기 전용이며 API 문서 URL은 비활성화되어 있다.
+### `POST /flow-rules`
+
+Backend가 저장한 rule ID를 그대로 받아 안정적인 OpenFlow cookie를 생성한다.
+지원 match는 IPv4 source/destination, IP protocol, TCP/UDP port,
+ICMP type/code 및 Ethernet source/destination이다. IPv4 전제 필드는
+`eth_type=2048`을 자동으로 추가한다.
+
+지원 action:
+
+- `DROP`
+- `OUTPUT:<port>`
+- `OUTPUT:<인접 switch>` (예: `output:s2`)
+
+Flow-Mod 전송 후 Barrier Reply를 확인한 경우에만 `APPLIED`를 반환한다.
+OpenFlow Error 또는 5초 timeout은 오류 응답에 원인을 포함한다. 동일한
+`rule_id`의 `pending`/`installed` 요청은 다시 전송하지 않는다.
+`RATE_LIMIT`은 OVS Meter 파이프라인이 구현되기 전까지 거부한다.
+
+### `GET /flow-rules`
+
+현재 Controller 프로세스가 추적하는 Backend 요청 rule과 적용 상태를 반환한다.
+이 목록은 메모리 상태이며 영속 상태의 기준은 PostgreSQL
+`sdn_controller.flow_rules`이다.
+
+API 문서 URL은 비활성화되어 있다.
+
+격리된 Mininet 설치 검증:
+
+```bash
+sudo python3 data-plane/mininet/scenarios/external_flow.py
+```
+
+이 시나리오는 h1→web ICMP가 정상 전달되는지 먼저 확인한 뒤 s1에 우선순위
+500 DROP rule을 설치한다. REST 응답의 `APPLIED`, OVS flow dump의 cookie와
+DROP action, 이후 ICMP 차단을 차례로 검증하고 Mininet 상태를 정리한다.
 
 ## 환경변수
 
@@ -329,15 +366,16 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - `host_learned`, `host_ip_updated`, `host_moved`
 - `host_spoof_rejected`
 - `l2_path_installed`, `l2_flows_invalidated`
+- `external_flow_installed`, `external_flow_failed`
 
 ## 알려진 제한사항
 
 - OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
 - 현재 Host 바인딩은 고정 Mininet 토폴로지의 네 호스트 전용이다. 동적 Host
   이동, DHCP 주소 변경, 신규 access 포트 등록은 지원하지 않는다.
-- REST API는 실제 Flow 설치/삭제 명령을 아직 제공하지 않는다.
-- Barrier/Error 확인은 Table-Miss에만 적용되며 외부 Flow Rule lifecycle은
-  구현하지 않았다.
+- REST API는 Flow 설치를 지원하지만 삭제 명령은 아직 제공하지 않는다.
+- 외부 Flow Rule은 설치 확인까지만 구현되어 있으며 timeout 만료, Controller
+  재시작 및 외부 삭제를 Backend 상태에 재조정하는 기능은 아직 없다.
 - 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
 - Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
   Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.

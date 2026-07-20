@@ -19,6 +19,7 @@ from app.flow_manager import install_table_miss_with_barrier
 from app.flow_manager import install_l2_forwarding_flow
 from app.flow_manager import request_port_descriptions
 from app.flow_manager import send_packet_out
+from app.flow_operations import FlowOperationRegistry
 from app.hosts import HostRegistry
 from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
@@ -55,11 +56,13 @@ class SwitchConnectionController(app_manager.OSKenApp):
         self.settings = load_settings()
         self.datapaths = DatapathRegistry()
         self.table_miss_statuses = TableMissRegistry()
+        self.flow_operations = FlowOperationRegistry()
         self.hosts = HostRegistry()
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
         self.api_server = ControllerApiServer(
             self.datapaths,
             self.table_miss_statuses,
+            self.flow_operations,
             self.settings,
         )
 
@@ -109,6 +112,17 @@ class SwitchConnectionController(app_manager.OSKenApp):
                 msg.datapath.id,
                 msg.xid,
             )
+        elif rule_id := self.flow_operations.mark_installed(
+            msg.datapath,
+            msg.xid,
+        ):
+            self.logger.info(
+                "external_flow_installed dpid=%016x rule_id=%s "
+                "barrier_xid=%d",
+                msg.datapath.id,
+                rule_id,
+                msg.xid,
+            )
         else:
             self.logger.debug(
                 "barrier_reply_untracked dpid=%016x xid=%d",
@@ -131,6 +145,20 @@ class SwitchConnectionController(app_manager.OSKenApp):
             self.logger.error(
                 "table_miss_failed dpid=%016x xid=%d type=%d code=%d",
                 msg.datapath.id,
+                msg.xid,
+                msg.type,
+                msg.code,
+            )
+        elif rule_id := self.flow_operations.mark_failed(
+            msg.datapath,
+            msg.xid,
+            reason,
+        ):
+            self.logger.error(
+                "external_flow_failed dpid=%016x rule_id=%s xid=%d "
+                "type=%d code=%d",
+                msg.datapath.id,
+                rule_id,
                 msg.xid,
                 msg.type,
                 msg.code,
@@ -202,6 +230,17 @@ class SwitchConnectionController(app_manager.OSKenApp):
         elif event.state == DEAD_DISPATCHER:
             if self.datapaths.unregister(datapath):
                 self.table_miss_statuses.remove(datapath)
+                failed_rule_ids = self.flow_operations.fail_pending_for_datapath(
+                    datapath,
+                    "switch disconnected before Barrier Reply",
+                )
+                for rule_id in failed_rule_ids:
+                    self.logger.error(
+                        "external_flow_failed dpid=%s rule_id=%s "
+                        "reason=switch_disconnected",
+                        dpid,
+                        rule_id,
+                    )
                 topology_changed = False
                 try:
                     topology_changed = self.topology.disconnect_switch(
