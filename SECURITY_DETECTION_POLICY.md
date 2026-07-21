@@ -262,7 +262,7 @@
 |---|---|---|---|---|---|
 | pps 기준만 충족, `score=60` | `medium` | `medium` | `L1` | `monitor` | `null` |
 | pps 기준 + 최소 샘플 조건 충족, `score >= 80` | `high` | `medium` | `L2` | `rate_limit` | `RATE_LIMIT` 후보 |
-| pps 기준 크게 초과 + 보조 조건 2개 이상, `score >= 95` | `high` | `high` | `L2` | `rate_limit` | `RATE_LIMIT` 후보 |
+| pps 기준 크게 초과 + 보조 조건 2개 이상, `score >= 95` | `critical` | `high` | `L2` | `drop` | `DROP` 후보 |
 
 현재 자동 적용은 하지 않는다. `mitigation`은 컨트롤러가 적용할 수 있는 후보 payload로만 제공한다.
 

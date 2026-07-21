@@ -48,6 +48,7 @@ class StubSecurityResponseRepository:
 class StubFlowRepository:
     def __init__(self):
         self.calls = []
+        self.existing_flows = []
 
     def get_or_create_from_mitigation(self, *, event, security_response_id):
         self.calls.append((event, security_response_id))
@@ -62,10 +63,14 @@ class StubFlowRepository:
             "error_message": None,
         }
 
+    def list_by_fingerprint(self, fingerprint):
+        return list(self.existing_flows)
+
 
 class StubFlowService:
     def __init__(self):
         self.applied = []
+        self.deleted = []
 
     def apply_flow(self, flow_rule):
         self.applied.append(flow_rule)
@@ -78,6 +83,10 @@ class StubFlowService:
                 "meter_id": 7,
             },
         }
+
+    def delete_flow(self, flow_rule_id):
+        self.deleted.append(flow_rule_id)
+        return {"id": flow_rule_id, "status": "REMOVED"}
 
 
 class FailedFlowService:
@@ -245,3 +254,56 @@ def test_security_service_records_automatic_response_failure(
     )
     assert final_update["error_message"] == "switch is not connected: s1"
     assert manager.messages[0]["data"]["flow_rules"][0]["status"] == "FAILED"
+
+
+def test_critical_event_without_mitigation_gets_drop_policy(
+    load_service_module,
+):
+    manager = RecordingManager()
+    module = load_service_module(
+        "security_service",
+        stubs={
+            "app.core.websocket": {"manager": manager},
+            "app.repositories.flow_repository": {"FlowRepository": StubFlowRepository},
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+            "app.repositories.security_response_repository": {
+                "SecurityResponseRepository": StubSecurityResponseRepository,
+            },
+        },
+    )
+    event_repository = StubSecurityEventRepository()
+    flow_repository = StubFlowRepository()
+    flow_service = StubFlowService()
+    service = module.SecurityService(
+        security_event_repository=event_repository,
+        security_response_repository=StubSecurityResponseRepository(),
+        flow_repository=flow_repository,
+        flow_service=flow_service,
+    )
+    event = {
+        "event_id": "evt-critical",
+        "event_fingerprint": "critical-fingerprint",
+        "severity": "critical",
+        "src_ip": "10.0.0.3",
+        "dst_ip": "10.0.0.100",
+        "protocol": "ICMP",
+        "mitigation": None,
+    }
+    flow_repository.existing_flows = [
+        {
+            "id": "old-rate-limit",
+            "action": "RATE_LIMIT",
+            "status": "APPLIED",
+        },
+    ]
+
+    asyncio.run(service.receive_events({"events": [event]}))
+
+    stored_event = event_repository.saved_events[0][0]
+    assert stored_event["recommended_action"] == "drop"
+    assert stored_event["mitigation"]["action"] == "DROP"
+    assert stored_event["mitigation"]["priority"] == 600
+    assert len(flow_service.applied) == 1
+    assert flow_service.deleted == ["old-rate-limit"]

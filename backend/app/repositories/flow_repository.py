@@ -76,6 +76,14 @@ class FlowRepository:
             flow_rule = session.get(FlowRule, flow_rule_id)
             return None if flow_rule is None else _to_dict(flow_rule)
 
+    def list_by_fingerprint(self, fingerprint: str) -> list[dict[str, Any]]:
+        stmt = select(FlowRule).where(
+            FlowRule.source_event_fingerprint == fingerprint,
+        )
+        with SessionLocal() as session:
+            flow_rules = session.execute(stmt).scalars().all()
+        return [_to_dict(flow_rule) for flow_rule in flow_rules]
+
     def create_manual_flow(
         self,
         *,

@@ -63,8 +63,46 @@ class SecurityService:
         self,
         events: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        self.security_event_repository.save_security_events(events)
-        return self._create_responses_and_flow_rules(events)
+        policy_events = [self._apply_response_policy(event) for event in events]
+        self.security_event_repository.save_security_events(policy_events)
+        return self._create_responses_and_flow_rules(policy_events)
+
+    @staticmethod
+    def _apply_response_policy(event: dict[str, Any]) -> dict[str, Any]:
+        policy_event = dict(event)
+        severity = str(
+            event.get("severity")
+            or ("high" if event.get("mitigation") else "medium")
+        ).lower()
+        if severity == "critical":
+            protocol_number = {
+                "ICMP": 1,
+                "TCP": 6,
+                "UDP": 17,
+            }.get(str(event.get("protocol", "")).upper())
+            match = {
+                "eth_type": 2048,
+                "ipv4_src": event.get("src_ip"),
+                "ipv4_dst": event.get("dst_ip"),
+            }
+            if protocol_number is not None:
+                match["ip_proto"] = protocol_number
+            policy_event["recommended_action"] = "drop"
+            policy_event["mitigation"] = {
+                "action": "DROP",
+                "target": "flow",
+                "match": {
+                    key: value
+                    for key, value in match.items()
+                    if value is not None
+                },
+                "priority": 600,
+                "idle_timeout": 60,
+                "hard_timeout": 300,
+            }
+        elif severity != "high":
+            policy_event["mitigation"] = None
+        return policy_event
 
     def _create_responses_and_flow_rules(
         self,
@@ -79,6 +117,8 @@ class SecurityService:
             )
             responses.append(response)
 
+            self._remove_superseded_rate_limit(event)
+
             flow_rule = self.flow_repository.get_or_create_from_mitigation(
                 event=event,
                 security_response_id=response["id"],
@@ -92,6 +132,18 @@ class SecurityService:
                 flow_rules.append(flow_rule)
 
         return responses, flow_rules
+
+    def _remove_superseded_rate_limit(self, event: dict[str, Any]) -> None:
+        mitigation = event.get("mitigation") or {}
+        fingerprint = event.get("event_fingerprint")
+        if mitigation.get("action") != "DROP" or not fingerprint:
+            return
+        for flow_rule in self.flow_repository.list_by_fingerprint(fingerprint):
+            if (
+                flow_rule.get("action") == "RATE_LIMIT"
+                and flow_rule.get("status") not in {"REMOVED", "EXPIRED"}
+            ):
+                self.flow_service.delete_flow(flow_rule["id"])
 
     def _apply_automatic_response(
         self,

@@ -130,6 +130,9 @@ class IcmpFloodDetectionPolicyTest(unittest.TestCase):
 
         self.assertEqual(event["response_level"], "L2")
         self.assertEqual(event["confidence"], "high")
+        self.assertEqual(event["severity"], "critical")
+        self.assertEqual(event["recommended_action"], "drop")
+        self.assertEqual(event["mitigation"]["action"], "DROP")
         self.assertEqual(event["evidence"]["score"], 95)
         self.assertIn("high_pps_exceeded", event["evidence"]["matched_conditions"])
 
