@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { TopologyMap } from "@/components/topology/TopologyMap";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { formatBitsPerSecond } from "@/lib/format";
 import { getTopologyState } from "@/lib/topologyApi";
 import type { TopologyState } from "@/types/topology";
 
@@ -74,9 +75,9 @@ export default function TopologyPage() {
           action={
             <div className="flex items-center gap-3">
               <div className="font-mono-ui hidden gap-3 text-[9px] text-muted md:flex">
-                <span className="flex items-center gap-1"><i className="h-0.5 w-5 bg-accent" />기본 경로</span>
-                <span className="flex items-center gap-1"><i className="h-0.5 w-5 border-t-2 border-dashed border-yellow" />우회 경로</span>
-                <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-red" />공격 트래픽</span>
+                <span className="flex items-center gap-1"><i className="h-0.5 w-5 bg-accent" />선택 경로</span>
+                <span className="flex items-center gap-1"><i className="h-0.5 w-5 border-t-2 border-dashed border-yellow" />대기 경로</span>
+                <span className="flex items-center gap-1"><i className="h-0.5 w-5 border-t-2 border-dashed border-red" />링크 DOWN</span>
               </div>
               <StatusBadge value={`${topology.active_path} path`} tone="normal" />
             </div>
@@ -94,9 +95,32 @@ export default function TopologyPage() {
               >
                 <div>
                   <strong className="block text-sm">{link.source} → {link.target}</strong>
-                  <span className="text-xs text-muted">{link.path} · 사용률 {link.utilization.toFixed(2)}%</span>
+                  <span className="text-xs text-muted">
+                    {link.path} · {link.sampled ? formatBitsPerSecond(link.bps) : "sampling"} · 사용률 {link.utilization.toFixed(2)}%
+                  </span>
                 </div>
-                <StatusBadge value={link.active ? "active" : "standby"} tone={link.active ? "normal" : "muted"} />
+                <StatusBadge
+                  value={
+                    link.state === "down"
+                      ? "down"
+                      : link.state === "unknown"
+                        ? "unknown"
+                        : link.path === "access"
+                          ? "up"
+                          : link.selected
+                            ? "up · selected"
+                            : "up · standby"
+                  }
+                  tone={
+                    link.state === "down"
+                      ? "critical"
+                      : link.state === "unknown"
+                        ? "muted"
+                        : link.selected || link.path === "access"
+                          ? "normal"
+                          : "warning"
+                  }
+                />
               </div>
             ))}
             {!topology.links.length && (

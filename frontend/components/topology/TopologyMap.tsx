@@ -45,12 +45,23 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
         {topology.links.map((link) => {
           const source = positions[link.source];
           const target = positions[link.target];
-          const stroke = link.active
-            ? "var(--accent)"
-            : link.path === "backup"
-              ? "var(--yellow)"
-              : "var(--border2)";
-          const width = link.active ? 0.9 : 0.45;
+          const stroke =
+            link.state === "down"
+              ? "var(--red)"
+              : link.selected
+                ? "var(--accent)"
+                : link.state === "up"
+                  ? "var(--yellow)"
+                  : "var(--border2)";
+          const width = link.selected ? 0.9 : 0.55;
+          const opacity =
+            link.state === "down" ? 0.8 : link.selected ? 0.68 : 0.48;
+          const dasharray =
+            link.state === "down"
+              ? "1.5 1.5"
+              : !link.selected && link.path !== "access"
+                ? "2 2"
+                : undefined;
 
           if (!source || !target) return null;
 
@@ -61,9 +72,9 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
                 d={linkPaths[link.id]}
                 fill="none"
                 stroke={stroke}
-                strokeOpacity={link.active ? 0.68 : 0.42}
+                strokeOpacity={opacity}
                 strokeWidth={width}
-                strokeDasharray={link.path === "backup" ? "2 2" : undefined}
+                strokeDasharray={dasharray}
                 vectorEffect="non-scaling-stroke"
               />
             );
@@ -77,9 +88,9 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
               x2={target.x}
               y2={target.y}
               stroke={stroke}
-              strokeOpacity={link.active ? 0.68 : 0.42}
+              strokeOpacity={opacity}
               strokeWidth={width}
-              strokeDasharray={link.path === "backup" ? "2 2" : undefined}
+              strokeDasharray={dasharray}
               vectorEffect="non-scaling-stroke"
             />
           );

@@ -51,15 +51,43 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
       : ("offline" as const)
   }));
 
-  const pathLinks = pathStatus.links.map((item) => ({ ...item }));
-  const accessLinks = controllerTopology.hosts.map((host) => ({
-    id: `${host.name}-${host.switch_id}`,
-    source: host.name,
-    target: host.switch_id,
-    path: "access" as const,
-    active: connectedSwitches.has(host.switch_id),
-    utilization: utilizationBySwitch.get(host.switch_id)?.utilization ?? 0
+  const pathLinks = pathStatus.links.map((item) => ({
+    id: item.id,
+    source: item.source,
+    target: item.target,
+    path: item.path,
+    state:
+      item.state === "active"
+        ? ("up" as const)
+        : item.state === "inactive"
+          ? ("down" as const)
+          : ("unknown" as const),
+    selected: item.selected,
+    active: item.state === "active",
+    bps: item.bps,
+    utilization: item.utilization,
+    sampled: item.sampled
   }));
+  const accessLinks = controllerTopology.hosts.map((host) => {
+    const switchUsage = utilizationBySwitch.get(host.switch_id);
+    const portUsage = switchUsage?.ports.find(
+      (port) => port.port_no === host.port
+    );
+    const active = connectedSwitches.has(host.switch_id);
+
+    return {
+      id: `${host.name}-${host.switch_id}`,
+      source: host.name,
+      target: host.switch_id,
+      path: "access" as const,
+      state: active ? ("up" as const) : ("down" as const),
+      selected: active,
+      active,
+      bps: portUsage?.bps ?? 0,
+      utilization: portUsage?.utilization ?? 0,
+      sampled: portUsage?.sampled ?? false
+    };
+  });
 
   return {
     active_path: pathStatus.active_path,

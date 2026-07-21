@@ -3,8 +3,17 @@ export type PathLink = {
   source: string;
   target: string;
   path: "primary" | "backup";
+  source_port: number | null;
+  target_port: number | null;
+  state: "active" | "inactive" | "unknown";
+  selected: boolean;
   active: boolean;
+  bps: number;
+  rx_bps: number;
+  tx_bps: number;
   utilization: number;
+  capacity_bps: number;
+  sampled: boolean;
 };
 
 export type PathInfo = {
@@ -23,6 +32,16 @@ export type PathHistoryItem = {
   status: string;
 };
 
+export type PortUtilization = {
+  port_no: number;
+  bps: number;
+  rx_bps: number;
+  tx_bps: number;
+  utilization: number;
+  capacity_bps: number;
+  sampled: boolean;
+};
+
 export type SwitchUtilization = {
   switch_id: string;
   dpid?: string | null;
@@ -34,6 +53,7 @@ export type SwitchUtilization = {
   capacity_bps: number;
   sample_interval_seconds?: number | null;
   sampled: boolean;
+  ports: PortUtilization[];
   status: "sampling" | "normal" | "warning" | "critical" | "disconnected";
 };
 
