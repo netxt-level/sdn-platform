@@ -287,6 +287,7 @@ Alembic migration은 `migrations/`에 있다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장한다. `mitigation`이 있는 이벤트는 PostgreSQL에 보안 대응 내역과 flow rule을 생성한 뒤 Controller에 자동 적용하고, 결과를 `APPLIED` 또는 `FAILED`로 저장한다.
 - `/api/flows`는 `sdn_controller.flow_rules` 조회·생성·삭제 기능을 제공한다. 생성과 삭제는 각각 OpenFlow Barrier 응답에 따라 `APPLIED`/`FAILED`, `REMOVED`/`REMOVE_FAILED` 상태와 Controller 응답을 저장한다.
 - `RATE_LIMIT`은 `rate_limit_pps`를 OVS Meter의 PKTPS 단위로 적용하며 Controller 응답의 `meter_id`를 함께 저장한다.
+- Backend는 `FLOW_RECONCILE_INTERVAL_SECONDS` 주기로 `PENDING`, `FAILED`, `APPLIED`, 제거 실패 규칙을 Controller와 재조정한다.
 - `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
 - 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.

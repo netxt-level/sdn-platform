@@ -277,3 +277,40 @@ def test_reconcile_updates_expired_and_reapplies_missing_rules(
     }
     assert repository.status_updates[0][1]["status"] == "EXPIRED"
     assert [rule["id"] for rule in controller.rules] == ["missing-rule"]
+
+
+def test_reconcile_retries_failed_installation(load_service_module):
+    class StubControllerClientError(RuntimeError):
+        pass
+
+    class EmptyControllerClient(SuccessfulControllerClient):
+        def list_flow_rules(self):
+            return []
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": EmptyControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    repository.flows = [
+        {
+            **repository.get_flow("failed-rule"),
+            "status": "FAILED",
+        },
+    ]
+    controller = EmptyControllerClient()
+    service = module.FlowService(repository, controller)
+
+    result = service.reconcile_flows()
+
+    assert result["status"] == "COMPLETED"
+    assert result["reapplied"] == 1
+    assert [rule["id"] for rule in controller.rules] == ["failed-rule"]

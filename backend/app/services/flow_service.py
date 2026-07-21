@@ -152,7 +152,20 @@ class FlowService:
         failures = []
 
         for flow_rule in backend_rules:
-            if flow_rule.get("status") not in {
+            backend_status = flow_rule.get("status")
+            if backend_status in {"REMOVING", "REMOVE_FAILED"}:
+                result = self.delete_flow(flow_rule["id"])
+                if result.get("status") == "REMOVED":
+                    updated += 1
+                else:
+                    failures.append({
+                        "flow_rule_id": flow_rule["id"],
+                        "error": result.get("error_message"),
+                    })
+                continue
+            if backend_status not in {
+                "PENDING",
+                "FAILED",
                 "APPLIED",
                 "APPLYING",
             }:
@@ -176,6 +189,23 @@ class FlowService:
                 updated += 1
                 continue
             if controller_status == "APPLIED":
+                if backend_status != "APPLIED":
+                    self.flow_repository.update_status(
+                        flow_rule["id"],
+                        status="APPLIED",
+                        controller_rule_id=flow_rule["id"],
+                        controller_response=controller_rule,
+                        switch_id=(
+                            controller_rule.get("switch_id")
+                            or flow_rule.get("switch_id")
+                        ),
+                        requested_at=flow_rule.get("requested_at"),
+                        applied_at=(
+                            flow_rule.get("applied_at")
+                            or datetime.now(timezone.utc)
+                        ),
+                    )
+                    updated += 1
                 continue
 
             result = self.apply_flow(flow_rule, force=True)

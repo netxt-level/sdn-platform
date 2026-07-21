@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,12 +10,22 @@ from app.api.path import router as path_router
 from app.api.security import router as security_router
 from app.api.ws import router as ws_router
 from app.db.elasticsearch import create_elasticsearch_indices
+from app.core.config import settings
+from app.services.flow_reconciler import FlowReconciler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_elasticsearch_indices()
-    yield
+    reconciler = FlowReconciler(
+        interval_seconds=settings.flow_reconcile_interval_seconds,
+    )
+    task = asyncio.create_task(reconciler.run())
+    try:
+        yield
+    finally:
+        reconciler.stop()
+        await task
 
 app = FastAPI(
     title="SDN Platform API",

@@ -66,5 +66,14 @@ class Settings:
             raise RuntimeError("CONTROLLER_MAX_ATTEMPTS must be at least 1")
         return value
 
+    @property
+    def flow_reconcile_interval_seconds(self) -> float:
+        value = float(get_env("FLOW_RECONCILE_INTERVAL_SECONDS", "30"))
+        if value <= 0:
+            raise RuntimeError(
+                "FLOW_RECONCILE_INTERVAL_SECONDS must be positive"
+            )
+        return value
+
 
 settings = Settings()
