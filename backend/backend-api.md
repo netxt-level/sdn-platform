@@ -380,6 +380,22 @@ Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 �
         "state": "active"
       }
     ],
+    "hosts": [
+      {
+        "name": "h1",
+        "mac": "00:00:00:00:00:01",
+        "ipv4": "10.0.0.1",
+        "switch_id": "s1",
+        "port": 1
+      },
+      {
+        "name": "web",
+        "mac": "00:00:00:00:01:00",
+        "ipv4": "10.0.0.100",
+        "switch_id": "s4",
+        "port": 3
+      }
+    ],
     "error": null
   }
 }
@@ -388,6 +404,7 @@ Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 �
 `packet_count`와 `byte_count`는 Controller가 저장 시 반환한 cookie와 현재
 OpenFlow 통계 cookie가 일치할 때 제공되며, 아직 통계가 수집되지 않았거나
 규칙이 스위치에 없으면 `null`이다.
+`controller.hosts`는 Controller가 학습한 호스트만 포함한다.
 
 ### 4.2 Flow Rule 수동 생성
 
@@ -398,6 +415,11 @@ POST /api/flows
 운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL
 `sdn_controller.flow_rules`에 저장하고 SDN Controller의
 `POST /flow-rules`로 전송한다. 저장 상태는 다음 순서로 변경된다.
+
+현재 수동 생성 화면은 Controller가 학습한 출발지 호스트와 `web` 목적지를
+사용한다. 운영자는 출발지, 프로토콜, 목적지 포트만 선택하며 화면이
+`eth_type`, `ipv4_src`, `ipv4_dst`, `ip_proto`, TCP/UDP 목적지 포트와
+출발지의 연결 switch를 자동으로 구성한다. ICMP는 포트 조건을 만들지 않는다.
 
 ```text
 PENDING -> APPLYING -> APPLIED

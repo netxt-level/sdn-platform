@@ -76,6 +76,22 @@ class SuccessfulControllerClient:
                     "state": "active",
                 },
             ],
+            "hosts": [
+                {
+                    "name": "h1",
+                    "mac": "00:00:00:00:00:01",
+                    "ipv4": "10.0.0.1",
+                    "switch_id": "s1",
+                    "port": 1,
+                },
+                {
+                    "name": "web",
+                    "mac": "00:00:00:00:01:00",
+                    "ipv4": "10.0.0.100",
+                    "switch_id": "s4",
+                    "port": 3,
+                },
+            ],
         }
 
     def get_stats(self):
@@ -240,6 +256,22 @@ def test_get_flows_combines_db_rules_with_live_controller_counters(
                 "source": "s1",
                 "destination": "s2",
                 "state": "active",
+            },
+        ],
+        "hosts": [
+            {
+                "name": "h1",
+                "mac": "00:00:00:00:00:01",
+                "ipv4": "10.0.0.1",
+                "switch_id": "s1",
+                "port": 1,
+            },
+            {
+                "name": "web",
+                "mac": "00:00:00:00:01:00",
+                "ipv4": "10.0.0.100",
+                "switch_id": "s4",
+                "port": 3,
             },
         ],
         "error": None,

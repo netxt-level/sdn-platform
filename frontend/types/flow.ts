@@ -22,11 +22,20 @@ export type ControllerLink = {
   state: string;
 };
 
+export type ControllerHost = {
+  name?: string | null;
+  mac: string;
+  ipv4?: string | null;
+  switch_id: string;
+  port: number;
+};
+
 export type FlowControllerState = {
   available: boolean;
   updated_at?: string | null;
   switches: ControllerSwitch[];
   links: ControllerLink[];
+  hosts: ControllerHost[];
   error?: string | null;
 };
 

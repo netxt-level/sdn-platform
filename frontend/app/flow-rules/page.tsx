@@ -23,7 +23,30 @@ import type {
 const emptyControllerState: FlowControllerState = {
   available: false,
   switches: [],
-  links: []
+  links: [],
+  hosts: []
+};
+
+type MatchProtocol = "TCP" | "UDP" | "ICMP";
+
+const protocolNumbers: Record<MatchProtocol, number> = {
+  TCP: 6,
+  UDP: 17,
+  ICMP: 1
+};
+
+const commonPorts: Record<Exclude<MatchProtocol, "ICMP">, { value: string; label: string }[]> = {
+  TCP: [
+    { value: "80", label: "80 · HTTP" },
+    { value: "443", label: "443 · HTTPS" },
+    { value: "22", label: "22 · SSH" },
+    { value: "8080", label: "8080 · HTTP 대체" }
+  ],
+  UDP: [
+    { value: "53", label: "53 · DNS" },
+    { value: "123", label: "123 · NTP" },
+    { value: "500", label: "500 · IKE" }
+  ]
 };
 
 function formatMatch(match: Record<string, unknown>) {
@@ -34,30 +57,6 @@ function formatMatch(match: Record<string, unknown>) {
   }
 
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(", ");
-}
-
-function parseMatch(value: string) {
-  // 운영자가 입력한 key=value 목록을 백엔드 match JSON으로 변환한다.
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string | number>>((match, part) => {
-      const [rawKey, ...rawValue] = part.split("=");
-      const key = rawKey?.trim();
-      const nextValue = rawValue.join("=").trim();
-
-      if (!key || !nextValue) {
-        return match;
-      }
-
-      const numericValue = Number(nextValue);
-      match[key] = Number.isFinite(numericValue) && nextValue !== ""
-        ? numericValue
-        : nextValue;
-
-      return match;
-    }, {});
 }
 
 function statusTone(status: string) {
@@ -76,8 +75,10 @@ export default function FlowRulesPage() {
     emptyControllerState
   );
   const [selectedSwitch, setSelectedSwitch] = useState("ALL");
-  const [switchId, setSwitchId] = useState("");
-  const [matchText, setMatchText] = useState("");
+  const [sourceIp, setSourceIp] = useState("");
+  const [protocol, setProtocol] = useState<MatchProtocol>("TCP");
+  const [portOption, setPortOption] = useState("80");
+  const [customPort, setCustomPort] = useState("");
   const [action, setAction] = useState("DROP");
   const [priority, setPriority] = useState("500");
   const [rateLimitPps, setRateLimitPps] = useState("100");
@@ -100,6 +101,42 @@ export default function FlowRulesPage() {
     () => controller.switches.filter((item) => item.state === "connected"),
     [controller.switches]
   );
+  const sourceHosts = useMemo(
+    () => controller.hosts.filter(
+      (host) => Boolean(host.ipv4) && host.name?.toLowerCase() !== "web"
+    ),
+    [controller.hosts]
+  );
+  const selectedSource = useMemo(
+    () => sourceHosts.find((host) => host.ipv4 === sourceIp),
+    [sourceHosts, sourceIp]
+  );
+  const webHost = useMemo(
+    () => controller.hosts.find(
+      (host) => host.name?.toLowerCase() === "web" && Boolean(host.ipv4)
+    ),
+    [controller.hosts]
+  );
+  const selectedSwitchId = selectedSource?.switch_id ?? "";
+  const selectedPort = protocol === "ICMP"
+    ? null
+    : portOption === "CUSTOM"
+      ? customPort
+      : portOption;
+  const matchPreview = useMemo(() => {
+    if (!selectedSource?.ipv4 || !webHost?.ipv4) return null;
+
+    const match: Record<string, string | number> = {
+      eth_type: 2048,
+      ipv4_src: selectedSource.ipv4,
+      ipv4_dst: webHost.ipv4,
+      ip_proto: protocolNumbers[protocol]
+    };
+    if (protocol !== "ICMP" && selectedPort) {
+      match[`${protocol.toLowerCase()}_dst`] = Number(selectedPort);
+    }
+    return match;
+  }, [protocol, selectedPort, selectedSource, webHost]);
   const switchFilters = useMemo(
     () => [
       "ALL",
@@ -117,23 +154,23 @@ export default function FlowRulesPage() {
       if (link.state !== "active") {
         return [];
       }
-      if (link.source === switchId) {
+      if (link.source === selectedSwitchId) {
         return [link.destination];
       }
-      if (link.destination === switchId) {
+      if (link.destination === selectedSwitchId) {
         return [link.source];
       }
       return [];
     });
     return [...new Set(targets)].map((target) => `OUTPUT:${target}`);
-  }, [controller.links, switchId]);
+  }, [controller.links, selectedSwitchId]);
 
   function applyFlowRulesResponse(data: FlowRulesResponse) {
     const items = data.items ?? [];
-    const nextController = data.controller ?? emptyControllerState;
-    const connected = nextController.switches.filter(
-      (item) => item.state === "connected"
-    );
+    const nextController = {
+      ...(data.controller ?? emptyControllerState),
+      hosts: data.controller?.hosts ?? []
+    };
     setFlowRules(items);
     setController(nextController);
     setSelectedSwitch((current) =>
@@ -143,10 +180,14 @@ export default function FlowRulesPage() {
         ? current
         : "ALL"
     );
-    setSwitchId((current) =>
-      connected.some((item) => item.switch_id === current)
+    setSourceIp((current) =>
+      nextController.hosts.some(
+        (host) => host.ipv4 === current && host.name?.toLowerCase() !== "web"
+      )
         ? current
-        : connected[0]?.switch_id ?? ""
+        : nextController.hosts.find(
+          (host) => Boolean(host.ipv4) && host.name?.toLowerCase() !== "web"
+        )?.ipv4 ?? ""
     );
   }
 
@@ -188,20 +229,43 @@ export default function FlowRulesPage() {
     event.preventDefault();
     setMessage("");
 
-    const match = parseMatch(matchText);
-
-    if (!Object.keys(match).length) {
-      setMessage("match 조건을 key=value 형식으로 입력하세요.");
+    if (!selectedSource?.ipv4) {
+      setMessage("출발지 호스트를 선택하세요.");
       return;
     }
 
-    if (!switchId) {
-      setMessage("연결된 스위치가 없어 Flow Rule을 적용할 수 없습니다.");
+    if (!webHost?.ipv4) {
+      setMessage("목적지 web 호스트가 아직 Controller에 학습되지 않았습니다.");
       return;
+    }
+
+    if (!connectedSwitches.some(
+      (item) => item.switch_id === selectedSource.switch_id
+    )) {
+      setMessage(`출발지 스위치 ${selectedSource.switch_id}가 연결되어 있지 않습니다.`);
+      return;
+    }
+
+    const port = selectedPort == null ? null : Number(selectedPort);
+    if (protocol !== "ICMP" && (
+      port == null || !Number.isInteger(port) || port < 1 || port > 65535
+    )) {
+      setMessage("포트는 1에서 65535 사이의 정수로 입력하세요.");
+      return;
+    }
+
+    const match: Record<string, string | number> = {
+      eth_type: 2048,
+      ipv4_src: selectedSource.ipv4,
+      ipv4_dst: webHost.ipv4,
+      ip_proto: protocolNumbers[protocol]
+    };
+    if (protocol !== "ICMP" && port != null) {
+      match[`${protocol.toLowerCase()}_dst`] = port;
     }
 
     const payload = {
-      switch_id: switchId,
+      switch_id: selectedSource.switch_id,
       match,
       action,
       priority: Number(priority)
@@ -375,18 +439,72 @@ export default function FlowRulesPage() {
 
           <Panel title="Flow Rule 추가" action={<Plus className="h-4 w-4 text-accent" />}>
             <form className="grid gap-3" onSubmit={handleSubmit}>
-              <select value={switchId} onChange={(event) => {
-                setSwitchId(event.target.value);
-                if (action.toUpperCase().startsWith("OUTPUT:")) setAction("DROP");
-              }} disabled={!connectedSwitches.length} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] disabled:cursor-not-allowed disabled:opacity-50">
-                {!connectedSwitches.length && <option value="">연결된 스위치 없음</option>}
-                {connectedSwitches.map((item) => (
-                  <option key={item.switch_id} value={item.switch_id}>
-                    {item.switch_id} ({item.dpid ?? "DPID 확인 중"})
-                  </option>
-                ))}
-              </select>
-              <input value={matchText} onChange={(event) => setMatchText(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] outline-none" placeholder="match: ipv4_src=10.0.0.2" />
+              <label className="grid gap-1">
+                <span className="font-mono-ui text-[9px] font-black uppercase tracking-[0.12em] text-faint">출발지</span>
+                <select value={sourceIp} onChange={(event) => {
+                  setSourceIp(event.target.value);
+                  if (action.toUpperCase().startsWith("OUTPUT:")) setAction("DROP");
+                }} disabled={!sourceHosts.length} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] disabled:cursor-not-allowed disabled:opacity-50">
+                  {!sourceHosts.length && <option value="">학습된 출발지 없음</option>}
+                  {sourceHosts.map((host) => (
+                    <option key={host.mac} value={host.ipv4 ?? ""}>
+                      {host.name ?? host.mac} · {host.ipv4} ({host.switch_id})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1">
+                  <span className="font-mono-ui text-[9px] font-black uppercase tracking-[0.12em] text-faint">프로토콜</span>
+                  <select value={protocol} onChange={(event) => {
+                    const nextProtocol = event.target.value as MatchProtocol;
+                    setProtocol(nextProtocol);
+                    if (nextProtocol === "TCP") setPortOption("80");
+                    if (nextProtocol === "UDP") setPortOption("53");
+                  }} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+                    <option>TCP</option>
+                    <option>UDP</option>
+                    <option>ICMP</option>
+                  </select>
+                </label>
+
+                <label className="grid gap-1">
+                  <span className="font-mono-ui text-[9px] font-black uppercase tracking-[0.12em] text-faint">목적지 포트</span>
+                  {protocol === "ICMP" ? (
+                    <div className="font-mono-ui flex h-9 items-center rounded border border-line bg-sidebar px-3 text-[10px] text-faint">포트 없음</div>
+                  ) : (
+                    <select value={portOption} onChange={(event) => setPortOption(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+                      {commonPorts[protocol].map((port) => (
+                        <option key={port.value} value={port.value}>{port.label}</option>
+                      ))}
+                      <option value="CUSTOM">직접 입력</option>
+                    </select>
+                  )}
+                </label>
+              </div>
+
+              {protocol !== "ICMP" && portOption === "CUSTOM" && (
+                <label className="grid gap-1">
+                  <span className="font-mono-ui text-[9px] font-black uppercase tracking-[0.12em] text-faint">포트 직접 입력</span>
+                  <input value={customPort} onChange={(event) => setCustomPort(event.target.value)} type="number" min="1" max="65535" className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] outline-none" placeholder="1 - 65535" />
+                </label>
+              )}
+
+              <div className="font-mono-ui rounded border border-line bg-sidebar p-3 text-[10px] leading-5">
+                <div className="flex justify-between gap-3">
+                  <span className="text-faint">목적지</span>
+                  <strong>{webHost?.name ?? "web"} · {webHost?.ipv4 ?? "학습 대기 중"}</strong>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-faint">적용 스위치</span>
+                  <strong>{selectedSwitchId || "출발지 선택 필요"}</strong>
+                </div>
+                <div className="mt-2 border-t border-line pt-2 text-accent">
+                  {matchPreview ? formatMatch(matchPreview) : "Match 조건을 생성할 수 없습니다."}
+                </div>
+              </div>
+
               <select value={action} onChange={(event) => setAction(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
                 <option>RATE_LIMIT</option>
                 <option>DROP</option>
@@ -398,7 +516,7 @@ export default function FlowRulesPage() {
               {action.toUpperCase() === "RATE_LIMIT" && (
                 <input value={rateLimitPps} onChange={(event) => setRateLimitPps(event.target.value)} type="number" min="1" className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] outline-none" placeholder="rate_limit_pps" />
               )}
-              <button type="submit" disabled={submitting || !connectedSwitches.length} className="font-mono-ui rounded border border-line2 bg-[var(--accent-dim)] px-3 py-2 text-[11px] text-accent disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="submit" disabled={submitting || !selectedSource || !webHost || !connectedSwitches.length} className="font-mono-ui rounded border border-line2 bg-[var(--accent-dim)] px-3 py-2 text-[11px] text-accent disabled:cursor-not-allowed disabled:opacity-50">
                 {submitting ? "적용 중" : "규칙 추가"}
               </button>
               {message && <p className="font-mono-ui text-[10px] text-muted">{message}</p>}

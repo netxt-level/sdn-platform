@@ -33,6 +33,7 @@ class FlowService:
                     "updated_at": None,
                     "switches": [],
                     "links": [],
+                    "hosts": [],
                     "error": str(error),
                 },
             }
@@ -63,6 +64,7 @@ class FlowService:
                 "updated_at": stats.get("updated_at"),
                 "switches": topology.get("switches", []),
                 "links": topology.get("links", []),
+                "hosts": topology.get("hosts", []),
                 "error": None,
             },
         }
