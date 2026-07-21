@@ -96,6 +96,12 @@ class ControllerClient:
             )
         return items
 
+    def get_topology(self) -> dict[str, Any]:
+        return self._request("GET", "/topology", None, expected_status=None)
+
+    def get_stats(self) -> dict[str, Any]:
+        return self._request("GET", "/stats", None, expected_status=None)
+
     def _request(
         self,
         method: str,

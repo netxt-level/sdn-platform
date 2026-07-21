@@ -9,6 +9,7 @@ class ControllerSettings:
     openflow_port: int
     rest_host: str
     rest_port: int
+    stats_interval_seconds: float = 5.0
 
 
 def _read_port(environ, name, default):
@@ -25,6 +26,9 @@ def _read_port(environ, name, default):
 
 def load_settings(environ=None):
     environ = os.environ if environ is None else environ
+    stats_interval = float(environ.get("CONTROLLER_STATS_INTERVAL_SECONDS", "5"))
+    if stats_interval <= 0:
+        raise ValueError("CONTROLLER_STATS_INTERVAL_SECONDS must be positive")
     return ControllerSettings(
         openflow_port=_read_port(
             environ,
@@ -37,4 +41,5 @@ def load_settings(environ=None):
             "CONTROLLER_REST_PORT",
             8080,
         ),
+        stats_interval_seconds=stats_interval,
     )

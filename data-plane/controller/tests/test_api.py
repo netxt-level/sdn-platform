@@ -12,6 +12,7 @@ from app.flow_operations import FlowOperationRegistry
 from app.hosts import HostRegistry
 from app.meters import MeterRegistry
 from app.table_miss import TableMissRegistry
+from app.stats import StatsRegistry
 from app.topology import ActiveTopology
 from app.topology import WEIGHTED_SWITCH_GRAPH
 
@@ -91,6 +92,7 @@ class ControllerApiTests(unittest.TestCase):
         self.meters = MeterRegistry()
         self.hosts = HostRegistry()
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
+        self.stats = StatsRegistry()
         self.recalculation_reasons = []
         self.settings = ControllerSettings(
             openflow_port=6653,
@@ -157,6 +159,7 @@ class ControllerApiTests(unittest.TestCase):
             self.hosts,
             self.topology,
             self._recalculate,
+            self.stats,
             self.settings,
         )
 
@@ -174,6 +177,7 @@ class ControllerApiTests(unittest.TestCase):
                 "/flow-rules/{rule_id}",
                 "/meters",
                 "/topology",
+                "/stats",
                 "/paths/recalculate",
             },
             routes,
@@ -191,6 +195,7 @@ class ControllerApiTests(unittest.TestCase):
             self.hosts,
             self.topology,
             self._recalculate,
+            self.stats,
             self.settings,
         )
 
@@ -228,6 +233,7 @@ class ControllerApiTests(unittest.TestCase):
             self.hosts,
             self.topology,
             self._recalculate,
+            self.stats,
             self.settings,
         )
         endpoint = next(
@@ -282,6 +288,7 @@ class ControllerApiTests(unittest.TestCase):
             self.hosts,
             self.topology,
             self._recalculate,
+            self.stats,
             self.settings,
         )
         endpoint = next(
@@ -310,6 +317,7 @@ class ControllerApiTests(unittest.TestCase):
             self.hosts,
             self.topology,
             self._recalculate,
+            self.stats,
             self.settings,
         )
         endpoint = next(

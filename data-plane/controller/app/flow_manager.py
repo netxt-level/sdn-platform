@@ -124,6 +124,22 @@ def request_port_descriptions(datapath):
     return request
 
 
+def request_port_stats(datapath):
+    request = datapath.ofproto_parser.OFPPortStatsRequest(
+        datapath,
+        0,
+        datapath.ofproto.OFPP_ANY,
+    )
+    datapath.send_msg(request)
+    return request
+
+
+def request_flow_stats(datapath):
+    request = datapath.ofproto_parser.OFPFlowStatsRequest(datapath)
+    datapath.send_msg(request)
+    return request
+
+
 def build_packet_out(datapath, buffer_id, in_port, output_ports, data):
     """Build a Packet-Out for the selected physical output ports."""
     parser = datapath.ofproto_parser

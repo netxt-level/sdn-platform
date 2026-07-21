@@ -299,6 +299,11 @@ idle/hard timeout이 발생하면 Meter를 삭제한다.
 구성된 switch, 현재 활성/비활성 link와 양쪽 port, link cost, 학습된 Host
 위치를 반환한다.
 
+### `GET /stats`
+
+`CONTROLLER_STATS_INTERVAL_SECONDS` 주기로 수집한 switch port packet/byte/error
+counter와 flow packet/byte/duration counter의 최신 snapshot을 반환한다.
+
 ### `POST /paths/recalculate`
 
 현재 모든 학습형 L2 Flow를 제거한다. 다음 패킷이 활성 topology snapshot에서

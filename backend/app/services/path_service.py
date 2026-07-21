@@ -4,6 +4,8 @@ from typing import Any
 
 from app.repositories.flow_repository import FlowRepository
 from app.services.dashboard_service import DashboardService
+from app.clients.controller import ControllerClient
+from app.clients.controller import ControllerClientError
 
 WARNING_BPS_THRESHOLD = 5_000_000
 
@@ -13,9 +15,11 @@ class PathService:
         self,
         dashboard_service: DashboardService | None = None,
         flow_repository: FlowRepository | None = None,
+        controller_client: ControllerClient | None = None,
     ):
         self.dashboard_service = dashboard_service or DashboardService()
         self.flow_repository = flow_repository or FlowRepository()
+        self.controller_client = controller_client or ControllerClient()
 
     def get_status(self) -> dict[str, Any]:
         summary = self.dashboard_service.get_summary()
@@ -32,6 +36,23 @@ class PathService:
             max(0, round(primary_utilization * 0.45)),
         )
         active_path = self._decide_active_path(summary, flow_rules)
+        controller_state = None
+        try:
+            topology = self.controller_client.get_topology()
+            stats = self.controller_client.get_stats()
+            controller_state = {"topology": topology, "stats": stats}
+            active_links = {
+                (link.get("source"), link.get("destination"))
+                for link in topology.get("links", [])
+                if link.get("state") == "active"
+            }
+            if not {
+                ("s1", "s2"),
+                ("s2", "s4"),
+            }.issubset(active_links):
+                active_path = "backup"
+        except ControllerClientError:
+            pass
 
         return {
             "active_path": active_path,
@@ -85,6 +106,7 @@ class PathService:
                 },
             ],
             "history": [self._history_item(rule) for rule in flow_rules[:8]],
+            "controller": controller_state,
         }
 
     def _decide_active_path(

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 from urllib.request import Request
 from urllib.request import urlopen
 
@@ -118,6 +119,15 @@ def run(args):
         h1 = network.get("h1")
         web = network.get("web")
         require_ping_success(h1, web)
+        deadline = time.monotonic() + args.timeout
+        stats = {"switches": []}
+        while time.monotonic() < deadline:
+            stats = controller_request(args, "GET", "/stats")
+            if len(stats.get("switches", [])) == 4:
+                break
+            time.sleep(0.2)
+        if len(stats.get("switches", [])) != 4:
+            raise ScenarioFailure(f"Controller stats are incomplete: {stats}")
 
         response = install_drop_rule(args)
         if response.get("status") != "APPLIED":
@@ -173,6 +183,7 @@ def run(args):
             f"cookie={response['cookie']} "
             f"install={response['status']} delete={removed['status']} "
             "topology=passed recalculate=passed"
+            " stats=passed"
         )
     finally:
         if started:

@@ -149,6 +149,7 @@ def create_api(
     hosts,
     topology,
     path_recalculator,
+    stats,
     settings,
 ):
     app = FastAPI(
@@ -184,6 +185,10 @@ def create_api(
     @app.get("/topology")
     def topology_snapshot():
         return build_topology_response(topology, hosts)
+
+    @app.get("/stats")
+    def statistics():
+        return stats.snapshot()
 
     @app.post("/paths/recalculate")
     def recalculate_paths():
@@ -406,6 +411,7 @@ class ControllerApiServer:
         hosts,
         topology,
         path_recalculator,
+        stats,
         settings,
     ):
         config = uvicorn.Config(
@@ -417,6 +423,7 @@ class ControllerApiServer:
                 hosts,
                 topology,
                 path_recalculator,
+                stats,
                 settings,
             ),
             host=settings.rest_host,

@@ -7,6 +7,7 @@ from os_ken.controller.handler import DEAD_DISPATCHER
 from os_ken.controller.handler import MAIN_DISPATCHER
 from os_ken.controller.handler import set_ev_cls
 from os_ken.lib.packet import ether_types
+from os_ken.lib import hub
 from os_ken.ofproto import ofproto_v1_3
 
 from app.api import ControllerApiServer
@@ -19,6 +20,8 @@ from app.flow_manager import delete_rate_limit_meter
 from app.flow_manager import install_table_miss_with_barrier
 from app.flow_manager import install_l2_forwarding_flow
 from app.flow_manager import request_port_descriptions
+from app.flow_manager import request_port_stats
+from app.flow_manager import request_flow_stats
 from app.flow_manager import send_packet_out
 from app.flow_operations import FlowOperationRegistry
 from app.hosts import HostRegistry
@@ -29,6 +32,7 @@ from app.routing import RoutingError
 from app.routing import calculate_input_ports
 from app.routing import calculate_weighted_bidirectional_routes
 from app.table_miss import TableMissRegistry
+from app.stats import StatsRegistry
 from app.topology import ActiveTopology
 from app.topology import get_host_binding
 from app.topology import get_neighbor_switch
@@ -62,6 +66,8 @@ class SwitchConnectionController(app_manager.OSKenApp):
         self.meters = MeterRegistry()
         self.hosts = HostRegistry()
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
+        self.stats = StatsRegistry()
+        self._stats_thread = None
         self.api_server = ControllerApiServer(
             self.datapaths,
             self.table_miss_statuses,
@@ -70,12 +76,14 @@ class SwitchConnectionController(app_manager.OSKenApp):
             self.hosts,
             self.topology,
             self._invalidate_all_l2_flows,
+            self.stats,
             self.settings,
         )
 
     def start(self):
         super().start()
         self.api_server.start()
+        self._stats_thread = hub.spawn(self._monitor_stats)
         self.logger.info(
             "rest_api_started host=%s port=%d",
             self.settings.rest_host,
@@ -83,8 +91,26 @@ class SwitchConnectionController(app_manager.OSKenApp):
         )
 
     def stop(self):
+        if self._stats_thread is not None:
+            hub.kill(self._stats_thread)
+            self._stats_thread = None
         self.api_server.stop()
         super().stop()
+
+    def _monitor_stats(self):
+        while True:
+            for datapath in self.datapaths.snapshot():
+                request_port_stats(datapath)
+                request_flow_stats(datapath)
+            hub.sleep(self.settings.stats_interval_seconds)
+
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def handle_port_stats_reply(self, event):
+        self.stats.update_ports(event.msg.datapath.id, event.msg.body)
+
+    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
+    def handle_flow_stats_reply(self, event):
+        self.stats.update_flows(event.msg.datapath.id, event.msg.body)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, event):
