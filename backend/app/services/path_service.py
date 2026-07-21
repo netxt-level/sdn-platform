@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.repositories.flow_repository import FlowRepository
+from app.repositories.platform_settings_repository import PlatformSettingsRepository
 from app.services.dashboard_service import DashboardService
 from app.clients.controller import ControllerClient
 from app.clients.controller import ControllerClientError
@@ -25,6 +26,7 @@ class PathService:
         flow_repository: FlowRepository | None = None,
         controller_client: ControllerClient | None = None,
         utilization_tracker: SwitchUtilizationTracker | None = None,
+        platform_settings_repository: PlatformSettingsRepository | None = None,
     ):
         self.dashboard_service = dashboard_service or DashboardService()
         self.flow_repository = flow_repository or FlowRepository()
@@ -33,11 +35,19 @@ class PathService:
             utilization_tracker
             or SwitchUtilizationTracker(settings.switch_port_capacity_bps)
         )
+        self.platform_settings_repository = (
+            platform_settings_repository or PlatformSettingsRepository()
+        )
 
     def get_status(self) -> dict[str, Any]:
         summary = self.dashboard_service.get_summary()
         flow_rules = self.flow_repository.list_flows()
-        active_path = self._decide_active_path(summary, flow_rules)
+        threshold = int(
+            self.platform_settings_repository.get()[
+                "congestion_threshold_percent"
+            ]
+        )
+        active_path = "primary"
         controller_state = None
         switches = []
         topology = {"links": [], "switches": []}
@@ -46,16 +56,7 @@ class PathService:
             stats = self.controller_client.get_stats()
             controller_state = {"topology": topology, "stats": stats}
             switches = self.utilization_tracker.update(stats, topology)
-            active_links = {
-                self._edge_key(link.get("source"), link.get("destination"))
-                for link in topology.get("links", [])
-                if link.get("state") == "active"
-            }
-            if not {
-                self._edge_key("s1", "s2"),
-                self._edge_key("s2", "s4"),
-            }.issubset(active_links):
-                active_path = "backup"
+            active_path = self._reported_active_path(topology)
         except ControllerClientError:
             pass
 
@@ -79,6 +80,23 @@ class PathService:
         ]
         primary_utilization = self._path_utilization("primary", links)
         backup_utilization = self._path_utilization("backup", links)
+        if controller_state is not None:
+            desired_path = self._desired_active_path(
+                active_path,
+                links,
+                threshold,
+            )
+            if desired_path != active_path:
+                try:
+                    control_response = self.controller_client.recalculate_paths(
+                        desired_path,
+                    )
+                    controller_state["path_control"] = control_response
+                    active_path = desired_path
+                    for link in links:
+                        link["selected"] = link["path"] == active_path
+                except ControllerClientError as error:
+                    controller_state["path_control_error"] = str(error)
 
         return {
             "active_path": active_path,
@@ -100,6 +118,7 @@ class PathService:
             "links": links,
             "switches": switches,
             "utilization_source": "openflow_port_counter_delta",
+            "congestion_threshold_percent": threshold,
             "history": [self._history_item(rule) for rule in flow_rules[:8]],
             "controller": controller_state,
         }
@@ -219,22 +238,75 @@ class PathService:
             "sampled": any(bool(item.get("sampled")) for item in samples),
         }
 
-    def _decide_active_path(
-        self,
-        summary: dict[str, Any],
-        flow_rules: list[dict[str, Any]],
-    ) -> str:
-        if summary.get("network_status") == "critical":
+    @classmethod
+    def _reported_active_path(cls, topology: dict[str, Any]) -> str:
+        links = cls._topology_link_map(topology)
+        path_edges = {
+            "primary": (("s1", "s2"), ("s2", "s4")),
+            "backup": (("s1", "s3"), ("s3", "s4")),
+        }
+        available = {
+            path: all(
+                links.get(cls._edge_key(*edge), {}).get("state") == "active"
+                for edge in edges
+            )
+            for path, edges in path_edges.items()
+        }
+        if not available["primary"] and available["backup"]:
             return "backup"
+        if not available["backup"]:
+            return "primary"
 
-        # 컨트롤러 적용 전에는 PENDING 대응 후보를 우회 필요 신호로 간주한다.
-        has_pending_response = any(
-            str(rule.get("status", "")).upper() == "PENDING"
-            and str(rule.get("action", "")).upper() in {"RATE_LIMIT", "DROP"}
-            for rule in flow_rules
-        )
+        costs = {
+            path: sum(
+                float(links.get(cls._edge_key(*edge), {}).get("cost") or 1)
+                for edge in edges
+            )
+            for path, edges in path_edges.items()
+        }
+        return "primary" if costs["primary"] <= costs["backup"] else "backup"
 
-        return "backup" if has_pending_response else "primary"
+    @staticmethod
+    def _desired_active_path(
+        current_path: str,
+        links: list[dict[str, Any]],
+        threshold: int,
+    ) -> str:
+        by_path = {
+            path: [link for link in links if link["path"] == path]
+            for path in ("primary", "backup")
+        }
+        available = {
+            path: bool(path_links)
+            and all(link["state"] == "active" for link in path_links)
+            for path, path_links in by_path.items()
+        }
+        if not available[current_path]:
+            alternate = "backup" if current_path == "primary" else "primary"
+            return alternate if available[alternate] else current_path
+
+        utilization = {
+            path: max(
+                (float(link["utilization"]) for link in path_links),
+                default=0.0,
+            )
+            for path, path_links in by_path.items()
+        }
+        if (
+            current_path == "primary"
+            and available["backup"]
+            and utilization["primary"] >= threshold
+            and utilization["backup"] < utilization["primary"]
+        ):
+            return "backup"
+        if (
+            current_path == "backup"
+            and available["primary"]
+            and utilization["primary"] <= max(0, threshold - 10)
+            and utilization["backup"] <= max(0, threshold - 10)
+        ):
+            return "primary"
+        return current_path
 
     def _history_item(self, rule: dict[str, Any]) -> dict[str, Any]:
         action = str(rule.get("action") or "-")

@@ -105,6 +105,14 @@ class ControllerClient:
     def get_health(self) -> dict[str, Any]:
         return self._request("GET", "/health", None, expected_status=None)
 
+    def recalculate_paths(self, preferred_path: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/paths/recalculate",
+            {"preferred_path": preferred_path},
+            expected_status=None,
+        )
+
     def _request(
         self,
         method: str,

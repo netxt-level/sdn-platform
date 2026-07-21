@@ -12,6 +12,17 @@ class Flows:
         return []
 
 
+class RuntimeSettings:
+    def __init__(self, threshold=70):
+        self.threshold = threshold
+
+    def get(self):
+        return {
+            "congestion_threshold_percent": self.threshold,
+            "automatic_response_enabled": True,
+        }
+
+
 class Controller:
     def get_topology(self):
         return {
@@ -116,10 +127,18 @@ def test_path_status_uses_actual_controller_topology(load_service_module):
         "path_service",
         stubs={
             "app.repositories.flow_repository": {"FlowRepository": Flows},
+            "app.repositories.platform_settings_repository": {
+                "PlatformSettingsRepository": RuntimeSettings,
+            },
             "app.services.dashboard_service": {"DashboardService": Dashboard},
         },
     )
-    service = module.PathService(Dashboard(), Flows(), Controller())
+    service = module.PathService(
+        Dashboard(),
+        Flows(),
+        Controller(),
+        platform_settings_repository=RuntimeSettings(),
+    )
 
     result = service.get_status()
 
@@ -140,6 +159,9 @@ def test_path_status_uses_switch_counter_utilization(load_service_module):
         "path_service",
         stubs={
             "app.repositories.flow_repository": {"FlowRepository": Flows},
+            "app.repositories.platform_settings_repository": {
+                "PlatformSettingsRepository": RuntimeSettings,
+            },
             "app.services.dashboard_service": {"DashboardService": Dashboard},
         },
     )
@@ -148,6 +170,7 @@ def test_path_status_uses_switch_counter_utilization(load_service_module):
         Flows(),
         Controller(),
         Utilization(),
+        RuntimeSettings(),
     )
 
     result = service.get_status()
@@ -159,3 +182,64 @@ def test_path_status_uses_switch_counter_utilization(load_service_module):
     assert result["links"][0]["utilization"] == 10.0
     assert result["links"][0]["bps"] == 1_000_000
     assert result["links"][2]["utilization"] == 20.0
+
+
+class ActiveController(Controller):
+    def __init__(self):
+        self.recalculations = []
+
+    def get_topology(self):
+        topology = super().get_topology()
+        for link in topology["links"]:
+            link["state"] = "active"
+            link["cost"] = 1 if link["destination"] in {"s2", "s4"} and link["source"] != "s3" else 10
+        return topology
+
+    def recalculate_paths(self, preferred_path):
+        self.recalculations.append(preferred_path)
+        return {"status": "RECALCULATED", "preferred_path": preferred_path}
+
+
+class CongestedUtilization(Utilization):
+    def update(self, stats, topology):
+        switches = super().update(stats, topology)
+        for switch in switches:
+            for port in switch["ports"]:
+                if (switch["switch_id"], port["port_no"]) in {
+                    ("s1", 4), ("s2", 1), ("s2", 2), ("s4", 1)
+                }:
+                    port["utilization"] = 85.0
+                else:
+                    port["utilization"] = 20.0
+        return switches
+
+
+def test_congestion_requests_actual_backup_path_recalculation(load_service_module):
+    controller_module = types.ModuleType("app.clients.controller")
+    controller_module.ControllerClient = ActiveController
+    controller_module.ControllerClientError = RuntimeError
+    sys.modules["app.clients.controller"] = controller_module
+    module = load_service_module(
+        "path_service",
+        stubs={
+            "app.repositories.flow_repository": {"FlowRepository": Flows},
+            "app.repositories.platform_settings_repository": {
+                "PlatformSettingsRepository": RuntimeSettings,
+            },
+            "app.services.dashboard_service": {"DashboardService": Dashboard},
+        },
+    )
+    controller = ActiveController()
+    service = module.PathService(
+        Dashboard(),
+        Flows(),
+        controller,
+        CongestedUtilization(),
+        RuntimeSettings(70),
+    )
+
+    result = service.get_status()
+
+    assert result["active_path"] == "backup"
+    assert controller.recalculations == ["backup"]
+    assert result["controller"]["path_control"]["status"] == "RECALCULATED"

@@ -211,6 +211,18 @@ class ActiveTopologyTests(unittest.TestCase):
         self.assertEqual(1, graph[1][2])
         self.assertEqual(1, graph[2][1])
 
+    def test_link_cost_updates_are_symmetric(self):
+        self.connect_all_switches()
+
+        changed = self.topology.set_link_costs({(1, 2): 25, (3, 4): 2})
+
+        self.assertTrue(changed)
+        graph = self.topology.snapshot()
+        self.assertEqual(25, graph[1][2])
+        self.assertEqual(25, graph[2][1])
+        self.assertEqual(2, graph[3][4])
+        self.assertEqual(2, graph[4][3])
+
     def test_link_stays_down_until_both_port_endpoints_recover(self):
         self.connect_all_switches()
 

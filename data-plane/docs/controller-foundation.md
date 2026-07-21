@@ -306,8 +306,20 @@ counter와 flow packet/byte/duration counter의 최신 snapshot을 반환한다.
 
 ### `POST /paths/recalculate`
 
-현재 모든 학습형 L2 Flow를 제거한다. 다음 패킷이 활성 topology snapshot에서
-Primary/Backup 경로를 다시 계산하도록 한다.
+요청 본문의 `preferred_path`에 `primary` 또는 `backup`을 전달한다. Controller는
+선택 경로의 link cost를 1, 대기 경로의 link cost를 10으로 원자적으로 바꾼 뒤
+현재 모든 학습형 L2 Flow를 제거한다. 다음 패킷은 갱신된 활성 topology
+snapshot에서 경로를 다시 계산한다. 요청 본문을 생략하면 `primary`를 사용한다.
+
+```json
+{
+  "preferred_path": "backup"
+}
+```
+
+Backend의 `GET /api/path/status`는 OpenFlow port counter 사용률이 저장된 혼잡
+임계값 이상이고 대기 경로의 사용률이 더 낮을 때 이 API를 호출한다. 복귀 시에는
+임계값보다 10% 낮은 히스테리시스를 적용한다.
 
 API 문서 URL은 비활성화되어 있다.
 

@@ -149,6 +149,37 @@ class ActiveTopology:
             if source in connected
         }
 
+    def configured_snapshot(self):
+        """Return current configured costs, including temporarily down links."""
+        with self._lock:
+            return {
+                source: dict(neighbors)
+                for source, neighbors in self._configured_graph.items()
+            }
+
+    def set_link_costs(self, costs):
+        """Atomically replace costs for configured bidirectional links."""
+        normalized = {}
+        for endpoints, cost in costs.items():
+            if len(endpoints) != 2:
+                raise ValueError("link cost key must contain two switches")
+            source, destination = endpoints
+            self._require_link(source, destination)
+            if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost <= 0:
+                raise ValueError(
+                    f"link cost must be positive: {source}-{destination}={cost}"
+                )
+            normalized[self._link_key(source, destination)] = cost
+
+        with self._lock:
+            changed = False
+            for (source, destination), cost in normalized.items():
+                if self._configured_graph[source][destination] != cost:
+                    changed = True
+                self._configured_graph[source][destination] = cost
+                self._configured_graph[destination][source] = cost
+            return changed
+
     def get_flood_output_ports(self, dpid, in_port):
         """Return loop-free flood ports for the current active topology."""
         graph = self.snapshot()

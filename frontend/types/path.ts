@@ -96,6 +96,7 @@ export type PathStatus = {
   links: PathLink[];
   switches: SwitchUtilization[];
   utilization_source: "openflow_port_counter_delta";
+  congestion_threshold_percent: number;
   history: PathHistoryItem[];
   controller: {
     topology: ControllerTopology;

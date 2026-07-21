@@ -174,3 +174,24 @@ def test_list_flow_rules_parses_controller_items():
     request = urlopen.call_args.args[0]
     assert request.method == "GET"
     assert request.full_url == "http://controller:8080/flow-rules"
+
+
+def test_recalculate_paths_sends_preferred_path():
+    client = ControllerClient(
+        base_url="http://controller:8080",
+        timeout_seconds=1,
+        max_attempts=1,
+    )
+    body = {"status": "RECALCULATED", "preferred_path": "backup"}
+
+    with patch(
+        "app.clients.controller.urlopen",
+        return_value=FakeResponse(body),
+    ) as urlopen:
+        result = client.recalculate_paths("backup")
+
+    request = urlopen.call_args.args[0]
+    assert result == body
+    assert request.method == "POST"
+    assert json.loads(request.data) == {"preferred_path": "backup"}
+    assert request.full_url == "http://controller:8080/paths/recalculate"

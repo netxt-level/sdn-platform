@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from pydantic import BaseModel
 from pydantic import Field
+from typing import Literal
 import uvicorn
 
 from app.flow_manager import build_external_flow_cookie
@@ -31,6 +32,26 @@ class FlowRuleInstallRequest(BaseModel):
     idle_timeout: int | None = Field(default=None, ge=0, le=65535)
     hard_timeout: int | None = Field(default=None, ge=0, le=65535)
     rate_limit_pps: int | None = Field(default=None, ge=1)
+
+
+class PathRecalculationRequest(BaseModel):
+    preferred_path: Literal["primary", "backup"] = "primary"
+
+
+PATH_LINK_COSTS = {
+    "primary": {
+        (1, 2): 1,
+        (2, 4): 1,
+        (1, 3): 10,
+        (3, 4): 10,
+    },
+    "backup": {
+        (1, 2): 10,
+        (2, 4): 10,
+        (1, 3): 1,
+        (3, 4): 1,
+    },
+}
 
 
 def parse_switch_dpid(switch_id):
@@ -71,6 +92,7 @@ def build_flow_operation_response(status):
 
 def build_topology_response(topology, hosts):
     active_graph = topology.snapshot()
+    configured_graph = topology.configured_snapshot()
     switches = [
         {
             "switch_id": f"s{dpid}",
@@ -92,7 +114,7 @@ def build_topology_response(topology, hosts):
                 else "inactive"
             ),
         }
-        for source, neighbors in sorted(WEIGHTED_SWITCH_GRAPH.items())
+        for source, neighbors in sorted(configured_graph.items())
         for destination, cost in sorted(neighbors.items())
         if source < destination
     ]
@@ -191,12 +213,16 @@ def create_api(
         return stats.snapshot()
 
     @app.post("/paths/recalculate")
-    def recalculate_paths():
+    def recalculate_paths(payload: PathRecalculationRequest | None = None):
+        preferred_path = "primary" if payload is None else payload.preferred_path
+        costs_changed = topology.set_link_costs(PATH_LINK_COSTS[preferred_path])
         invalidated_switches = path_recalculator(
-            "controller_api_request",
+            f"controller_api_request:{preferred_path}",
         )
         return {
             "status": "RECALCULATED",
+            "preferred_path": preferred_path,
+            "costs_changed": costs_changed,
             "invalidated_switches": invalidated_switches,
             "topology": build_topology_response(topology, hosts),
         }

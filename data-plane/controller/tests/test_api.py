@@ -301,8 +301,9 @@ class ControllerApiTests(unittest.TestCase):
 
         self.assertEqual("RECALCULATED", response["status"])
         self.assertEqual(4, response["invalidated_switches"])
+        self.assertEqual("primary", response["preferred_path"])
         self.assertEqual(
-            ["controller_api_request"],
+            ["controller_api_request:primary"],
             self.recalculation_reasons,
         )
 
