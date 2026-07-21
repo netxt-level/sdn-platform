@@ -42,8 +42,8 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
   }));
 
   const hostNodes = controllerTopology.hosts.map((item) => ({
-    id: item.name,
-    label: item.name,
+    id: item.name || item.ipv4 || item.mac,
+    label: item.name || item.ipv4 || item.mac,
     role: item.ipv4,
     type: "host" as const,
     status: connectedSwitches.has(item.switch_id)
@@ -69,6 +69,7 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
     sampled: item.sampled
   }));
   const accessLinks = controllerTopology.hosts.map((host) => {
+    const hostId = host.name || host.ipv4 || host.mac;
     const switchUsage = utilizationBySwitch.get(host.switch_id);
     const portUsage = switchUsage?.ports.find(
       (port) => port.port_no === host.port
@@ -76,8 +77,8 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
     const active = connectedSwitches.has(host.switch_id);
 
     return {
-      id: `${host.name}-${host.switch_id}`,
-      source: host.name,
+      id: `${hostId}-${host.switch_id}`,
+      source: hostId,
       target: host.switch_id,
       path: "access" as const,
       state: active ? ("up" as const) : ("down" as const),

@@ -73,7 +73,7 @@ export type ControllerLink = {
 };
 
 export type ControllerHost = {
-  name: string;
+  name: string | null;
   mac: string;
   ipv4: string;
   switch_id: string;
