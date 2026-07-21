@@ -10,7 +10,7 @@ const positions: Record<string, { x: number; y: number }> = {
   s2: { x: 51, y: 24 },
   s3: { x: 51, y: 60 },
   s4: { x: 72, y: 42 },
-  h4: { x: 90, y: 42 }
+  web: { x: 90, y: 42 }
 };
 
 const statusClass = {
@@ -22,9 +22,9 @@ const statusClass = {
 
 const hostClass: Record<string, string> = {
   h1: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]",
-  h2: "border-[#f0a13a] bg-[#fff0d6] text-[#b86b00]",
-  h3: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]",
-  h4: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]"
+  h2: "border-accent bg-[var(--accent-dim)] text-accent",
+  h3: "border-[#f0a13a] bg-[#fff0d6] text-[#b86b00]",
+  web: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]"
 };
 
 const linkPaths: Record<string, string> = {
@@ -35,7 +35,7 @@ const linkPaths: Record<string, string> = {
   "s1-s3": "M 35 45 L 46 56",
   "s2-s4": "M 56 27 L 67 38",
   "s3-s4": "M 56 57 L 67 46",
-  "s4-h4": "M 77 42 L 85 42"
+  "web-s4": "M 77 42 L 85 42"
 };
 
 export function TopologyMap({ topology }: { topology: TopologyState }) {
@@ -45,8 +45,14 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
         {topology.links.map((link) => {
           const source = positions[link.source];
           const target = positions[link.target];
-          const stroke = link.path === "backup" ? "var(--accent)" : link.active ? "var(--accent)" : "var(--border2)";
+          const stroke = link.active
+            ? "var(--accent)"
+            : link.path === "backup"
+              ? "var(--yellow)"
+              : "var(--border2)";
           const width = link.active ? 0.9 : 0.45;
+
+          if (!source || !target) return null;
 
           if (linkPaths[link.id]) {
             return (
@@ -82,6 +88,8 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
         const position = positions[node.id];
         const Icon = node.type === "host" ? Server : SquareStack;
 
+        if (!position) return null;
+
         return (
           <div
             key={node.id}
@@ -104,6 +112,12 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
           </div>
         );
       })}
+
+      {!topology.nodes.length && (
+        <div className="font-mono-ui absolute inset-0 grid place-items-center text-[11px] text-muted">
+          Controller 토폴로지 정보를 기다리는 중입니다.
+        </div>
+      )}
     </div>
   );
 }
