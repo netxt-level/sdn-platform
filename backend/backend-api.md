@@ -404,6 +404,7 @@ Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 �
 `packet_count`와 `byte_count`는 Controller가 저장 시 반환한 cookie와 현재
 OpenFlow 통계 cookie가 일치할 때 제공되며, 아직 통계가 수집되지 않았거나
 규칙이 스위치에 없으면 `null`이다.
+이미 종료된 `REMOVED`, `EXPIRED` 이력은 스위치 Flow Rule 목록에서 제외한다.
 `controller.hosts`는 Controller가 학습한 호스트만 포함한다.
 
 ### 4.2 Flow Rule 수동 생성
@@ -420,6 +421,8 @@ POST /api/flows
 사용한다. 운영자는 출발지, 프로토콜, 목적지 포트만 선택하며 화면이
 `eth_type`, `ipv4_src`, `ipv4_dst`, `ip_proto`, TCP/UDP 목적지 포트와
 출발지의 연결 switch를 자동으로 구성한다. ICMP는 포트 조건을 만들지 않는다.
+`모든 포트 접근 금지`를 선택하면 TCP/UDP 목적지 포트 조건을 생략하고 action을
+`DROP`으로 고정해 선택한 프로토콜의 모든 목적지 포트를 차단한다.
 
 ```text
 PENDING -> APPLYING -> APPLIED
@@ -486,9 +489,11 @@ APPLIED -> REMOVING -> REMOVED
                     -> REMOVE_FAILED
 ```
 
-성공 시 `removed_at`과 Controller의 `REMOVED` 응답을 저장한다. `RATE_LIMIT`
-규칙의 마지막 Meter 참조도 함께 해제한다. 이미 `REMOVED`인 규칙의 삭제는
-같은 결과를 반환하며, 존재하지 않는 Backend rule ID는 HTTP 404를 반환한다.
+성공 시 Controller의 `REMOVED` 응답을 반환한 뒤 PostgreSQL의 해당 Flow Rule
+레코드를 영구 삭제하므로 다음 `GET /api/flows` 목록에는 나타나지 않는다.
+`RATE_LIMIT` 규칙의 마지막 Meter 참조도 함께 해제한다. Controller 제거가
+실패한 레코드는 `REMOVE_FAILED` 상태와 오류를 저장해 재시도하며, 존재하지
+않는 Backend rule ID는 HTTP 404를 반환한다.
 
 ### 4.4 Flow Rule 상태 재조정
 

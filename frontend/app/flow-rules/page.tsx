@@ -6,7 +6,6 @@ import { Ban, GitBranch, Plus, Repeat2, ShieldAlert, Trash2, Workflow } from "lu
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   createFlowRule,
   FlowApiError,
@@ -37,15 +36,15 @@ const protocolNumbers: Record<MatchProtocol, number> = {
 
 const commonPorts: Record<Exclude<MatchProtocol, "ICMP">, { value: string; label: string }[]> = {
   TCP: [
-    { value: "80", label: "80 · HTTP" },
-    { value: "443", label: "443 · HTTPS" },
-    { value: "22", label: "22 · SSH" },
-    { value: "8080", label: "8080 · HTTP 대체" }
+    { value: "80", label: "80" },
+    { value: "443", label: "443" },
+    { value: "22", label: "22" },
+    { value: "8080", label: "8080" }
   ],
   UDP: [
-    { value: "53", label: "53 · DNS" },
-    { value: "123", label: "123 · NTP" },
-    { value: "500", label: "500 · IKE" }
+    { value: "53", label: "53" },
+    { value: "123", label: "123" },
+    { value: "500", label: "500" }
   ]
 };
 
@@ -59,14 +58,21 @@ function formatMatch(match: Record<string, unknown>) {
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(", ");
 }
 
-function statusTone(status: string) {
-  if (["FAILED", "REMOVE_FAILED"].includes(status)) {
-    return "critical" as const;
+function formatPort(match: Record<string, unknown>) {
+  const destinationPort = match.tcp_dst ?? match.udp_dst;
+  if (destinationPort != null) {
+    return String(destinationPort);
   }
-  if (["PENDING", "APPLYING", "REMOVING"].includes(status)) {
-    return "warning" as const;
-  }
-  return status === "APPLIED" ? "normal" as const : "muted" as const;
+
+  const sourcePort = match.tcp_src ?? match.udp_src;
+  return sourcePort == null ? "-" : String(sourcePort);
+}
+
+function formatProtocol(match: Record<string, unknown>) {
+  if (match.ip_proto === 1) return "ICMP";
+  if (match.ip_proto === 6) return "TCP";
+  if (match.ip_proto === 17) return "UDP";
+  return match.ip_proto == null ? "-" : String(match.ip_proto);
 }
 
 export default function FlowRulesPage() {
@@ -86,7 +92,11 @@ export default function FlowRulesPage() {
   const [deletingRuleId, setDeletingRuleId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
-  const selectedRule = flowRules[0];
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
+  const selectedRule = useMemo(
+    () => flowRules.find((rule) => rule.id === selectedRuleId),
+    [flowRules, selectedRuleId]
+  );
   const filteredRules = useMemo(
     () =>
       selectedSwitch === "ALL"
@@ -118,25 +128,12 @@ export default function FlowRulesPage() {
     [controller.hosts]
   );
   const selectedSwitchId = selectedSource?.switch_id ?? "";
-  const selectedPort = protocol === "ICMP"
+  const blocksAllPorts = protocol !== "ICMP" && portOption === "ALL";
+  const selectedPort = protocol === "ICMP" || blocksAllPorts
     ? null
     : portOption === "CUSTOM"
       ? customPort
       : portOption;
-  const matchPreview = useMemo(() => {
-    if (!selectedSource?.ipv4 || !webHost?.ipv4) return null;
-
-    const match: Record<string, string | number> = {
-      eth_type: 2048,
-      ipv4_src: selectedSource.ipv4,
-      ipv4_dst: webHost.ipv4,
-      ip_proto: protocolNumbers[protocol]
-    };
-    if (protocol !== "ICMP" && selectedPort) {
-      match[`${protocol.toLowerCase()}_dst`] = Number(selectedPort);
-    }
-    return match;
-  }, [protocol, selectedPort, selectedSource, webHost]);
   const switchFilters = useMemo(
     () => [
       "ALL",
@@ -172,6 +169,11 @@ export default function FlowRulesPage() {
       hosts: data.controller?.hosts ?? []
     };
     setFlowRules(items);
+    setSelectedRuleId((current) =>
+      items.some((item) => item.id === current)
+        ? current
+        : items[0]?.id ?? null
+    );
     setController(nextController);
     setSelectedSwitch((current) =>
       current === "ALL"
@@ -247,7 +249,7 @@ export default function FlowRulesPage() {
     }
 
     const port = selectedPort == null ? null : Number(selectedPort);
-    if (protocol !== "ICMP" && (
+    if (protocol !== "ICMP" && !blocksAllPorts && (
       port == null || !Number.isInteger(port) || port < 1 || port > 65535
     )) {
       setMessage("포트는 1에서 65535 사이의 정수로 입력하세요.");
@@ -267,7 +269,7 @@ export default function FlowRulesPage() {
     const payload = {
       switch_id: selectedSource.switch_id,
       match,
-      action,
+      action: blocksAllPorts ? "DROP" : action,
       priority: Number(priority)
     };
 
@@ -308,8 +310,12 @@ export default function FlowRulesPage() {
     setMessage("");
     try {
       await removeFlowRule(rule.id);
-      await loadFlowRules();
-      setMessage("Flow Rule이 스위치에서 제거되었습니다.");
+      const remainingRules = flowRules.filter((item) => item.id !== rule.id);
+      setFlowRules(remainingRules);
+      setSelectedRuleId((current) =>
+        current === rule.id ? remainingRules[0]?.id ?? null : current
+      );
+      setMessage("Flow Rule이 Controller와 저장 목록에서 삭제되었습니다.");
     } catch (error) {
       setMessage(
         `Flow Rule 삭제 실패: ${
@@ -367,33 +373,46 @@ export default function FlowRulesPage() {
             <table className="font-mono-ui w-full border-collapse text-[11px]">
               <thead>
                 <tr className="border-b border-line bg-sidebar text-left text-[9px] uppercase tracking-[0.15em] text-faint">
-                  <th className="px-3 py-3 font-black">Switch</th>
-                  <th className="px-3 py-3 font-black">Match</th>
-                  <th className="px-3 py-3 font-black">Action</th>
-                  <th className="px-3 py-3 text-right font-black">Priority</th>
-                  <th className="px-3 py-3 text-right font-black">Packets</th>
-                  <th className="px-3 py-3 text-right font-black">Bytes</th>
-                  <th className="px-3 py-3 font-black">상태</th>
-                  <th className="px-3 py-3 text-right font-black">작업</th>
+                  <th className="px-3 py-3 font-black">출발지</th>
+                  <th className="px-3 py-3 font-black">프로토콜</th>
+                  <th className="px-3 py-3 text-right font-black">포트</th>
+                  <th className="px-3 py-3 font-black">액션</th>
+                  <th className="px-3 py-3 font-black">스위치</th>
+                  <th className="px-3 py-3 text-right font-black">우선도</th>
+                  <th className="px-3 py-3 text-right font-black">삭제</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRules.map((rule) => (
-                  <tr key={rule.id} className="border-b border-line last:border-0">
-                    <td className="px-3 py-3 font-black">{rule.switch_id ?? "-"}</td>
-                    <td className="px-3 py-3">{formatMatch(rule.match)}</td>
+                  <tr
+                    key={rule.id}
+                    tabIndex={0}
+                    aria-selected={selectedRuleId === rule.id}
+                    onClick={() => setSelectedRuleId(rule.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedRuleId(rule.id);
+                      }
+                    }}
+                    className={`cursor-pointer border-b border-line outline-none transition-colors last:border-0 hover:bg-[var(--accent-dim)] focus:bg-[var(--accent-dim)] ${selectedRuleId === rule.id ? "bg-[var(--accent-dim)]" : ""}`}
+                  >
+                    <td className="px-3 py-3">{String(rule.match.ipv4_src ?? "-")}</td>
+                    <td className="px-3 py-3">{formatProtocol(rule.match)}</td>
+                    <td className="px-3 py-3 text-right">{formatPort(rule.match)}</td>
                     <td className={`px-3 py-3 ${rule.action.toUpperCase() === "DROP" ? "text-red" : "text-accent"}`}>{rule.action}</td>
+                    <td className="px-3 py-3 font-black">{rule.switch_id ?? "-"}</td>
                     <td className="px-3 py-3 text-right">{rule.priority}</td>
-                    <td className="px-3 py-3 text-right">{rule.packet_count == null ? "-" : formatNumber(rule.packet_count)}</td>
-                    <td className="px-3 py-3 text-right">{rule.byte_count == null ? "-" : formatNumber(rule.byte_count)}</td>
-                    <td className="px-3 py-3"><StatusBadge value={rule.status.toLowerCase()} tone={statusTone(rule.status)} /></td>
                     <td className="px-3 py-3 text-right">
                       <button
                         type="button"
-                        onClick={() => handleDelete(rule)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleDelete(rule);
+                        }}
                         disabled={
                           deletingRuleId === rule.id
-                          || ["REMOVING", "REMOVED", "EXPIRED"].includes(rule.status)
+                          || ["APPLYING", "REMOVING"].includes(rule.status)
                         }
                         className="inline-flex items-center gap-1 rounded border border-red/40 px-2 py-1 text-[9px] font-black text-red disabled:cursor-not-allowed disabled:opacity-40"
                       >
@@ -405,7 +424,7 @@ export default function FlowRulesPage() {
                 ))}
                 {!filteredRules.length && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-muted">
+                    <td colSpan={7} className="px-3 py-6 text-center text-muted">
                       {loading ? "Flow Rule 조회 중" : "Flow Rule이 없습니다."}
                     </td>
                   </tr>
@@ -448,7 +467,7 @@ export default function FlowRulesPage() {
                   {!sourceHosts.length && <option value="">학습된 출발지 없음</option>}
                   {sourceHosts.map((host) => (
                     <option key={host.mac} value={host.ipv4 ?? ""}>
-                      {host.name ?? host.mac} · {host.ipv4} ({host.switch_id})
+                      {host.name ?? host.mac} · {host.ipv4}
                     </option>
                   ))}
                 </select>
@@ -474,7 +493,12 @@ export default function FlowRulesPage() {
                   {protocol === "ICMP" ? (
                     <div className="font-mono-ui flex h-9 items-center rounded border border-line bg-sidebar px-3 text-[10px] text-faint">포트 없음</div>
                   ) : (
-                    <select value={portOption} onChange={(event) => setPortOption(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+                    <select value={portOption} onChange={(event) => {
+                      const nextPort = event.target.value;
+                      setPortOption(nextPort);
+                      if (nextPort === "ALL") setAction("DROP");
+                    }} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+                      <option value="ALL">모든 포트 접근 금지</option>
                       {commonPorts[protocol].map((port) => (
                         <option key={port.value} value={port.value}>{port.label}</option>
                       ))}
@@ -491,21 +515,7 @@ export default function FlowRulesPage() {
                 </label>
               )}
 
-              <div className="font-mono-ui rounded border border-line bg-sidebar p-3 text-[10px] leading-5">
-                <div className="flex justify-between gap-3">
-                  <span className="text-faint">목적지</span>
-                  <strong>{webHost?.name ?? "web"} · {webHost?.ipv4 ?? "학습 대기 중"}</strong>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span className="text-faint">적용 스위치</span>
-                  <strong>{selectedSwitchId || "출발지 선택 필요"}</strong>
-                </div>
-                <div className="mt-2 border-t border-line pt-2 text-accent">
-                  {matchPreview ? formatMatch(matchPreview) : "Match 조건을 생성할 수 없습니다."}
-                </div>
-              </div>
-
-              <select value={action} onChange={(event) => setAction(event.target.value)} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+              <select value={action} onChange={(event) => setAction(event.target.value)} disabled={blocksAllPorts} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px] disabled:cursor-not-allowed disabled:opacity-50">
                 <option>RATE_LIMIT</option>
                 <option>DROP</option>
                 {outputActions.map((outputAction) => (

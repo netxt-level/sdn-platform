@@ -5,6 +5,7 @@ class StubFlowRepository:
     def __init__(self):
         self.status_updates = []
         self.flows = []
+        self.deleted_ids = []
 
     def create_manual_flow(self, **values):
         return {
@@ -41,6 +42,14 @@ class StubFlowRepository:
             "controller_response": {"status": "APPLIED"},
             "applied_at": datetime.now(),
         }
+
+    def delete_flow(self, flow_rule_id):
+        self.deleted_ids.append(flow_rule_id)
+        deleted = self.get_flow(flow_rule_id)
+        self.flows = [
+            flow for flow in self.flows if flow["id"] != flow_rule_id
+        ]
+        return deleted
 
 
 class SuccessfulControllerClient:
@@ -314,7 +323,39 @@ def test_get_flows_keeps_db_history_when_controller_is_unavailable(
     assert result["controller"]["error"] == "controller unavailable"
 
 
-def test_delete_flow_persists_removing_and_removed_lifecycle(
+def test_get_flows_excludes_terminal_rules(load_service_module):
+    class StubControllerClientError(RuntimeError):
+        pass
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": SuccessfulControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    repository.flows = [
+        {**repository.get_flow("applied-rule"), "status": "APPLIED"},
+        {**repository.get_flow("removed-rule"), "status": "REMOVED"},
+        {**repository.get_flow("expired-rule"), "status": "EXPIRED"},
+    ]
+
+    result = module.FlowService(
+        repository,
+        SuccessfulControllerClient(),
+    ).get_flows()
+
+    assert [item["id"] for item in result["items"]] == ["applied-rule"]
+    assert result["total"] == 1
+
+
+def test_delete_flow_removes_controller_rule_then_deletes_db_record(
     load_service_module,
 ):
     class StubControllerClientError(RuntimeError):
@@ -341,8 +382,8 @@ def test_delete_flow_persists_removing_and_removed_lifecycle(
     assert result["status"] == "REMOVED"
     assert [update[1]["status"] for update in repository.status_updates] == [
         "REMOVING",
-        "REMOVED",
     ]
+    assert repository.deleted_ids == ["rule-1"]
     assert isinstance(result["removed_at"], datetime)
     assert controller.rules[0]["status"] == "REMOVING"
 
@@ -388,6 +429,7 @@ def test_delete_failure_is_stored_and_can_be_retried(
         "REMOVING",
         "REMOVE_FAILED",
     ]
+    assert repository.deleted_ids == []
 
 
 def test_reconcile_updates_expired_and_reapplies_missing_rules(

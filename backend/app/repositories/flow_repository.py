@@ -76,6 +76,16 @@ class FlowRepository:
             flow_rule = session.get(FlowRule, flow_rule_id)
             return None if flow_rule is None else _to_dict(flow_rule)
 
+    def delete_flow(self, flow_rule_id: str) -> dict[str, Any] | None:
+        with SessionLocal.begin() as session:
+            flow_rule = session.get(FlowRule, flow_rule_id)
+            if flow_rule is None:
+                return None
+
+            deleted = _to_dict(flow_rule)
+            session.delete(flow_rule)
+            return deleted
+
     def list_by_fingerprint(self, fingerprint: str) -> list[dict[str, Any]]:
         stmt = select(FlowRule).where(
             FlowRule.source_event_fingerprint == fingerprint,

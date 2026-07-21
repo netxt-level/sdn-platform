@@ -20,7 +20,11 @@ class FlowService:
         self.controller_client = controller_client or ControllerClient()
 
     def get_flows(self, src_ip: str | None = None) -> dict:
-        flow_rules = self.flow_repository.list_flows(src_ip)
+        flow_rules = [
+            flow_rule
+            for flow_rule in self.flow_repository.list_flows(src_ip)
+            if flow_rule.get("status") not in {"REMOVED", "EXPIRED"}
+        ]
         try:
             topology = self.controller_client.get_topology()
             stats = self.controller_client.get_stats()
@@ -158,6 +162,7 @@ class FlowService:
         if flow_rule is None:
             raise FlowRuleNotFoundError(flow_rule_id)
         if flow_rule.get("status") == "REMOVED":
+            self.flow_repository.delete_flow(flow_rule_id)
             return flow_rule
         if flow_rule.get("status") == "APPLYING":
             raise RuntimeError(
@@ -191,19 +196,22 @@ class FlowService:
                 applied_at=flow_rule.get("applied_at"),
             )
 
-        return self.flow_repository.update_status(
-            flow_rule_id,
-            status="REMOVED",
-            controller_rule_id=controller_response["controller_rule_id"],
-            controller_response=controller_response,
-            switch_id=(
+        removed = {
+            **(removing or flow_rule),
+            "status": "REMOVED",
+            "controller_rule_id": controller_response["controller_rule_id"],
+            "controller_response": controller_response,
+            "switch_id": (
                 controller_response.get("switch_id")
                 or flow_rule.get("switch_id")
             ),
-            requested_at=requested_at,
-            applied_at=flow_rule.get("applied_at"),
-            removed_at=datetime.now(timezone.utc),
-        )
+            "error_message": None,
+            "requested_at": requested_at,
+            "applied_at": flow_rule.get("applied_at"),
+            "removed_at": datetime.now(timezone.utc),
+        }
+        self.flow_repository.delete_flow(flow_rule_id)
+        return removed
 
     def reconcile_flows(self) -> dict:
         try:
