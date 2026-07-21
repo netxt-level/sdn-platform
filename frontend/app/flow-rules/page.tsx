@@ -302,10 +302,6 @@ export default function FlowRulesPage() {
   }
 
   async function handleDelete(rule: FlowRule) {
-    if (!window.confirm(`Flow Rule ${rule.id}를 삭제하시겠습니까?`)) {
-      return;
-    }
-
     setDeletingRuleId(rule.id);
     setMessage("");
     try {
