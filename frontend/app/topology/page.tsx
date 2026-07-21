@@ -108,8 +108,8 @@ export default function TopologyPage() {
                         : link.path === "access"
                           ? "up"
                           : link.selected
-                            ? "up · selected"
-                            : "up · standby"
+                            ? "selected"
+                            : "standby"
                   }
                   tone={
                     link.state === "down"
