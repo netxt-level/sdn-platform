@@ -14,15 +14,15 @@ const positions: Record<string, { x: number; y: number }> = {
 };
 
 const statusClass = {
-  normal: "border-accent bg-panel2 text-accent",
-  warning: "border-yellow bg-panel text-yellow",
-  blocked: "border-red bg-panel text-red",
-  offline: "border-line2 bg-panel2 text-faint"
+  normal: "border-accent bg-[#eef4fa] text-accent",
+  warning: "border-yellow bg-[#fff7e6] text-yellow",
+  blocked: "border-red bg-[#fff0f2] text-red",
+  offline: "border-line2 bg-[#f4f7fb] text-faint"
 };
 
 const hostClass: Record<string, string> = {
   h1: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]",
-  h2: "border-accent bg-[var(--accent-dim)] text-accent",
+  h2: "border-accent bg-[#eaf7fb] text-accent",
   h3: "border-[#f0a13a] bg-[#fff0d6] text-[#b86b00]",
   web: "border-[#8fcf6a] bg-[#e8f7dc] text-[#2f741f]"
 };
@@ -61,6 +61,7 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
                 d={linkPaths[link.id]}
                 fill="none"
                 stroke={stroke}
+                strokeOpacity={link.active ? 0.68 : 0.42}
                 strokeWidth={width}
                 strokeDasharray={link.path === "backup" ? "2 2" : undefined}
                 vectorEffect="non-scaling-stroke"
@@ -76,6 +77,7 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
               x2={target.x}
               y2={target.y}
               stroke={stroke}
+              strokeOpacity={link.active ? 0.68 : 0.42}
               strokeWidth={width}
               strokeDasharray={link.path === "backup" ? "2 2" : undefined}
               vectorEffect="non-scaling-stroke"
@@ -93,11 +95,11 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
         return (
           <div
             key={node.id}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 ${node.id === "h2" ? "z-30" : "z-10"}`}
+            className="absolute z-20 -translate-x-1/2 -translate-y-1/2"
             style={{ left: `${position.x}%`, top: `${position.y}%` }}
           >
             <div
-              className={`font-mono-ui flex h-[54px] w-[104px] items-center gap-2 rounded-md border px-2.5 py-2 ${hostClass[node.id] ?? statusClass[node.status]}`}
+              className={`font-mono-ui flex h-[54px] w-[124px] items-center gap-2 rounded-md border px-2.5 py-2 shadow-sm ${hostClass[node.id] ?? statusClass[node.status]}`}
             >
               {node.status === "warning" ? (
                 <ShieldAlert className="h-3.5 w-3.5 shrink-0" />

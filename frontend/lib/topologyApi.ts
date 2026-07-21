@@ -2,20 +2,6 @@ import { getPathStatus } from "@/lib/pathApi";
 import type { PathStatus, SwitchUtilization } from "@/types/path";
 import type { NodeStatus, TopologyState } from "@/types/topology";
 
-const hostRoles: Record<string, string> = {
-  h1: "일반 사용자",
-  h2: "관리자",
-  h3: "공격 테스트",
-  web: "웹 서버"
-};
-
-const switchRoles: Record<string, string> = {
-  s1: "진입 / 미러링",
-  s2: "기본 경로",
-  s3: "우회 경로",
-  s4: "목적지 연결"
-};
-
 function toSwitchStatus(
   state: string,
   utilization?: SwitchUtilization
@@ -50,7 +36,7 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
   const switchNodes = controllerTopology.switches.map((item) => ({
     id: item.switch_id,
     label: item.switch_id,
-    role: switchRoles[item.switch_id] ?? item.dpid,
+    role: `DPID ${item.dpid.slice(-4)}`,
     type: "switch" as const,
     status: toSwitchStatus(item.state, utilizationBySwitch.get(item.switch_id))
   }));
@@ -58,7 +44,7 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
   const hostNodes = controllerTopology.hosts.map((item) => ({
     id: item.name,
     label: item.name,
-    role: `${hostRoles[item.name] ?? "호스트"} · ${item.ipv4}`,
+    role: item.ipv4,
     type: "host" as const,
     status: connectedSwitches.has(item.switch_id)
       ? ("normal" as const)
