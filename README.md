@@ -285,14 +285,14 @@ Alembic migration은 `migrations/`에 있다.
 
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장한다. `mitigation`이 있는 이벤트는 PostgreSQL에 보안 대응 내역과 flow rule을 생성한 뒤 Controller에 자동 적용하고, 결과를 `APPLIED` 또는 `FAILED`로 저장한다.
-- `/api/flows`는 `sdn_controller.flow_rules` 조회·생성·삭제 기능을 제공한다. 생성과 삭제는 각각 OpenFlow Barrier 응답에 따라 `APPLIED`/`FAILED`, `REMOVED`/`REMOVE_FAILED` 상태와 Controller 응답을 저장한다.
+- `/api/flows`는 `sdn_controller.flow_rules` 조회·생성·삭제 기능을 제공한다. 조회 시 Controller topology와 cookie별 OpenFlow packet/byte 통계를 결합하며, Controller 장애 시에도 DB 이력을 반환한다. 생성과 삭제는 각각 OpenFlow Barrier 응답에 따라 `APPLIED`/`FAILED`, `REMOVED`/`REMOVE_FAILED` 상태와 Controller 응답을 저장한다.
 - `RATE_LIMIT`은 `rate_limit_pps`를 OVS Meter의 PKTPS 단위로 적용하며 Controller 응답의 `meter_id`를 함께 저장한다.
 - Backend는 `FLOW_RECONCILE_INTERVAL_SECONDS` 주기로 `PENDING`, `FAILED`, `APPLIED`, 제거 실패 규칙을 Controller와 재조정한다.
 - 자동 대응 정책은 `critical=DROP`, `high=mitigation 적용`, `medium 이하=승인 대기`로 동작한다.
 - 동일 공격이 `RATE_LIMIT`에서 `DROP`으로 격상되면 이전 rule과 마지막 Meter 참조를 먼저 제거한다.
 - `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 경로 제어 화면 데이터를 제공한다.
 - `/api/path/status`는 Controller의 실제 topology와 Port/Flow 통계 snapshot을 함께 반환한다.
-- 일부 프론트엔드 화면은 아직 mock/static 데이터 기반 UI를 포함한다.
+- Flow Rule 화면은 실제 `/api/flows` 응답의 연결 스위치, 인접 링크, packet/byte 통계를 5초마다 갱신한다. 다른 일부 화면에는 아직 mock/static UI가 남아 있다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
 - 패킷 캡처는 OS/컨테이너 권한과 네트워크 인터페이스 설정에 영향을 받는다.
 

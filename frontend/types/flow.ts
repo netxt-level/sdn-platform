@@ -1,0 +1,45 @@
+export type FlowRule = {
+  id: string;
+  switch_id?: string | null;
+  match: Record<string, unknown>;
+  action: string;
+  priority: number;
+  packet_count?: number | null;
+  byte_count?: number | null;
+  status: string;
+  error_message?: string | null;
+};
+
+export type ControllerSwitch = {
+  switch_id: string;
+  dpid?: string;
+  state: string;
+};
+
+export type ControllerLink = {
+  source: string;
+  destination: string;
+  state: string;
+};
+
+export type FlowControllerState = {
+  available: boolean;
+  updated_at?: string | null;
+  switches: ControllerSwitch[];
+  links: ControllerLink[];
+  error?: string | null;
+};
+
+export type FlowRulesResponse = {
+  items: FlowRule[];
+  total: number;
+  controller: FlowControllerState;
+};
+
+export type FlowRuleCreatePayload = {
+  switch_id: string;
+  match: Record<string, string | number>;
+  action: string;
+  priority: number;
+  rate_limit_pps?: number;
+};

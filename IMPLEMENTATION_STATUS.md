@@ -107,7 +107,7 @@
 | `GET` | `/api/dashboard/traffic` | InfluxDB 트래픽 시계열 조회 |
 | `GET` | `/api/dashboard/protocols` | InfluxDB 프로토콜 통계 조회 |
 | `GET` | `/api/dashboard/suspicious-hosts` | InfluxDB 의심 호스트 조회 |
-| `GET` | `/api/flows` | PostgreSQL flow rule 목록 조회 |
+| `GET` | `/api/flows` | PostgreSQL flow rule과 Controller topology/통계 통합 조회 |
 | `POST` | `/api/flows` | 수동 flow rule 생성 |
 | `DELETE` | `/api/flows/{id}` | Controller Flow Rule 제거 및 상태 저장 |
 | `GET` | `/api/path/status` | 경로 제어 상태 조회 |
@@ -161,7 +161,9 @@
 | `frontend/app/security/events/page.tsx` | 보안 이벤트 화면 |
 | `frontend/app/topology/page.tsx` | 토폴로지 화면 |
 | `frontend/app/path/page.tsx` | 경로 제어 화면, `/api/path/status` 연동 |
-| `frontend/app/flow-rules/page.tsx` | Flow rule 조회/수동 생성 화면, `/api/flows` 연동 |
+| `frontend/app/flow-rules/page.tsx` | 실제 연결 스위치와 OpenFlow 통계를 사용하는 Flow rule 조회/생성/삭제 화면 |
+| `frontend/lib/flowApi.ts` | Flow Rule 조회/생성/삭제 API 클라이언트 |
+| `frontend/types/flow.ts` | Flow Rule 및 Controller 상태 API 타입 |
 | `frontend/app/settings/page.tsx` | 설정 화면 |
 | `frontend/types/analyzer.ts` | 분석/탐지 관련 TypeScript 타입 |
 | `frontend/types/realtime.ts` | 실시간 메시지 타입 |
@@ -211,6 +213,7 @@ Next.js rewrite 설정으로 프론트엔드의 `/api/:path*` 요청은 `${BACKE
 - 프론트 타입에는 과거 호환용 `traffic_analysis`, `security_event`, `topology_update` 메시지가 남아 있지만, 현재 백엔드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_events`다.
 - `보안 규칙` 단독 페이지는 제거되었고, 보안 대응 흐름은 보안 이벤트, 경로 제어, Flow Rule 화면에서 관리한다.
 - 수동 Flow Rule은 SDN Controller 설치와 삭제까지 수행한다. `DROP`, `OUTPUT:<port|인접 switch>`, OVS Meter 기반 `RATE_LIMIT`을 지원하며 삭제 시 `REMOVING -> REMOVED`를 저장한다. Backend 만료 상태 재조정은 추가 구현이 필요하다.
+- Flow Rule 화면의 스위치와 `OUTPUT` 대상은 Controller topology에서 구성하고, cookie가 일치하는 OpenFlow packet/byte 통계를 5초마다 표시한다. Controller 장애 시 DB 이력과 명시적 연결 오류를 표시한다.
 
 ## 인프라 및 실행 구성
 
