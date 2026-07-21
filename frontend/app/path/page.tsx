@@ -7,42 +7,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatDateTime } from "@/lib/format";
-
-type PathLink = {
-  id: string;
-  source: string;
-  target: string;
-  path: "primary" | "backup";
-  active: boolean;
-  utilization: number;
-};
-
-type PathInfo = {
-  name: "primary" | "backup";
-  nodes: string[];
-  utilization: number;
-  active: boolean;
-};
-
-type PathHistoryItem = {
-  id: string;
-  time?: string | null;
-  from: string;
-  to: string;
-  reason: string;
-  status: string;
-};
-
-type PathStatus = {
-  active_path: "primary" | "backup";
-  network_status: "normal" | "warning" | "critical";
-  paths: {
-    primary: PathInfo;
-    backup: PathInfo;
-  };
-  links: PathLink[];
-  history: PathHistoryItem[];
-};
+import { getPathStatus } from "@/lib/pathApi";
+import type { PathStatus } from "@/types/path";
 
 const initialPathStatus: PathStatus = {
   active_path: "primary",
@@ -62,6 +28,8 @@ const initialPathStatus: PathStatus = {
     }
   },
   links: [],
+  switches: [],
+  utilization_source: "openflow_port_counter_delta",
   history: []
 };
 
@@ -83,13 +51,7 @@ export default function PathPage() {
 
     async function loadPathStatus() {
       try {
-        const response = await fetch("/api/path/status", { cache: "no-store" });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const data = (await response.json()) as PathStatus;
+        const data = await getPathStatus();
 
         if (!ignored) {
           setPathStatus(data);

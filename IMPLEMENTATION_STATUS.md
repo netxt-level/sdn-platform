@@ -87,7 +87,8 @@
 | `backend/app/api/path.py` | 경로 제어 상태 조회 API |
 | `backend/app/api/security.py` | 보안 이벤트 조회 API |
 | `backend/app/api/ws.py` | WebSocket 연결 및 broadcast 관리 |
-| `backend/app/services/path_service.py` | 대시보드 요약과 flow rule DB 기반 경로 상태 구성 |
+| `backend/app/services/path_service.py` | Controller topology와 스위치 사용률 기반 경로 상태 구성 |
+| `backend/app/services/switch_utilization.py` | OpenFlow 포트 counter 증분 기반 스위치 BPS/사용률 계산 |
 | `backend/app/schemas/analyzer.py` | 분석 서버 요청 body Pydantic 스키마 |
 | `backend/app/db/postgres.py` | PostgreSQL 분석 서버 상태 저장/조회 |
 | `backend/app/db/influxdb.py` | InfluxDB 트래픽/탐지 데이터 저장 및 조회 |
@@ -138,7 +139,7 @@
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 총 패킷 수, 총 byte 수, 최신 pps/bps, 네트워크 상태를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장한다. `mitigation`이 있으면 PostgreSQL에 보안 대응 내역과 flow rule을 생성하고 Controller에 자동 적용한 뒤 두 레코드의 최종 상태를 저장한다.
 - `/api/flows`는 DB 기반 flow rule 조회·생성·삭제를 제공한다. 생성과 삭제는 Controller Barrier 확인 결과에 따라 최종 상태와 Controller 응답이 저장된다.
-- `/api/path/status`는 대시보드 요약과 flow rule DB를 조합해 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
+- `/api/path/status`는 Controller 포트 byte counter의 시간차를 이용해 스위치별 BPS/사용률을 계산하고 기본·우회 경로 상태 및 변경 이력을 반환한다.
 - InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
 - `backend/app/scripts/seed_suspicious_hosts.py`는 의심 호스트 테스트 데이터를 넣기 위한 보조 스크립트다.
 
@@ -164,6 +165,8 @@
 | `frontend/app/flow-rules/page.tsx` | 실제 연결 스위치와 OpenFlow 통계를 사용하는 Flow rule 조회/생성/삭제 화면 |
 | `frontend/lib/flowApi.ts` | Flow Rule 조회/생성/삭제 API 클라이언트 |
 | `frontend/types/flow.ts` | Flow Rule 및 Controller 상태 API 타입 |
+| `frontend/lib/pathApi.ts` | 경로 및 스위치 사용률 조회 API 클라이언트 |
+| `frontend/types/path.ts` | 경로, 링크, 스위치 사용률 API 타입 |
 | `frontend/app/settings/page.tsx` | 설정 화면 |
 | `frontend/types/analyzer.ts` | 분석/탐지 관련 TypeScript 타입 |
 | `frontend/types/realtime.ts` | 실시간 메시지 타입 |
@@ -192,6 +195,7 @@
 - 초기 로딩 시 백엔드 히스토리 API 조회
 - DB 의심 호스트를 5초마다 polling
 - 실시간 의심 호스트와 DB 의심 호스트 병합
+- 정적 경로 사용률을 제거하고 실제 스위치 BPS/사용률을 5초마다 표시
 
 ### 백엔드 연동
 

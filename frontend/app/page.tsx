@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -16,8 +16,10 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatBitsPerSecond, formatNumber } from "@/lib/format";
+import { getPathStatus } from "@/lib/pathApi";
 import { useRealtime } from "@/hooks/useRealtime";
 import type { SuspiciousHost } from "@/types/analyzer";
+import type { PathStatus, SwitchUtilization } from "@/types/path";
 
 const ALL_ATTACK_TYPES = "ALL";
 
@@ -55,12 +57,34 @@ function getSuspiciousHostTagClass(host: SuspiciousHost): string {
   return "border-accent bg-[var(--accent-dim)] text-accent";
 }
 
+function utilizationLabel(item: SwitchUtilization): string {
+  if (item.state !== "connected") return "연결 끊김";
+  if (!item.sampled) return "측정 중";
+  if (item.utilization > 0 && item.utilization < 0.01) return "<0.01%";
+  return `${item.utilization.toFixed(2)}%`;
+}
+
+function utilizationColor(item: SwitchUtilization): string {
+  if (item.status === "critical") return "text-red";
+  if (item.status === "warning") return "text-yellow";
+  if (item.status === "normal") return "text-green";
+  return "text-faint";
+}
+
+function utilizationBar(item: SwitchUtilization): string {
+  if (item.status === "critical") return "bg-red";
+  if (item.status === "warning") return "bg-yellow";
+  if (item.status === "normal") return "bg-green";
+  return "bg-faint";
+}
+
 export default function DashboardPage() {
   const state = useRealtime();
   const { analyzerStatus, dashboardSummary, packetSummary, detectionSummary } = state;
   const [trafficMetric, setTrafficMetric] = useState<"packets" | "bps">("packets");
   const [suspiciousHostTypeFilter, setSuspiciousHostTypeFilter] =
     useState(ALL_ATTACK_TYPES);
+  const [pathStatus, setPathStatus] = useState<PathStatus | null>(null);
   const suspiciousHostTypes = useMemo(
     () =>
       Array.from(
@@ -81,6 +105,26 @@ export default function DashboardPage() {
           ),
     [detectionSummary.suspicious_hosts, suspiciousHostTypeFilter]
   );
+
+  useEffect(() => {
+    let ignored = false;
+
+    async function loadSwitchUtilization() {
+      try {
+        const nextPathStatus = await getPathStatus();
+        if (!ignored) setPathStatus(nextPathStatus);
+      } catch {
+        // Dashboard packet monitoring remains available if Controller is down.
+      }
+    }
+
+    void loadSwitchUtilization();
+    const intervalId = window.setInterval(loadSwitchUtilization, 5000);
+    return () => {
+      ignored = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <>
@@ -180,25 +224,45 @@ export default function DashboardPage() {
           <ProtocolBars stats={packetSummary.protocol_stats} />
         </Panel>
 
-        <Panel title="경로 상태" className="col-span-6 max-xl:col-span-12">
+        <Panel
+          title="경로 상태 · 스위치 사용률"
+          className="col-span-6 max-xl:col-span-12"
+          action={
+            pathStatus
+              ? <StatusBadge value={`${pathStatus.active_path} active`} tone="normal" />
+              : <StatusBadge value="조회 중" tone="muted" />
+          }
+        >
           <div className="grid gap-4">
-            {[
-              ["기본 경로", "s1 → s2 → s4", 72, "text-yellow", "bg-yellow"],
-              ["우회 경로", "s1 → s3 → s4", 38, "text-green", "bg-green"]
-            ].map(([label, path, value, textClass, barClass]) => (
-              <div key={label as string} className="font-mono-ui">
-                <div className="mb-2 flex items-center justify-between text-[11px]">
+            {(pathStatus?.switches ?? []).map((item) => (
+              <div key={item.switch_id} className="font-mono-ui">
+                <div className="mb-2 flex items-center justify-between gap-3 text-[11px]">
                   <div>
-                    <strong className="block text-ink">{label}</strong>
-                    <span className="text-muted">{path}</span>
+                    <strong className="block text-ink">{item.switch_id}</strong>
+                    <span className="text-muted">
+                      {formatBitsPerSecond(item.bps)} / {formatBitsPerSecond(item.capacity_bps)}
+                    </span>
                   </div>
-                  <span className={textClass as string}>{value}%</span>
+                  <span className={utilizationColor(item)}>{utilizationLabel(item)}</span>
                 </div>
                 <div className="h-1.5 rounded bg-sidebar">
-                  <div className={`h-full rounded ${barClass}`} style={{ width: `${value}%` }} />
+                  <div
+                    className={`h-full rounded ${utilizationBar(item)}`}
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(item.bps > 0 ? 1 : 0, item.utilization)
+                      )}%`
+                    }}
+                  />
                 </div>
               </div>
             ))}
+            {!pathStatus?.switches.length && (
+              <p className="font-mono-ui text-[11px] text-muted">
+                Controller 스위치 통계를 기다리는 중입니다.
+              </p>
+            )}
           </div>
         </Panel>
 
