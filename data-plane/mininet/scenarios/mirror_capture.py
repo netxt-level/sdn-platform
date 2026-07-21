@@ -148,7 +148,7 @@ def run(args):
         attach_mirror(config)
         mirror_attached = True
         validate_mirror(config)
-        checkpoint(3, "s4 ingress ports 1, 2, and 3 mirror to fixed port 4")
+        checkpoint(3, "s1 ingress ports 1 through 5 mirror to fixed port 6")
 
         capture_bidirectional_ping(network, config, args.timeout)
         checkpoint(4, "primary-path ICMP request and reply reached the sensor")

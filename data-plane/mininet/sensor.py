@@ -13,10 +13,10 @@ import time
 
 DEFAULT_SENSOR_INTERFACE = "sdn-sensor0"
 DEFAULT_MIRROR_INTERFACE = "sdn-mirror0"
-DEFAULT_SWITCH = "s4"
+DEFAULT_SWITCH = "s1"
 DEFAULT_MIRROR_NAME = "sdn-analyzer-mirror"
-DEFAULT_MIRROR_PORT = 4
-DEFAULT_SOURCE_PORTS = (1, 2, 3)
+DEFAULT_MIRROR_PORT = 6
+DEFAULT_SOURCE_PORTS = (1, 2, 3, 4, 5)
 UUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -185,18 +185,27 @@ def _mirror_uuids(name, *, runner=run_command):
     return UUID_PATTERN.findall(result.stdout)
 
 
+def _bridge_names(*, runner=run_command):
+    result = runner(["ovs-vsctl", "list-br"])
+    return tuple(
+        name.strip()
+        for name in result.stdout.splitlines()
+        if name.strip()
+    )
+
+
 def detach_mirror(config=SensorConfig(), *, runner=run_command):
     """Remove only the managed Mirror and its OVS port; keep the veth pair."""
-    bridge_exists = _bridge_exists(config.switch, runner=runner)
+    bridges = _bridge_names(runner=runner)
     for mirror_uuid in _mirror_uuids(config.mirror_name, runner=runner):
         command = ["ovs-vsctl"]
-        if bridge_exists:
+        for bridge in bridges:
             command.extend([
                 "--",
                 "--if-exists",
                 "remove",
                 "Bridge",
-                config.switch,
+                bridge,
                 "mirrors",
                 mirror_uuid,
             ])
