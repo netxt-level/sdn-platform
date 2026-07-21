@@ -79,13 +79,30 @@ class ControllerClient:
             expected_status="REMOVED",
         )
 
+    def list_flow_rules(self) -> list[dict[str, Any]]:
+        response = self._request(
+            "GET",
+            "/flow-rules",
+            None,
+            expected_status=None,
+        )
+        items = response.get("items")
+        if not isinstance(items, list) or not all(
+            isinstance(item, dict) for item in items
+        ):
+            raise ControllerClientError(
+                "controller returned an invalid Flow Rule list",
+                response=response,
+            )
+        return items
+
     def _request(
         self,
         method: str,
         path: str,
         payload: dict[str, Any] | None,
         *,
-        expected_status: str,
+        expected_status: str | None,
     ) -> dict[str, Any]:
         request = Request(
             f"{self.base_url}{path}",
@@ -108,7 +125,7 @@ class ControllerClient:
                     timeout=self.timeout_seconds,
                 ) as response:
                     body = self._decode_json(response.read())
-                if (
+                if expected_status is not None and (
                     body.get("status") != expected_status
                     or not body.get("controller_rule_id")
                 ):

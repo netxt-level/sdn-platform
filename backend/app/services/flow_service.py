@@ -36,8 +36,8 @@ class FlowService:
         )
         return self.apply_flow(flow_rule)
 
-    def apply_flow(self, flow_rule: dict) -> dict:
-        if flow_rule.get("status") in {
+    def apply_flow(self, flow_rule: dict, *, force: bool = False) -> dict:
+        if not force and flow_rule.get("status") in {
             "APPLIED",
             "APPLYING",
             "REMOVING",
@@ -128,3 +128,69 @@ class FlowService:
             applied_at=flow_rule.get("applied_at"),
             removed_at=datetime.now(timezone.utc),
         )
+
+    def reconcile_flows(self) -> dict:
+        try:
+            controller_rules = self.controller_client.list_flow_rules()
+        except ControllerClientError as error:
+            return {
+                "status": "FAILED",
+                "checked": 0,
+                "updated": 0,
+                "reapplied": 0,
+                "error": str(error),
+            }
+
+        controller_by_id = {
+            item.get("controller_rule_id"): item
+            for item in controller_rules
+            if item.get("controller_rule_id")
+        }
+        backend_rules = self.flow_repository.list_flows()
+        updated = 0
+        reapplied = 0
+        failures = []
+
+        for flow_rule in backend_rules:
+            if flow_rule.get("status") not in {
+                "APPLIED",
+                "APPLYING",
+            }:
+                continue
+            controller_rule = controller_by_id.get(flow_rule["id"])
+            controller_status = (
+                None if controller_rule is None else controller_rule.get("status")
+            )
+            if controller_status in {"EXPIRED", "REMOVED"}:
+                completed_at = datetime.now(timezone.utc)
+                self.flow_repository.update_status(
+                    flow_rule["id"],
+                    status=controller_status,
+                    controller_rule_id=flow_rule.get("controller_rule_id"),
+                    controller_response=controller_rule,
+                    switch_id=flow_rule.get("switch_id"),
+                    requested_at=flow_rule.get("requested_at"),
+                    applied_at=flow_rule.get("applied_at"),
+                    removed_at=completed_at,
+                )
+                updated += 1
+                continue
+            if controller_status == "APPLIED":
+                continue
+
+            result = self.apply_flow(flow_rule, force=True)
+            if result.get("status") == "APPLIED":
+                reapplied += 1
+            else:
+                failures.append({
+                    "flow_rule_id": flow_rule["id"],
+                    "error": result.get("error_message"),
+                })
+
+        return {
+            "status": "COMPLETED" if not failures else "PARTIAL",
+            "checked": len(backend_rules),
+            "updated": updated,
+            "reapplied": reapplied,
+            "failures": failures,
+        }

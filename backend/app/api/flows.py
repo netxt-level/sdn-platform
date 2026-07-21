@@ -40,3 +40,8 @@ def delete_flow(flow_rule_id: str):
         ) from error
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/reconcile")
+def reconcile_flows():
+    return flow_service.reconcile_flows()

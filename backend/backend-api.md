@@ -439,6 +439,17 @@ APPLIED -> REMOVING -> REMOVED
 규칙의 마지막 Meter 참조도 함께 해제한다. 이미 `REMOVED`인 규칙의 삭제는
 같은 결과를 반환하며, 존재하지 않는 Backend rule ID는 HTTP 404를 반환한다.
 
+### 4.4 Flow Rule 상태 재조정
+
+```http
+POST /api/flows/reconcile
+```
+
+Controller의 현재 Flow Rule 목록과 PostgreSQL을 비교한다. Controller가
+`EXPIRED` 또는 `REMOVED`로 보고한 상태를 DB에 반영하며, Backend에는
+`APPLIED`지만 Controller 추적 목록에 없는 규칙은 동일 rule ID/cookie로 다시
+설치한다. Controller 연결 실패는 명시적인 `FAILED` 결과로 반환한다.
+
 ## 5. Path API
 
 ### 경로 제어 상태 조회

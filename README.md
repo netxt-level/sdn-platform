@@ -138,6 +138,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 | `GET` | `/api/flows` | Flow 목록 조회 |
 | `POST` | `/api/flows` | 수동 Flow Rule 생성 |
 | `DELETE` | `/api/flows/{id}` | Flow Rule 제거 |
+| `POST` | `/api/flows/reconcile` | Backend–Controller Flow Rule 상태 재조정 |
 | `GET` | `/api/path/status` | 경로 제어 상태 조회 |
 | `GET` | `/api/security/events` | 보안 이벤트 조회 |
 | `GET` | `/api/security/responses` | 보안 대응 내역 조회 |

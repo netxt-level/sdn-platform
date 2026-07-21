@@ -150,3 +150,27 @@ def test_delete_sends_rule_id_and_switch_and_requires_removed_status():
     assert request.full_url == (
         "http://controller:8080/flow-rules/rule%2F1?switch_id=s1"
     )
+
+
+def test_list_flow_rules_parses_controller_items():
+    client = ControllerClient(
+        base_url="http://controller:8080",
+        timeout_seconds=1,
+        max_attempts=1,
+    )
+    body = {
+        "items": [
+            {"controller_rule_id": "rule-1", "status": "EXPIRED"},
+        ],
+    }
+
+    with patch(
+        "app.clients.controller.urlopen",
+        return_value=FakeResponse(body),
+    ) as urlopen:
+        result = client.list_flow_rules()
+
+    assert result == body["items"]
+    request = urlopen.call_args.args[0]
+    assert request.method == "GET"
+    assert request.full_url == "http://controller:8080/flow-rules"

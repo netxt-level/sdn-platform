@@ -4,6 +4,7 @@ from datetime import datetime
 class StubFlowRepository:
     def __init__(self):
         self.status_updates = []
+        self.flows = []
 
     def create_manual_flow(self, **values):
         return {
@@ -26,7 +27,7 @@ class StubFlowRepository:
         }
 
     def list_flows(self, src_ip=None):
-        return []
+        return list(self.flows)
 
     def get_flow(self, flow_rule_id):
         return {
@@ -225,3 +226,54 @@ def test_delete_failure_is_stored_and_can_be_retried(
         "REMOVING",
         "REMOVE_FAILED",
     ]
+
+
+def test_reconcile_updates_expired_and_reapplies_missing_rules(
+    load_service_module,
+):
+    class StubControllerClientError(RuntimeError):
+        pass
+
+    class ReconcileControllerClient(SuccessfulControllerClient):
+        def list_flow_rules(self):
+            return [
+                {"controller_rule_id": "expired-rule", "status": "EXPIRED"},
+            ]
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": ReconcileControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    repository.flows = [
+        {
+            **repository.get_flow("expired-rule"),
+            "status": "APPLIED",
+        },
+        {
+            **repository.get_flow("missing-rule"),
+            "status": "APPLIED",
+        },
+    ]
+    controller = ReconcileControllerClient()
+    service = module.FlowService(repository, controller)
+
+    result = service.reconcile_flows()
+
+    assert result == {
+        "status": "COMPLETED",
+        "checked": 2,
+        "updated": 1,
+        "reapplied": 1,
+        "failures": [],
+    }
+    assert repository.status_updates[0][1]["status"] == "EXPIRED"
+    assert [rule["id"] for rule in controller.rules] == ["missing-rule"]
