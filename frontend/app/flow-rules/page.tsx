@@ -372,14 +372,14 @@ export default function FlowRulesPage() {
           <div className="overflow-x-auto">
             <table className="font-mono-ui w-full border-collapse text-[11px]">
               <thead>
-                <tr className="border-b border-line bg-sidebar text-left text-[9px] uppercase tracking-[0.15em] text-faint">
+                <tr className="border-b border-line bg-sidebar text-center text-[9px] uppercase tracking-[0.15em] text-faint">
                   <th className="px-3 py-3 font-black">출발지</th>
                   <th className="px-3 py-3 font-black">프로토콜</th>
-                  <th className="px-3 py-3 text-right font-black">포트</th>
+                  <th className="px-3 py-3 font-black">포트</th>
                   <th className="px-3 py-3 font-black">액션</th>
                   <th className="px-3 py-3 font-black">스위치</th>
-                  <th className="px-3 py-3 text-right font-black">우선도</th>
-                  <th className="px-3 py-3 text-right font-black">삭제</th>
+                  <th className="px-3 py-3 font-black">우선도</th>
+                  <th className="px-3 py-3 font-black">삭제</th>
                 </tr>
               </thead>
               <tbody>
@@ -395,15 +395,15 @@ export default function FlowRulesPage() {
                         setSelectedRuleId(rule.id);
                       }
                     }}
-                    className={`cursor-pointer border-b border-line outline-none transition-colors last:border-0 hover:bg-[var(--accent-dim)] focus:bg-[var(--accent-dim)] ${selectedRuleId === rule.id ? "bg-[var(--accent-dim)]" : ""}`}
+                    className={`h-12 cursor-pointer border-b border-line text-center align-middle outline-none transition-colors last:border-0 hover:bg-[var(--accent-dim)] focus:bg-[var(--accent-dim)] ${selectedRuleId === rule.id ? "bg-[var(--accent-dim)]" : ""}`}
                   >
-                    <td className="px-3 py-3">{String(rule.match.ipv4_src ?? "-")}</td>
-                    <td className="px-3 py-3">{formatProtocol(rule.match)}</td>
-                    <td className="px-3 py-3 text-right">{formatPort(rule.match)}</td>
-                    <td className={`px-3 py-3 ${rule.action.toUpperCase() === "DROP" ? "text-red" : "text-accent"}`}>{rule.action}</td>
-                    <td className="px-3 py-3 font-black">{rule.switch_id ?? "-"}</td>
-                    <td className="px-3 py-3 text-right">{rule.priority}</td>
-                    <td className="px-3 py-3 text-right">
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">{String(rule.match.ipv4_src ?? "-")}</td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">{formatProtocol(rule.match)}</td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">{formatPort(rule.match)}</td>
+                    <td className={`h-12 whitespace-nowrap px-3 py-0 align-middle ${rule.action.toUpperCase() === "DROP" ? "text-red" : "text-accent"}`}>{rule.action}</td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle font-black">{rule.switch_id ?? "-"}</td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">{rule.priority}</td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">
                       <button
                         type="button"
                         onClick={(event) => {
@@ -473,31 +473,31 @@ export default function FlowRulesPage() {
                 </select>
               </label>
 
-              <div className="grid grid-cols-2 gap-2">
-                <label className="grid gap-1">
+              <div className="grid grid-cols-[minmax(0,0.75fr)_minmax(0,1.25fr)] gap-2">
+                <label className="grid min-w-0 gap-1">
                   <span className="font-mono-ui text-[9px] font-black uppercase tracking-[0.12em] text-faint">프로토콜</span>
                   <select value={protocol} onChange={(event) => {
                     const nextProtocol = event.target.value as MatchProtocol;
                     setProtocol(nextProtocol);
                     if (nextProtocol === "TCP") setPortOption("80");
                     if (nextProtocol === "UDP") setPortOption("53");
-                  }} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+                  }} className="font-mono-ui h-9 w-full min-w-0 rounded border border-line2 bg-sidebar px-3 text-[11px]">
                     <option>TCP</option>
                     <option>UDP</option>
                     <option>ICMP</option>
                   </select>
                 </label>
 
-                <label className="grid gap-1">
+                <label className="grid min-w-0 gap-1">
                   <span className="font-mono-ui text-[9px] font-black uppercase tracking-[0.12em] text-faint">목적지 포트</span>
                   {protocol === "ICMP" ? (
-                    <div className="font-mono-ui flex h-9 items-center rounded border border-line bg-sidebar px-3 text-[10px] text-faint">포트 없음</div>
+                    <div className="font-mono-ui flex h-9 w-full min-w-0 items-center rounded border border-line bg-sidebar px-3 text-[10px] text-faint">포트 없음</div>
                   ) : (
                     <select value={portOption} onChange={(event) => {
                       const nextPort = event.target.value;
                       setPortOption(nextPort);
                       if (nextPort === "ALL") setAction("DROP");
-                    }} className="font-mono-ui h-9 rounded border border-line2 bg-sidebar px-3 text-[11px]">
+                    }} className="font-mono-ui h-9 w-full min-w-0 rounded border border-line2 bg-sidebar px-3 text-[11px]">
                       <option value="ALL">모든 포트 접근 금지</option>
                       {commonPorts[protocol].map((port) => (
                         <option key={port.value} value={port.value}>{port.label}</option>
