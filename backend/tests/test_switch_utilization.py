@@ -63,6 +63,26 @@ def test_counter_delta_becomes_busiest_port_utilization():
     assert second[0]["utilization"] == 20.0
     assert second[0]["sample_interval_seconds"] == 5.0
     assert second[0]["status"] == "normal"
+    assert second[0]["ports"] == [
+        {
+            "port_no": 1,
+            "bps": 1_000_000,
+            "rx_bps": 1_000_000,
+            "tx_bps": 0.0,
+            "utilization": 10.0,
+            "capacity_bps": 10_000_000,
+            "sampled": True,
+        },
+        {
+            "port_no": 2,
+            "bps": 2_000_000,
+            "rx_bps": 0.0,
+            "tx_bps": 2_000_000,
+            "utilization": 20.0,
+            "capacity_bps": 10_000_000,
+            "sampled": True,
+        },
+    ]
 
 
 def test_short_duplicate_snapshot_keeps_last_calculated_usage():
@@ -111,3 +131,41 @@ def test_disconnected_switch_has_explicit_status():
     assert result[0]["status"] == "disconnected"
     assert result[0]["bps"] == 0.0
     assert result[0]["utilization"] == 0.0
+
+
+def test_topology_ports_exclude_mirror_port_from_switch_utilization():
+    tracker = SwitchUtilizationTracker(capacity_bps=10_000_000)
+    declared_topology = {
+        **topology(),
+        "links": [
+            {
+                "source": "s1",
+                "source_port": 4,
+                "destination": "s2",
+                "destination_port": 1,
+            }
+        ],
+        "hosts": [{"switch_id": "s1", "port": 1}],
+    }
+    tracker.update(
+        stats(
+            "2026-07-21T00:00:00+00:00",
+            [port(1, 0, 0), port(4, 0, 0), port(6, 0, 0)],
+        ),
+        declared_topology,
+    )
+    result = tracker.update(
+        stats(
+            "2026-07-21T00:00:05+00:00",
+            [
+                port(1, 625_000, 0),
+                port(4, 0, 1_250_000),
+                port(6, 0, 5_000_000),
+            ],
+        ),
+        declared_topology,
+    )
+
+    assert result[0]["bps"] == 2_000_000
+    assert result[0]["utilization"] == 20.0
+    assert [item["port_no"] for item in result[0]["ports"]] == [1, 4]

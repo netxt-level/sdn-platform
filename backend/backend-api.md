@@ -488,9 +488,9 @@ GET /api/path/status
 ```
 
 Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치별 BPS와
-포트 용량 대비 사용률을 계산한다. 기본/우회 경로 사용률은 경로에 포함된
-스위치 중 가장 높은 사용률이며, 경로 상태와 Flow Rule 변경 이력도 함께
-반환한다.
+포트 용량 대비 사용률을 계산한다. 링크별 사용률은 양 끝의 실제 연결 포트
+counter를 사용하며, 물리 링크 상태(`state`)와 선택 경로 여부(`selected`)를
+분리해 반환한다.
 
 ### Response Body
 
@@ -517,9 +517,18 @@ Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치�
       "id": "s1-s2",
       "source": "s1",
       "target": "s2",
+      "source_port": 4,
+      "target_port": 1,
       "path": "primary",
-      "active": false,
-      "utilization": 0
+      "state": "active",
+      "selected": false,
+      "active": true,
+      "bps": 1000000.0,
+      "rx_bps": 1000000.0,
+      "tx_bps": 500000.0,
+      "utilization": 10.0,
+      "capacity_bps": 10000000,
+      "sampled": true
     }
   ],
   "switches": [
@@ -534,6 +543,17 @@ Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치�
       "capacity_bps": 10000000,
       "sample_interval_seconds": 5.0,
       "sampled": true,
+      "ports": [
+        {
+          "port_no": 4,
+          "bps": 1000000.0,
+          "rx_bps": 1000000.0,
+          "tx_bps": 500000.0,
+          "utilization": 10.0,
+          "capacity_bps": 10000000,
+          "sampled": true
+        }
+      ],
       "status": "normal"
     }
   ],
@@ -551,12 +571,15 @@ Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치�
 }
 ```
 
-사용률은 스위치의 데이터 포트별 RX/TX byte 증분을 BPS로 변환한 뒤 가장
-바쁜 포트의 단방향 BPS를 사용한다. 기준 포트 용량은
+사용률은 topology에 등록된 호스트/스위치 연결 포트의 RX/TX byte 증분을
+BPS로 변환해 계산한다. OVS 미러 출력처럼 topology에 없는 관측용 포트는
+스위치 사용률에서 제외한다. 링크 BPS와 사용률은 양 끝 연결 포트 중 더 큰
+단방향 값을 사용한다. 기준 포트 용량은
 `SWITCH_PORT_CAPACITY_BPS`로 설정하며 기본값은 10 Mbps다. 첫 snapshot은
 비교 대상이 없어 `sampled=false`, `status=sampling`을 반환한다. 70% 이상은
 `warning`, 90% 이상은 `critical`이다. `active_path`는 Controller topology의
-primary 링크 상태를 우선 반영한다.
+primary 링크 상태를 우선 반영한다. `links[].active`/`state`는 실제 물리 링크
+상태이고, `links[].selected`는 현재 트래픽 경로 선택 여부다.
 
 ## 6. Security API
 

@@ -47,6 +47,7 @@ class SwitchUtilizationTracker:
     ) -> list[dict[str, Any]]:
         sampled_at = _parse_timestamp(stats.get("updated_at"))
         current = self._port_counters(stats)
+        topology_ports = self._topology_ports(topology)
         interval = (
             None
             if sampled_at is None or self._previous_at is None
@@ -75,25 +76,39 @@ class SwitchUtilizationTracker:
             for switch_id in switch_ids:
                 max_rx_bps = 0.0
                 max_tx_bps = 0.0
+                port_usage = []
+                allowed_ports = topology_ports.get(switch_id)
                 for key, (rx_bytes, tx_bytes) in current.items():
                     if key[0] != switch_id:
                         continue
+                    if allowed_ports and key[1] not in allowed_ports:
+                        continue
                     previous = self._previous_counters.get(key)
                     if previous is None:
+                        port_usage.append(
+                            self._port_usage_item(key[1], sampled=False)
+                        )
                         continue
-                    max_rx_bps = max(
-                        max_rx_bps,
-                        max(0, rx_bytes - previous[0]) * 8 / interval,
-                    )
-                    max_tx_bps = max(
-                        max_tx_bps,
-                        max(0, tx_bytes - previous[1]) * 8 / interval,
+                    rx_bps = max(0, rx_bytes - previous[0]) * 8 / interval
+                    tx_bps = max(0, tx_bytes - previous[1]) * 8 / interval
+                    max_rx_bps = max(max_rx_bps, rx_bps)
+                    max_tx_bps = max(max_tx_bps, tx_bps)
+                    port_usage.append(
+                        self._port_usage_item(
+                            key[1],
+                            rx_bps=rx_bps,
+                            tx_bps=tx_bps,
+                            sampled=True,
+                        )
                     )
 
                 bps = max(max_rx_bps, max_tx_bps)
                 utilization = min(
                     100.0,
                     (bps / self.capacity_bps) * 100,
+                )
+                switch_sampled = any(
+                    bool(item["sampled"]) for item in port_usage
                 )
                 self._last_usage[switch_id] = {
                     "switch_id": switch_id,
@@ -105,11 +120,15 @@ class SwitchUtilizationTracker:
                     "utilization": round(utilization, 2),
                     "capacity_bps": self.capacity_bps,
                     "sample_interval_seconds": round(interval, 3),
-                    "sampled": True,
+                    "sampled": switch_sampled,
+                    "ports": sorted(
+                        port_usage,
+                        key=lambda item: item["port_no"],
+                    ),
                     "status": self._status(
                         states.get(switch_id, "unknown"),
                         utilization,
-                        sampled=True,
+                        sampled=switch_sampled,
                     ),
                 }
 
@@ -129,6 +148,15 @@ class SwitchUtilizationTracker:
                 switch_id,
                 state=states.get(switch_id, "unknown"),
                 dpid=dpids.get(switch_id),
+                current_ports=sorted(
+                    port_no
+                    for current_switch_id, port_no in current
+                    if current_switch_id == switch_id
+                    and (
+                        not topology_ports.get(switch_id)
+                        or port_no in topology_ports[switch_id]
+                    )
+                ),
             )
             for switch_id in switch_ids
         ]
@@ -152,12 +180,53 @@ class SwitchUtilizationTracker:
                 )
         return counters
 
+    @staticmethod
+    def _topology_ports(
+        topology: dict[str, Any],
+    ) -> dict[str, set[int]]:
+        ports: dict[str, set[int]] = {}
+
+        def add(switch_id: Any, port_no: Any) -> None:
+            if not switch_id or not port_no:
+                return
+            ports.setdefault(str(switch_id), set()).add(int(port_no))
+
+        for link in topology.get("links", []):
+            add(link.get("source"), link.get("source_port"))
+            add(link.get("destination"), link.get("destination_port"))
+        for host in topology.get("hosts", []):
+            add(host.get("switch_id"), host.get("port"))
+        return ports
+
+    def _port_usage_item(
+        self,
+        port_no: int,
+        *,
+        rx_bps: float = 0.0,
+        tx_bps: float = 0.0,
+        sampled: bool,
+    ) -> dict[str, Any]:
+        bps = max(rx_bps, tx_bps)
+        return {
+            "port_no": port_no,
+            "bps": round(bps, 2),
+            "rx_bps": round(rx_bps, 2),
+            "tx_bps": round(tx_bps, 2),
+            "utilization": round(
+                min(100.0, (bps / self.capacity_bps) * 100),
+                2,
+            ),
+            "capacity_bps": self.capacity_bps,
+            "sampled": sampled,
+        }
+
     def _usage_item(
         self,
         switch_id: str,
         *,
         state: str,
         dpid: str | None,
+        current_ports: list[int],
     ) -> dict[str, Any]:
         previous = self._last_usage.get(switch_id)
         if previous is None:
@@ -172,6 +241,10 @@ class SwitchUtilizationTracker:
                 "capacity_bps": self.capacity_bps,
                 "sample_interval_seconds": None,
                 "sampled": False,
+                "ports": [
+                    self._port_usage_item(port_no, sampled=False)
+                    for port_no in current_ports
+                ],
                 "status": self._status(state, 0.0, sampled=False),
             }
         if state != "connected":
@@ -183,6 +256,16 @@ class SwitchUtilizationTracker:
                 "rx_bps": 0.0,
                 "tx_bps": 0.0,
                 "utilization": 0.0,
+                "ports": [
+                    {
+                        **port,
+                        "bps": 0.0,
+                        "rx_bps": 0.0,
+                        "tx_bps": 0.0,
+                        "utilization": 0.0,
+                    }
+                    for port in previous.get("ports", [])
+                ],
                 "status": "disconnected",
             }
         return {

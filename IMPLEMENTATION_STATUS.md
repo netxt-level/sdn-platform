@@ -139,7 +139,7 @@
 - `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 총 패킷 수, 총 byte 수, 최신 pps/bps, 네트워크 상태를 계산한다.
 - `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장한다. `mitigation`이 있으면 PostgreSQL에 보안 대응 내역과 flow rule을 생성하고 Controller에 자동 적용한 뒤 두 레코드의 최종 상태를 저장한다.
 - `/api/flows`는 DB 기반 flow rule 조회·생성·삭제를 제공한다. 생성과 삭제는 Controller Barrier 확인 결과에 따라 최종 상태와 Controller 응답이 저장된다.
-- `/api/path/status`는 Controller 포트 byte counter의 시간차를 이용해 스위치별 BPS/사용률을 계산하고 기본·우회 경로 상태 및 변경 이력을 반환한다.
+- `/api/path/status`는 Controller 포트 byte counter의 시간차를 이용해 topology 포트별 BPS/사용률을 계산하고 실제 링크 상태와 기본·우회 선택 경로를 분리해 반환한다.
 - InfluxDB duration query는 `5s`, `1m`, `2h`, `1d`, `1w` 같은 형식만 허용한다.
 - `backend/app/scripts/seed_suspicious_hosts.py`는 의심 호스트 테스트 데이터를 넣기 위한 보조 스크립트다.
 

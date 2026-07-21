@@ -290,7 +290,7 @@ Alembic migration은 `migrations/`에 있다.
 - Backend는 `FLOW_RECONCILE_INTERVAL_SECONDS` 주기로 `PENDING`, `FAILED`, `APPLIED`, 제거 실패 규칙을 Controller와 재조정한다.
 - 자동 대응 정책은 `critical=DROP`, `high=mitigation 적용`, `medium 이하=승인 대기`로 동작한다.
 - 동일 공격이 `RATE_LIMIT`에서 `DROP`으로 격상되면 이전 rule과 마지막 Meter 참조를 먼저 제거한다.
-- `/api/path/status`는 Controller의 연속 Port 통계 snapshot을 비교해 스위치별 BPS와 설정된 포트 용량 대비 사용률을 계산하고, 실제 topology 및 Flow 통계와 함께 반환한다.
+- `/api/path/status`는 Controller의 연속 Port 통계 snapshot을 비교해 topology 포트별 BPS와 사용률을 계산하고, 실제 링크 UP/DOWN 상태와 선택 경로를 분리해 반환한다. 미러 출력처럼 topology에 없는 포트는 스위치 사용률에서 제외한다.
 - 대시보드의 경로 상태 영역은 정적 사용률 대신 `/api/path/status`의 실제 스위치 사용률을 5초마다 표시한다.
 - Flow Rule 화면은 실제 `/api/flows` 응답의 연결 스위치, 인접 링크, packet/byte 통계를 5초마다 갱신한다. 다른 일부 화면에는 아직 mock/static UI가 남아 있다.
 - 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.

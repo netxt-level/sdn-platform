@@ -10,6 +10,14 @@ from app.core.config import settings
 from app.services.switch_utilization import SwitchUtilizationTracker
 
 
+LINK_DEFINITIONS = (
+    ("s1-s2", "s1", "s2", "primary"),
+    ("s2-s4", "s2", "s4", "primary"),
+    ("s1-s3", "s1", "s3", "backup"),
+    ("s3-s4", "s3", "s4", "backup"),
+)
+
+
 class PathService:
     def __init__(
         self,
@@ -39,32 +47,38 @@ class PathService:
             controller_state = {"topology": topology, "stats": stats}
             switches = self.utilization_tracker.update(stats, topology)
             active_links = {
-                (link.get("source"), link.get("destination"))
+                self._edge_key(link.get("source"), link.get("destination"))
                 for link in topology.get("links", [])
                 if link.get("state") == "active"
             }
             if not {
-                ("s1", "s2"),
-                ("s2", "s4"),
+                self._edge_key("s1", "s2"),
+                self._edge_key("s2", "s4"),
             }.issubset(active_links):
                 active_path = "backup"
         except ControllerClientError:
             pass
 
-        utilization_by_switch = {
-            item["switch_id"]: float(item["utilization"])
-            for item in switches
-        }
         primary_nodes = ["s1", "s2", "s4"]
         backup_nodes = ["s1", "s3", "s4"]
-        primary_utilization = self._path_utilization(
-            primary_nodes,
-            utilization_by_switch,
-        )
-        backup_utilization = self._path_utilization(
-            backup_nodes,
-            utilization_by_switch,
-        )
+        topology_links = self._topology_link_map(topology)
+        port_usage = self._port_usage_map(switches)
+        links = [
+            self._link_status(
+                link_id,
+                source,
+                target,
+                path,
+                selected=active_path == path,
+                topology_link=topology_links.get(
+                    self._edge_key(source, target)
+                ),
+                port_usage=port_usage,
+            )
+            for link_id, source, target, path in LINK_DEFINITIONS
+        ]
+        primary_utilization = self._path_utilization("primary", links)
+        backup_utilization = self._path_utilization("backup", links)
 
         return {
             "active_path": active_path,
@@ -83,48 +97,7 @@ class PathService:
                     "active": active_path == "backup",
                 },
             },
-            "links": [
-                {
-                    "id": "s1-s2",
-                    "source": "s1",
-                    "target": "s2",
-                    "path": "primary",
-                    "active": active_path == "primary",
-                    "utilization": self._link_utilization(
-                        "s1", "s2", utilization_by_switch
-                    ),
-                },
-                {
-                    "id": "s2-s4",
-                    "source": "s2",
-                    "target": "s4",
-                    "path": "primary",
-                    "active": active_path == "primary",
-                    "utilization": self._link_utilization(
-                        "s2", "s4", utilization_by_switch
-                    ),
-                },
-                {
-                    "id": "s1-s3",
-                    "source": "s1",
-                    "target": "s3",
-                    "path": "backup",
-                    "active": active_path == "backup",
-                    "utilization": self._link_utilization(
-                        "s1", "s3", utilization_by_switch
-                    ),
-                },
-                {
-                    "id": "s3-s4",
-                    "source": "s3",
-                    "target": "s4",
-                    "path": "backup",
-                    "active": active_path == "backup",
-                    "utilization": self._link_utilization(
-                        "s3", "s4", utilization_by_switch
-                    ),
-                },
-            ],
+            "links": links,
             "switches": switches,
             "utilization_source": "openflow_port_counter_delta",
             "history": [self._history_item(rule) for rule in flow_rules[:8]],
@@ -133,30 +106,118 @@ class PathService:
 
     @staticmethod
     def _path_utilization(
-        nodes: list[str],
-        utilization_by_switch: dict[str, float],
+        path: str,
+        links: list[dict[str, Any]],
     ) -> float:
         return round(
             max(
-                (utilization_by_switch.get(node, 0.0) for node in nodes),
+                (
+                    float(link["utilization"])
+                    for link in links
+                    if link["path"] == path
+                ),
                 default=0.0,
             ),
             2,
         )
 
     @staticmethod
-    def _link_utilization(
+    def _edge_key(source: Any, target: Any) -> tuple[str, str]:
+        return tuple(sorted((str(source), str(target))))
+
+    @classmethod
+    def _topology_link_map(
+        cls,
+        topology: dict[str, Any],
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        return {
+            cls._edge_key(link.get("source"), link.get("destination")): link
+            for link in topology.get("links", [])
+            if link.get("source") and link.get("destination")
+        }
+
+    @staticmethod
+    def _port_usage_map(
+        switches: list[dict[str, Any]],
+    ) -> dict[tuple[str, int], dict[str, Any]]:
+        return {
+            (str(switch["switch_id"]), int(port["port_no"])): port
+            for switch in switches
+            for port in switch.get("ports", [])
+        }
+
+    @classmethod
+    def _link_status(
+        cls,
+        link_id: str,
         source: str,
         target: str,
-        utilization_by_switch: dict[str, float],
-    ) -> float:
-        return round(
-            max(
-                utilization_by_switch.get(source, 0.0),
-                utilization_by_switch.get(target, 0.0),
-            ),
-            2,
+        path: str,
+        *,
+        selected: bool,
+        topology_link: dict[str, Any] | None,
+        port_usage: dict[tuple[str, int], dict[str, Any]],
+    ) -> dict[str, Any]:
+        state = (
+            str(topology_link.get("state", "unknown"))
+            if topology_link
+            else "unknown"
         )
+        source_port = None
+        target_port = None
+        if topology_link:
+            if topology_link.get("source") == source:
+                source_port = topology_link.get("source_port")
+                target_port = topology_link.get("destination_port")
+            else:
+                source_port = topology_link.get("destination_port")
+                target_port = topology_link.get("source_port")
+
+        samples = [
+            port_usage.get((source, int(source_port)))
+            if source_port is not None
+            else None,
+            port_usage.get((target, int(target_port)))
+            if target_port is not None
+            else None,
+        ]
+        samples = [sample for sample in samples if sample is not None]
+
+        return {
+            "id": link_id,
+            "source": source,
+            "target": target,
+            "source_port": source_port,
+            "target_port": target_port,
+            "path": path,
+            "state": state,
+            "selected": selected,
+            "active": state == "active",
+            "bps": round(
+                max((float(item["bps"]) for item in samples), default=0.0),
+                2,
+            ),
+            "rx_bps": round(
+                max((float(item["rx_bps"]) for item in samples), default=0.0),
+                2,
+            ),
+            "tx_bps": round(
+                max((float(item["tx_bps"]) for item in samples), default=0.0),
+                2,
+            ),
+            "utilization": round(
+                max(
+                    (float(item["utilization"]) for item in samples),
+                    default=0.0,
+                ),
+                2,
+            ),
+            "capacity_bps": max(
+                (int(item["capacity_bps"]) for item in samples),
+                default=settings.switch_port_capacity_bps,
+            ),
+            "sampled": any(bool(item.get("sampled")) for item in samples),
+        }
 
     def _decide_active_path(
         self,
