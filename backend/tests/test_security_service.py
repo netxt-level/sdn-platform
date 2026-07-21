@@ -59,6 +59,16 @@ class StubSecurityResponseRepository:
         }
 
 
+class StubPlatformSettingsRepository:
+    def __init__(self, automatic_response_enabled=True):
+        self.automatic_response_enabled = automatic_response_enabled
+
+    def get(self):
+        return {
+            "automatic_response_enabled": self.automatic_response_enabled,
+            "congestion_threshold_percent": 70,
+        }
+
 class StubFlowRepository:
     def __init__(self):
         self.calls = []
@@ -142,6 +152,7 @@ def test_security_service_stores_events_and_broadcasts_response_context(
         security_response_repository=response_repository,
         flow_repository=flow_repository,
         flow_service=flow_service,
+        platform_settings_repository=StubPlatformSettingsRepository(),
     )
     events = [
         {"event_id": "evt-alert", "mitigation": None},
@@ -251,6 +262,7 @@ def test_security_service_records_automatic_response_failure(
         security_response_repository=response_repository,
         flow_repository=StubFlowRepository(),
         flow_service=FailedFlowService(),
+        platform_settings_repository=StubPlatformSettingsRepository(),
     )
 
     asyncio.run(service.receive_events({
@@ -297,6 +309,7 @@ def test_critical_event_without_mitigation_gets_drop_policy(
         security_response_repository=StubSecurityResponseRepository(),
         flow_repository=flow_repository,
         flow_service=flow_service,
+        platform_settings_repository=StubPlatformSettingsRepository(),
     )
     event = {
         "event_id": "evt-critical",
@@ -361,6 +374,7 @@ def test_manual_block_applies_drop_flow_and_updates_event_status(
         security_response_repository=StubSecurityResponseRepository(),
         flow_repository=StubFlowRepository(),
         flow_service=flow_service,
+        platform_settings_repository=StubPlatformSettingsRepository(),
     )
 
     result = service.respond_to_event("evt-manual", "block")
@@ -397,6 +411,7 @@ def test_manual_ignore_updates_event_without_creating_flow(load_service_module):
         security_response_repository=StubSecurityResponseRepository(),
         flow_repository=flow_repository,
         flow_service=StubFlowService(),
+        platform_settings_repository=StubPlatformSettingsRepository(),
     )
 
     result = service.respond_to_event("evt-ignore", "ignore")
@@ -404,3 +419,36 @@ def test_manual_ignore_updates_event_without_creating_flow(load_service_module):
     assert result["event"]["status"] == "ignored"
     assert result["flow_rule"] is None
     assert flow_repository.calls == []
+
+
+def test_disabled_automatic_response_keeps_flow_pending(load_service_module):
+    module = load_service_module(
+        "security_service",
+        stubs={
+            "app.core.websocket": {"manager": RecordingManager()},
+            "app.repositories.flow_repository": {"FlowRepository": StubFlowRepository},
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+            "app.repositories.security_response_repository": {
+                "SecurityResponseRepository": StubSecurityResponseRepository,
+            },
+        },
+    )
+    flow_service = StubFlowService()
+    service = module.SecurityService(
+        security_event_repository=StubSecurityEventRepository(),
+        security_response_repository=StubSecurityResponseRepository(),
+        flow_repository=StubFlowRepository(),
+        flow_service=flow_service,
+        platform_settings_repository=StubPlatformSettingsRepository(False),
+    )
+
+    asyncio.run(service.receive_events({
+        "events": [{
+            "event_id": "evt-pending",
+            "mitigation": {"action": "RATE_LIMIT"},
+        }],
+    }))
+
+    assert flow_service.applied == []

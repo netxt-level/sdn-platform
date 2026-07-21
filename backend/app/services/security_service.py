@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.websocket import manager
 from app.repositories.flow_repository import FlowRepository
+from app.repositories.platform_settings_repository import PlatformSettingsRepository
 from app.repositories.security_event_repository import SecurityEventRepository
 from app.repositories.security_response_repository import SecurityResponseRepository
 from app.services.flow_service import FlowService
@@ -19,6 +20,7 @@ class SecurityService:
         security_response_repository: SecurityResponseRepository | None = None,
         flow_repository: FlowRepository | None = None,
         flow_service: FlowService | None = None,
+        platform_settings_repository: PlatformSettingsRepository | None = None,
     ):
         self.security_event_repository = (
             security_event_repository or SecurityEventRepository()
@@ -29,6 +31,9 @@ class SecurityService:
         self.flow_repository = flow_repository or FlowRepository()
         self.flow_service = flow_service or FlowService(
             flow_repository=self.flow_repository,
+        )
+        self.platform_settings_repository = (
+            platform_settings_repository or PlatformSettingsRepository()
         )
 
     def get_events(self, limit: int) -> dict[str, Any]:
@@ -65,7 +70,11 @@ class SecurityService:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         policy_events = [self._apply_response_policy(event) for event in events]
         self.security_event_repository.save_security_events(policy_events)
-        responses, flow_rules = self._create_responses_and_flow_rules(policy_events)
+        runtime_settings = self.platform_settings_repository.get()
+        responses, flow_rules = self._create_responses_and_flow_rules(
+            policy_events,
+            apply_response=bool(runtime_settings["automatic_response_enabled"]),
+        )
         applied_event_ids = {
             flow_rule.get("source_event_id")
             for flow_rule in flow_rules
@@ -157,6 +166,7 @@ class SecurityService:
         events: list[dict[str, Any]],
         *,
         approved_by: str = "automatic-policy",
+        apply_response: bool = True,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         responses = []
         flow_rules = []
@@ -173,7 +183,7 @@ class SecurityService:
                 event=event,
                 security_response_id=response["id"],
             )
-            if flow_rule is not None:
+            if flow_rule is not None and apply_response:
                 response, flow_rule = self._apply_automatic_response(
                     response,
                     flow_rule,
