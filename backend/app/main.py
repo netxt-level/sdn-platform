@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.analyzer import router as analyzer_router
 from app.api.dashboard import router as dashboard_router
+from app.api.controller import router as controller_router
 from app.api.flows import router as flows_router
 from app.api.path import router as path_router
 from app.api.security import router as security_router
@@ -37,6 +38,11 @@ app.include_router(
     dashboard_router,
     prefix="/api/dashboard",
     tags=["dashboard"],
+)
+app.include_router(
+    controller_router,
+    prefix="/api/controller",
+    tags=["controller"],
 )
 app.include_router(
     flows_router,

@@ -102,6 +102,9 @@ class ControllerClient:
     def get_stats(self) -> dict[str, Any]:
         return self._request("GET", "/stats", None, expected_status=None)
 
+    def get_health(self) -> dict[str, Any]:
+        return self._request("GET", "/health", None, expected_status=None)
+
     def _request(
         self,
         method: str,
