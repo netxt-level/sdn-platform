@@ -37,6 +37,35 @@ export type SwitchUtilization = {
   status: "sampling" | "normal" | "warning" | "critical" | "disconnected";
 };
 
+export type ControllerSwitch = {
+  switch_id: string;
+  dpid: string;
+  state: string;
+};
+
+export type ControllerLink = {
+  source: string;
+  destination: string;
+  source_port: number;
+  destination_port: number;
+  cost: number;
+  state: string;
+};
+
+export type ControllerHost = {
+  name: string;
+  mac: string;
+  ipv4: string;
+  switch_id: string;
+  port: number;
+};
+
+export type ControllerTopology = {
+  switches: ControllerSwitch[];
+  links: ControllerLink[];
+  hosts: ControllerHost[];
+};
+
 export type PathStatus = {
   active_path: "primary" | "backup";
   network_status: "normal" | "warning" | "critical";
@@ -48,4 +77,8 @@ export type PathStatus = {
   switches: SwitchUtilization[];
   utilization_source: "openflow_port_counter_delta";
   history: PathHistoryItem[];
+  controller: {
+    topology: ControllerTopology;
+    stats: unknown;
+  } | null;
 };
