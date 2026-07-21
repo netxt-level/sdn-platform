@@ -106,7 +106,7 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 - DB 의심 호스트 polling 및 실시간 데이터 병합
 - 보안 이벤트 목록/상세 화면을 실제 보안 이벤트 API에 연결
 - 처리 완료/긴급 처리 필터와 미처리 high 이상 이벤트 알림 표시
-- 경로 제어 화면을 백엔드 경로 상태 API에 연결
+- 대시보드 스위치 사용률을 백엔드 경로 상태 API에 연결
 - Flow Rule 화면을 실제 조회/수동 생성 API에 연결
 
 ## 화면 구성
@@ -115,7 +115,6 @@ SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에�
 |---|---|---|
 | 대시보드 | `/` | 구현됨 |
 | Flow Rules | `/flow-rules` | 구현됨 |
-| Path | `/path` | 구현됨 |
 | Security Events | `/security/events` | 구현됨 |
 | Topology | `/topology` | 구현중 |
 | Settings | `/settings` | 구현중 |

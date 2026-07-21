@@ -161,7 +161,6 @@
 | `frontend/components/dashboard/MetricCard.tsx` | 대시보드 지표 카드 |
 | `frontend/app/security/events/page.tsx` | 보안 이벤트 화면 |
 | `frontend/app/topology/page.tsx` | 토폴로지 화면 |
-| `frontend/app/path/page.tsx` | 경로 제어 화면, `/api/path/status` 연동 |
 | `frontend/app/flow-rules/page.tsx` | 실제 연결 스위치와 OpenFlow 통계를 사용하는 Flow rule 조회/생성/삭제 화면 |
 | `frontend/lib/flowApi.ts` | Flow Rule 조회/생성/삭제 API 클라이언트 |
 | `frontend/types/flow.ts` | Flow Rule 및 Controller 상태 API 타입 |
@@ -177,7 +176,6 @@
 |---|---|---|
 | 대시보드 | `/` | 구현됨 |
 | Flow Rules | `/flow-rules` | 구현됨 |
-| Path | `/path` | 구현됨 |
 | Security Events | `/security/events` | 구현됨 |
 | Topology | `/topology` | 구현됨 |
 | Settings | `/settings` | 구현됨 |
@@ -207,7 +205,7 @@
 | 의심 호스트 | `/api/dashboard/suspicious-hosts?range=1w` |
 | 보안 이벤트 | `/api/security/events?limit=100` |
 | Flow Rule | `/api/flows` |
-| 경로 제어 | `/api/path/status` |
+| 대시보드 스위치 사용률 | `/api/path/status` |
 
 Next.js rewrite 설정으로 프론트엔드의 `/api/:path*` 요청은 `${BACKEND_INTERNAL_URL}/api/:path*`로 전달된다.
 
@@ -215,7 +213,7 @@ Next.js rewrite 설정으로 프론트엔드의 `/api/:path*` 요청은 `${BACKE
 
 - WebSocket URL은 `NEXT_PUBLIC_WS_URL`이 없으면 현재 브라우저 host 기준 `:8000/ws/analyzer`로 fallback된다.
 - 프론트 타입에는 과거 호환용 `traffic_analysis`, `security_event`, `topology_update` 메시지가 남아 있지만, 현재 백엔드가 직접 broadcast하는 메시지는 `analyzer_status`, `packet_summary`, `detection_summary`, `security_events`다.
-- `보안 규칙` 단독 페이지는 제거되었고, 보안 대응 흐름은 보안 이벤트, 경로 제어, Flow Rule 화면에서 관리한다.
+- `보안 규칙`과 `경로 제어` 단독 페이지는 제거되었고, 보안 대응 흐름과 스위치 사용률은 대시보드, 보안 이벤트, Flow Rule 화면에서 관리한다.
 - 수동 Flow Rule은 SDN Controller 설치와 삭제까지 수행한다. `DROP`, `OUTPUT:<port|인접 switch>`, OVS Meter 기반 `RATE_LIMIT`을 지원하며 삭제 시 `REMOVING -> REMOVED`를 저장한다. Backend 만료 상태 재조정은 추가 구현이 필요하다.
 - Flow Rule 화면의 스위치와 `OUTPUT` 대상은 Controller topology에서 구성하고, cookie가 일치하는 OpenFlow packet/byte 통계를 5초마다 표시한다. Controller 장애 시 DB 이력과 명시적 연결 오류를 표시한다.
 
@@ -246,5 +244,5 @@ Alembic migration은 `migrations/`에 구성되어 있다.
 
 - 분석 서버 커밋에는 `analyzer/app/main.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/detection/port_scan.py`, `analyzer/analyzer-backend-api.md` 포함 여부를 확인한다.
 - 백엔드 커밋에는 `backend/app/api/dashboard.py`, `backend/app/api/flows.py`, `backend/app/api/path.py`, `backend/app/services/path_service.py`, `backend/app/db/influxdb.py`, `backend/app/schemas/analyzer.py`, `backend/backend-api.md` 포함 여부를 확인한다.
-- 프론트엔드 커밋에는 `frontend/app/page.tsx`, `frontend/app/security/events/page.tsx`, `frontend/app/path/page.tsx`, `frontend/app/flow-rules/page.tsx`, `frontend/hooks/useRealtime.ts`, `frontend/types/analyzer.ts` 포함 여부를 확인한다.
+- 프론트엔드 커밋에는 `frontend/app/page.tsx`, `frontend/app/security/events/page.tsx`, `frontend/app/flow-rules/page.tsx`, `frontend/hooks/useRealtime.ts`, `frontend/types/analyzer.ts` 포함 여부를 확인한다.
 - `__pycache__/`, `.DS_Store` 같은 생성 파일은 커밋하지 않는 것이 좋다.

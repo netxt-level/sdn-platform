@@ -8,14 +8,12 @@ import {
   GitBranch,
   LayoutDashboard,
   Network,
-  Route,
 } from "lucide-react";
 
 const navItems = [
   { section: "Overview", href: "/", label: "대시보드", icon: LayoutDashboard },
   { section: "Overview", href: "/topology", label: "토폴로지", icon: Network },
   { section: "Monitoring", href: "/security/events", label: "보안 이벤트", icon: Bell },
-  { section: "Monitoring", href: "/path", label: "경로 제어", icon: Route },
   { section: "Monitoring", href: "/flow-rules", label: "Flow Rule", icon: GitBranch }
 ];
 
@@ -23,7 +21,6 @@ const titles: Record<string, string> = {
   "/": "대시보드",
   "/topology": "토폴로지 시각화",
   "/security/events": "보안 이벤트 관리",
-  "/path": "경로 제어",
   "/flow-rules": "Flow Rule 관리",
   "/settings": "설정"
 };
