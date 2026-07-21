@@ -1,8 +1,8 @@
 # 재현 가능한 SDN Lab VM
 
-- 상태: macOS/Windows용 Multipass 자동 구성 완료, `s1` Sensor bootstrap 반영·검증 전
+- 상태: macOS/Windows용 Multipass 자동 구성 및 `s1` Sensor 검증 완료
 - 기본 VM: Ubuntu 24.04, 4 CPU, 8 GB RAM, 40 GB Disk
-- 최종 수정일: 2026-07-16
+- 최종 수정일: 2026-07-21
 
 ## VM이 필요한 이유
 

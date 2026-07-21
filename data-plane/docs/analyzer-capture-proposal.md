@@ -1,7 +1,7 @@
 # Analyzer 캡처 경로 설계
 
-- 상태: `s1` 연결 위치 확정, 구현 반영·검증 전
-- 대상 브랜치: `feat/analyzer-sensor-integration`
+- 상태: `s1` 연결 구현 및 자동 검증 완료
+- 최종 수정일: 2026-07-21
 - 수정 범위: 우선 `data-plane/` 내부만 사용
 - 확정 사항: Analyzer 전용 OVS Mirror 출력은 `s1`에 연결
 
@@ -188,7 +188,7 @@ Analyzer 또는 루트 Compose 변경이 필요하다고 확인되면 실제 수
 
 ## 운영 확인 명령
 
-구현 후 다음 형태의 명령을 제공한다.
+다음 명령으로 구현된 캡처 경로를 확인한다.
 
 ```bash
 ip -details link show sdn-sensor0
@@ -200,8 +200,8 @@ docker inspect sdn-analyzer
 docker logs --since 5m sdn-analyzer
 ```
 
-## 구현 순서와 첫 범위
+## 구현 결과
 
-먼저 A와 B를 구현한다. 즉, Sensor veth와 `s1` Mirror를 만들고 실제 ICMP가
-`tcpdump`에 복제되는 것까지 검증한다. Analyzer·Backend 연결은 해당 결과를
-확인한 뒤 진행한다.
+Sensor veth와 `s1` Mirror를 구현하고 Primary/Backup 경로의 실제 ICMP가
+`tcpdump`에 복제되는 것을 검증했다. Analyzer는 `sdn-sensor0`을 캡처하며
+Packet Summary와 Security Event를 기존 Backend 계약으로 전송한다.
