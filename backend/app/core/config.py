@@ -75,5 +75,12 @@ class Settings:
             )
         return value
 
+    @property
+    def switch_port_capacity_bps(self) -> int:
+        value = int(get_env("SWITCH_PORT_CAPACITY_BPS", "10000000"))
+        if value <= 0:
+            raise RuntimeError("SWITCH_PORT_CAPACITY_BPS must be positive")
+        return value
+
 
 settings = Settings()

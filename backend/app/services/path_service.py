@@ -6,8 +6,8 @@ from app.repositories.flow_repository import FlowRepository
 from app.services.dashboard_service import DashboardService
 from app.clients.controller import ControllerClient
 from app.clients.controller import ControllerClientError
-
-WARNING_BPS_THRESHOLD = 5_000_000
+from app.core.config import settings
+from app.services.switch_utilization import SwitchUtilizationTracker
 
 
 class PathService:
@@ -16,31 +16,28 @@ class PathService:
         dashboard_service: DashboardService | None = None,
         flow_repository: FlowRepository | None = None,
         controller_client: ControllerClient | None = None,
+        utilization_tracker: SwitchUtilizationTracker | None = None,
     ):
         self.dashboard_service = dashboard_service or DashboardService()
         self.flow_repository = flow_repository or FlowRepository()
         self.controller_client = controller_client or ControllerClient()
+        self.utilization_tracker = (
+            utilization_tracker
+            or SwitchUtilizationTracker(settings.switch_port_capacity_bps)
+        )
 
     def get_status(self) -> dict[str, Any]:
         summary = self.dashboard_service.get_summary()
         flow_rules = self.flow_repository.list_flows()
-        current_bps = float(summary.get("current_bps") or 0)
-
-        # 실제 링크 계측 API가 없으므로 현재 트래픽 요약으로 경로 사용률을 파생한다.
-        primary_utilization = min(
-            100,
-            round((current_bps / WARNING_BPS_THRESHOLD) * 70),
-        )
-        backup_utilization = min(
-            100,
-            max(0, round(primary_utilization * 0.45)),
-        )
         active_path = self._decide_active_path(summary, flow_rules)
         controller_state = None
+        switches = []
+        topology = {"links": [], "switches": []}
         try:
             topology = self.controller_client.get_topology()
             stats = self.controller_client.get_stats()
             controller_state = {"topology": topology, "stats": stats}
+            switches = self.utilization_tracker.update(stats, topology)
             active_links = {
                 (link.get("source"), link.get("destination"))
                 for link in topology.get("links", [])
@@ -54,19 +51,34 @@ class PathService:
         except ControllerClientError:
             pass
 
+        utilization_by_switch = {
+            item["switch_id"]: float(item["utilization"])
+            for item in switches
+        }
+        primary_nodes = ["s1", "s2", "s4"]
+        backup_nodes = ["s1", "s3", "s4"]
+        primary_utilization = self._path_utilization(
+            primary_nodes,
+            utilization_by_switch,
+        )
+        backup_utilization = self._path_utilization(
+            backup_nodes,
+            utilization_by_switch,
+        )
+
         return {
             "active_path": active_path,
             "network_status": summary.get("network_status", "normal"),
             "paths": {
                 "primary": {
                     "name": "primary",
-                    "nodes": ["s1", "s2", "s4"],
+                    "nodes": primary_nodes,
                     "utilization": primary_utilization,
                     "active": active_path == "primary",
                 },
                 "backup": {
                     "name": "backup",
-                    "nodes": ["s1", "s3", "s4"],
+                    "nodes": backup_nodes,
                     "utilization": backup_utilization,
                     "active": active_path == "backup",
                 },
@@ -78,7 +90,9 @@ class PathService:
                     "target": "s2",
                     "path": "primary",
                     "active": active_path == "primary",
-                    "utilization": primary_utilization,
+                    "utilization": self._link_utilization(
+                        "s1", "s2", utilization_by_switch
+                    ),
                 },
                 {
                     "id": "s2-s4",
@@ -86,7 +100,9 @@ class PathService:
                     "target": "s4",
                     "path": "primary",
                     "active": active_path == "primary",
-                    "utilization": max(0, primary_utilization - 3),
+                    "utilization": self._link_utilization(
+                        "s2", "s4", utilization_by_switch
+                    ),
                 },
                 {
                     "id": "s1-s3",
@@ -94,7 +110,9 @@ class PathService:
                     "target": "s3",
                     "path": "backup",
                     "active": active_path == "backup",
-                    "utilization": backup_utilization,
+                    "utilization": self._link_utilization(
+                        "s1", "s3", utilization_by_switch
+                    ),
                 },
                 {
                     "id": "s3-s4",
@@ -102,12 +120,43 @@ class PathService:
                     "target": "s4",
                     "path": "backup",
                     "active": active_path == "backup",
-                    "utilization": max(0, backup_utilization - 2),
+                    "utilization": self._link_utilization(
+                        "s3", "s4", utilization_by_switch
+                    ),
                 },
             ],
+            "switches": switches,
+            "utilization_source": "openflow_port_counter_delta",
             "history": [self._history_item(rule) for rule in flow_rules[:8]],
             "controller": controller_state,
         }
+
+    @staticmethod
+    def _path_utilization(
+        nodes: list[str],
+        utilization_by_switch: dict[str, float],
+    ) -> float:
+        return round(
+            max(
+                (utilization_by_switch.get(node, 0.0) for node in nodes),
+                default=0.0,
+            ),
+            2,
+        )
+
+    @staticmethod
+    def _link_utilization(
+        source: str,
+        target: str,
+        utilization_by_switch: dict[str, float],
+    ) -> float:
+        return round(
+            max(
+                utilization_by_switch.get(source, 0.0),
+                utilization_by_switch.get(target, 0.0),
+            ),
+            2,
+        )
 
     def _decide_active_path(
         self,

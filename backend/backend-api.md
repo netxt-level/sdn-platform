@@ -487,7 +487,10 @@ Controller의 현재 Flow Rule 목록과 PostgreSQL을 비교한다. Controller�
 GET /api/path/status
 ```
 
-대시보드 요약과 `sdn_controller.flow_rules`를 조합해 경로 제어 화면에서 사용할 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
+Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치별 BPS와
+포트 용량 대비 사용률을 계산한다. 기본/우회 경로 사용률은 경로에 포함된
+스위치 중 가장 높은 사용률이며, 경로 상태와 Flow Rule 변경 이력도 함께
+반환한다.
 
 ### Response Body
 
@@ -519,6 +522,22 @@ GET /api/path/status
       "utilization": 0
     }
   ],
+  "switches": [
+    {
+      "switch_id": "s1",
+      "dpid": "0000000000000001",
+      "state": "connected",
+      "bps": 2000000.0,
+      "rx_bps": 1000000.0,
+      "tx_bps": 2000000.0,
+      "utilization": 20.0,
+      "capacity_bps": 10000000,
+      "sample_interval_seconds": 5.0,
+      "sampled": true,
+      "status": "normal"
+    }
+  ],
+  "utilization_source": "openflow_port_counter_delta",
   "history": [
     {
       "id": "rule-uuid-001",
@@ -532,7 +551,12 @@ GET /api/path/status
 }
 ```
 
-현재 `active_path`는 네트워크 상태와 `PENDING` 대응 flow rule 존재 여부를 기반으로 파생한다. 실제 컨트롤러 경로 전환 상태와 동기화하는 기능은 아직 연결되어 있지 않다.
+사용률은 스위치의 데이터 포트별 RX/TX byte 증분을 BPS로 변환한 뒤 가장
+바쁜 포트의 단방향 BPS를 사용한다. 기준 포트 용량은
+`SWITCH_PORT_CAPACITY_BPS`로 설정하며 기본값은 10 Mbps다. 첫 snapshot은
+비교 대상이 없어 `sampled=false`, `status=sampling`을 반환한다. 70% 이상은
+`warning`, 90% 이상은 `critical`이다. `active_path`는 Controller topology의
+primary 링크 상태를 우선 반영한다.
 
 ## 6. Security API
 
