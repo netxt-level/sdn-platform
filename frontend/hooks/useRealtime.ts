@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   AnalyzerStatus,
@@ -23,6 +23,10 @@ export type RealtimeState = {
   detectionSummary: DetectionSummary;
   trafficSeries: TrafficSeriesPoint[];
   securityEvents: SecurityEvent[];
+  updateSecurityEventStatus: (
+    eventId: string,
+    status: SecurityEvent["status"]
+  ) => void;
   topology: TopologyState;
 };
 
@@ -1088,6 +1092,18 @@ export function useRealtime(): RealtimeState {
     () => buildTrafficSeries(trafficSamples),
     [trafficSamples]
   );
+  const updateSecurityEventStatus = useCallback(
+    (eventId: string, status: SecurityEvent["status"]) => {
+      setSecurityEvents((events) =>
+        events.map((event) =>
+          event.id === eventId || event.event_id === eventId
+            ? { ...event, status }
+            : event
+        )
+      );
+    },
+    []
+  );
 
   return useMemo(
     () => ({
@@ -1099,6 +1115,7 @@ export function useRealtime(): RealtimeState {
       detectionSummary: visibleDetectionSummary,
       trafficSeries,
       securityEvents,
+      updateSecurityEventStatus,
       topology
     }),
     [
@@ -1110,6 +1127,7 @@ export function useRealtime(): RealtimeState {
       source,
       topology,
       trafficSeries,
+      updateSecurityEventStatus,
       visibleDetectionSummary
     ]
   );

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
+from app.schemas.security import SecurityEventActionRequest
 from app.schemas.security import SecurityEventsRequest
 from app.services.security_service import SecurityService
 
@@ -27,3 +28,14 @@ async def receive_security_events(payload: SecurityEventsRequest):
     await security_service.receive_events(data)
 
     return {"ok": True}
+
+
+@router.post("/events/{event_id}/actions")
+def respond_to_security_event(
+    event_id: str,
+    payload: SecurityEventActionRequest,
+):
+    try:
+        return security_service.respond_to_event(event_id, payload.action)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="security event not found") from exc

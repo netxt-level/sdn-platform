@@ -65,7 +65,49 @@ class SecurityService:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         policy_events = [self._apply_response_policy(event) for event in events]
         self.security_event_repository.save_security_events(policy_events)
-        return self._create_responses_and_flow_rules(policy_events)
+        responses, flow_rules = self._create_responses_and_flow_rules(policy_events)
+        applied_event_ids = {
+            flow_rule.get("source_event_id")
+            for flow_rule in flow_rules
+            if flow_rule.get("status") == "APPLIED"
+        }
+        for event in policy_events:
+            if event.get("event_id") in applied_event_ids:
+                self.security_event_repository.update_status(
+                    event["event_id"],
+                    "blocked",
+                )
+        return responses, flow_rules
+
+    def respond_to_event(
+        self,
+        event_id: str,
+        action: str,
+    ) -> dict[str, Any]:
+        event = self.security_event_repository.get_security_event(event_id)
+        if event is None:
+            raise KeyError(event_id)
+
+        if action == "ignore":
+            updated = self.security_event_repository.update_status(event_id, "ignored")
+            return {"event": updated, "response": None, "flow_rule": None}
+        if action == "resolve":
+            updated = self.security_event_repository.update_status(event_id, "resolved")
+            return {"event": updated, "response": None, "flow_rule": None}
+
+        blocking_event = self._with_drop_mitigation(event)
+        responses, flow_rules = self._create_responses_and_flow_rules(
+            [blocking_event],
+            approved_by="manual-operator",
+        )
+        flow_rule = flow_rules[0] if flow_rules else None
+        status = "blocked" if flow_rule and flow_rule.get("status") == "APPLIED" else "detected"
+        updated = self.security_event_repository.update_status(event_id, status)
+        return {
+            "event": updated,
+            "response": responses[0] if responses else None,
+            "flow_rule": flow_rule,
+        }
 
     @staticmethod
     def _apply_response_policy(event: dict[str, Any]) -> dict[str, Any]:
@@ -75,38 +117,46 @@ class SecurityService:
             or ("high" if event.get("mitigation") else "medium")
         ).lower()
         if severity == "critical":
-            protocol_number = {
-                "ICMP": 1,
-                "TCP": 6,
-                "UDP": 17,
-            }.get(str(event.get("protocol", "")).upper())
-            match = {
-                "eth_type": 2048,
-                "ipv4_src": event.get("src_ip"),
-                "ipv4_dst": event.get("dst_ip"),
-            }
-            if protocol_number is not None:
-                match["ip_proto"] = protocol_number
-            policy_event["recommended_action"] = "drop"
-            policy_event["mitigation"] = {
-                "action": "DROP",
-                "target": "flow",
-                "match": {
-                    key: value
-                    for key, value in match.items()
-                    if value is not None
-                },
-                "priority": 600,
-                "idle_timeout": 60,
-                "hard_timeout": 300,
-            }
+            policy_event = SecurityService._with_drop_mitigation(policy_event)
         elif severity != "high":
             policy_event["mitigation"] = None
+        return policy_event
+
+    @staticmethod
+    def _with_drop_mitigation(event: dict[str, Any]) -> dict[str, Any]:
+        policy_event = dict(event)
+        protocol_number = {
+            "ICMP": 1,
+            "TCP": 6,
+            "UDP": 17,
+        }.get(str(event.get("protocol", "")).upper())
+        match = {
+            "eth_type": 2048,
+            "ipv4_src": event.get("src_ip"),
+            "ipv4_dst": event.get("dst_ip"),
+        }
+        if protocol_number is not None:
+            match["ip_proto"] = protocol_number
+        policy_event["recommended_action"] = "drop"
+        policy_event["mitigation"] = {
+            "action": "DROP",
+            "target": "flow",
+            "match": {
+                key: value
+                for key, value in match.items()
+                if value is not None
+            },
+            "priority": 600,
+            "idle_timeout": 60,
+            "hard_timeout": 300,
+        }
         return policy_event
 
     def _create_responses_and_flow_rules(
         self,
         events: list[dict[str, Any]],
+        *,
+        approved_by: str = "automatic-policy",
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         responses = []
         flow_rules = []
@@ -127,6 +177,7 @@ class SecurityService:
                 response, flow_rule = self._apply_automatic_response(
                     response,
                     flow_rule,
+                    approved_by=approved_by,
                 )
                 responses[-1] = response
                 flow_rules.append(flow_rule)
@@ -149,16 +200,23 @@ class SecurityService:
         self,
         response: dict[str, Any],
         flow_rule: dict[str, Any],
+        *,
+        approved_by: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if flow_rule.get("status") in {"APPLIED", "APPLYING"}:
             return response, flow_rule
 
         requested_at = datetime.now(timezone.utc)
+        automatic = approved_by == "automatic-policy"
         applying_response = self.security_response_repository.update_status(
             response["id"],
             status="APPLYING",
-            decision_reason="automatically applying analyzer mitigation",
-            approved_by="automatic-policy",
+            decision_reason=(
+                "automatically applying analyzer mitigation"
+                if automatic
+                else "applying mitigation requested by manual operator"
+            ),
+            approved_by=approved_by,
             approved_at=requested_at,
             requested_at=requested_at,
         )
@@ -175,11 +233,19 @@ class SecurityService:
             status="APPLIED" if applied else "FAILED",
             response_payload=response_payload,
             decision_reason=(
-                "analyzer mitigation applied automatically"
+                (
+                    "analyzer mitigation applied automatically"
+                    if automatic
+                    else "mitigation applied by manual operator"
+                )
                 if applied
-                else "automatic analyzer mitigation failed"
+                else (
+                    "automatic analyzer mitigation failed"
+                    if automatic
+                    else "manual mitigation failed"
+                )
             ),
-            approved_by="automatic-policy",
+            approved_by=approved_by,
             approved_at=requested_at,
             requested_at=requested_at,
             completed_at=completed_at,

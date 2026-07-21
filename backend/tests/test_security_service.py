@@ -12,12 +12,26 @@ class RecordingManager:
 class StubSecurityEventRepository:
     def __init__(self):
         self.saved_events = []
+        self.events = {}
+        self.status_updates = []
 
     def save_security_events(self, events):
         self.saved_events.append(events)
+        for event in events:
+            self.events[event["event_id"]] = {**event, "id": event["event_id"]}
 
     def list_security_events(self, limit):
         return [{"event_id": "evt-1", "limit": limit}]
+
+    def get_security_event(self, event_id):
+        return self.events.get(event_id)
+
+    def update_status(self, event_id, status):
+        self.status_updates.append((event_id, status))
+        if event_id not in self.events:
+            return None
+        self.events[event_id] = {**self.events[event_id], "status": status}
+        return self.events[event_id]
 
 
 class StubSecurityResponseRepository:
@@ -56,6 +70,7 @@ class StubFlowRepository:
             return None
         return {
             "id": f"flow-{event['event_id']}",
+            "source_event_id": event["event_id"],
             "security_response_id": security_response_id,
             "status": "PENDING",
             "controller_rule_id": None,
@@ -197,6 +212,7 @@ def test_security_service_stores_events_and_broadcasts_response_context(
                 "flow_rules": [
                     {
                         "id": "flow-evt-rate-limit",
+                        "source_event_id": "evt-rate-limit",
                         "security_response_id": "response-evt-rate-limit",
                         "status": "APPLIED",
                         "controller_rule_id": "flow-evt-rate-limit",
@@ -307,3 +323,84 @@ def test_critical_event_without_mitigation_gets_drop_policy(
     assert stored_event["mitigation"]["priority"] == 600
     assert len(flow_service.applied) == 1
     assert flow_service.deleted == ["old-rate-limit"]
+    assert event_repository.status_updates == [("evt-critical", "blocked")]
+
+
+def test_manual_block_applies_drop_flow_and_updates_event_status(
+    load_service_module,
+):
+    module = load_service_module(
+        "security_service",
+        stubs={
+            "app.core.websocket": {"manager": RecordingManager()},
+            "app.repositories.flow_repository": {"FlowRepository": StubFlowRepository},
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+            "app.repositories.security_response_repository": {
+                "SecurityResponseRepository": StubSecurityResponseRepository,
+            },
+        },
+    )
+    event_repository = StubSecurityEventRepository()
+    event_repository.events["evt-manual"] = {
+        "id": "elastic-doc-1",
+        "event_id": "evt-manual",
+        "event_fingerprint": "manual-fingerprint",
+        "analyzer_id": "analyzer-1",
+        "attack_type": "PORT_SCAN",
+        "severity": "medium",
+        "src_ip": "10.0.0.3",
+        "dst_ip": "10.0.0.100",
+        "protocol": "TCP",
+        "status": "detected",
+    }
+    flow_service = StubFlowService()
+    service = module.SecurityService(
+        security_event_repository=event_repository,
+        security_response_repository=StubSecurityResponseRepository(),
+        flow_repository=StubFlowRepository(),
+        flow_service=flow_service,
+    )
+
+    result = service.respond_to_event("evt-manual", "block")
+
+    assert result["event"]["status"] == "blocked"
+    assert result["flow_rule"]["status"] == "APPLIED"
+    assert flow_service.applied[0]["source_event_id"] == "evt-manual"
+    assert flow_service.applied[0]["status"] == "PENDING"
+
+
+def test_manual_ignore_updates_event_without_creating_flow(load_service_module):
+    module = load_service_module(
+        "security_service",
+        stubs={
+            "app.core.websocket": {"manager": RecordingManager()},
+            "app.repositories.flow_repository": {"FlowRepository": StubFlowRepository},
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+            "app.repositories.security_response_repository": {
+                "SecurityResponseRepository": StubSecurityResponseRepository,
+            },
+        },
+    )
+    event_repository = StubSecurityEventRepository()
+    event_repository.events["evt-ignore"] = {
+        "id": "evt-ignore",
+        "event_id": "evt-ignore",
+        "status": "detected",
+    }
+    flow_repository = StubFlowRepository()
+    service = module.SecurityService(
+        security_event_repository=event_repository,
+        security_response_repository=StubSecurityResponseRepository(),
+        flow_repository=flow_repository,
+        flow_service=StubFlowService(),
+    )
+
+    result = service.respond_to_event("evt-ignore", "ignore")
+
+    assert result["event"]["status"] == "ignored"
+    assert result["flow_rule"] is None
+    assert flow_repository.calls == []

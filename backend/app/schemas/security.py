@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -29,3 +30,7 @@ class SecurityEventsRequest(BaseModel):
     timestamp: datetime
     analyzer_id: str
     events: list[SecurityEvent]
+
+
+class SecurityEventActionRequest(BaseModel):
+    action: Literal["block", "ignore", "resolve"]
