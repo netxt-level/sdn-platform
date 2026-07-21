@@ -20,9 +20,83 @@ class FlowService:
         self.controller_client = controller_client or ControllerClient()
 
     def get_flows(self, src_ip: str | None = None) -> dict:
+        flow_rules = self.flow_repository.list_flows(src_ip)
+        try:
+            topology = self.controller_client.get_topology()
+            stats = self.controller_client.get_stats()
+        except ControllerClientError as error:
+            return {
+                "items": flow_rules,
+                "total": len(flow_rules),
+                "controller": {
+                    "available": False,
+                    "updated_at": None,
+                    "switches": [],
+                    "links": [],
+                    "error": str(error),
+                },
+            }
+
+        counters = self._flow_counters_by_cookie(stats)
+        items = []
+        for flow_rule in flow_rules:
+            controller_response = flow_rule.get("controller_response") or {}
+            counter = counters.get((
+                flow_rule.get("switch_id"),
+                controller_response.get("cookie"),
+            ))
+            items.append({
+                **flow_rule,
+                "packet_count": (
+                    None if counter is None else counter["packet_count"]
+                ),
+                "byte_count": (
+                    None if counter is None else counter["byte_count"]
+                ),
+            })
+
         return {
-            "items": self.flow_repository.list_flows(src_ip),
+            "items": items,
+            "total": len(items),
+            "controller": {
+                "available": True,
+                "updated_at": stats.get("updated_at"),
+                "switches": topology.get("switches", []),
+                "links": topology.get("links", []),
+                "error": None,
+            },
         }
+
+    @staticmethod
+    def _flow_counters_by_cookie(stats: dict) -> dict:
+        counters = {}
+        for switch in stats.get("switches", []):
+            switch_id = switch.get("switch_id")
+            for flow in switch.get("flows", []):
+                cookie = flow.get("cookie")
+                if not switch_id or not cookie:
+                    continue
+                key = (switch_id, cookie)
+                current = counters.get(key)
+                candidate = {
+                    "packet_count": int(flow.get("packet_count") or 0),
+                    "byte_count": int(flow.get("byte_count") or 0),
+                }
+                # 동일 cookie가 여러 table에 존재해도 패킷을 중복 합산하지 않는다.
+                if current is None:
+                    counters[key] = candidate
+                else:
+                    counters[key] = {
+                        "packet_count": max(
+                            current["packet_count"],
+                            candidate["packet_count"],
+                        ),
+                        "byte_count": max(
+                            current["byte_count"],
+                            candidate["byte_count"],
+                        ),
+                    }
+        return counters
 
     def create_flow(self, data: dict) -> dict:
         flow_rule = self.flow_repository.create_manual_flow(

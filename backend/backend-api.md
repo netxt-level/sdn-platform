@@ -306,7 +306,10 @@ Elasticsearch `sdn-security-events` 인덱스의 최신 보안 이벤트에서 �
 GET /api/flows
 ```
 
-PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회한다. `src_ip`를 지정하면 `match.ipv4_src` 기준으로 필터링한다.
+PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회하고,
+Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 지정하면
+`match.ipv4_src` 기준으로 필터링한다. Controller 연결에 실패해도 DB 이력은
+반환하며 `controller.available=false`와 오류 원인을 함께 제공한다.
 
 ### Query Parameters
 
@@ -354,11 +357,37 @@ PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회�
       "timestamp": "2026-05-24T10:00:00+00:00",
       "src_ip": "10.0.0.2",
       "dst_ip": "10.0.0.4",
-      "protocol": "ICMP"
+      "protocol": "ICMP",
+      "packet_count": 31,
+      "byte_count": 3100
     }
-  ]
+  ],
+  "total": 1,
+  "controller": {
+    "available": true,
+    "updated_at": "2026-07-21T00:00:00+00:00",
+    "switches": [
+      {
+        "switch_id": "s1",
+        "dpid": "0000000000000001",
+        "state": "connected"
+      }
+    ],
+    "links": [
+      {
+        "source": "s1",
+        "destination": "s2",
+        "state": "active"
+      }
+    ],
+    "error": null
+  }
 }
 ```
+
+`packet_count`와 `byte_count`는 Controller가 저장 시 반환한 cookie와 현재
+OpenFlow 통계 cookie가 일치할 때 제공되며, 아직 통계가 수집되지 않았거나
+규칙이 스위치에 없으면 `null`이다.
 
 ### 4.2 Flow Rule 수동 생성
 

@@ -63,6 +63,27 @@ class SuccessfulControllerClient:
             "status": "REMOVED",
         }
 
+    def get_topology(self):
+        return {
+            "switches": [
+                {"switch_id": "s1", "state": "connected"},
+                {"switch_id": "s2", "state": "disconnected"},
+            ],
+            "links": [
+                {
+                    "source": "s1",
+                    "destination": "s2",
+                    "state": "active",
+                },
+            ],
+        }
+
+    def get_stats(self):
+        return {
+            "updated_at": "2026-07-21T00:00:00+00:00",
+            "switches": [],
+        }
+
 
 def flow_data():
     return {
@@ -150,6 +171,115 @@ def test_controller_failure_is_stored_as_failed(load_service_module):
         "APPLYING",
         "FAILED",
     ]
+
+
+def test_get_flows_combines_db_rules_with_live_controller_counters(
+    load_service_module,
+):
+    class StubControllerClientError(RuntimeError):
+        pass
+
+    class StatsControllerClient(SuccessfulControllerClient):
+        def get_stats(self):
+            return {
+                "updated_at": "2026-07-21T00:00:00+00:00",
+                "switches": [
+                    {
+                        "switch_id": "s1",
+                        "flows": [
+                            {
+                                "cookie": "0x5344e20000000001",
+                                "packet_count": 31,
+                                "byte_count": 3100,
+                            },
+                            {
+                                "cookie": "0x5344e20000000001",
+                                "packet_count": 30,
+                                "byte_count": 3000,
+                            },
+                        ],
+                    },
+                ],
+            }
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": StatsControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    repository.flows = [{
+        **repository.get_flow("rule-1"),
+        "controller_response": {"cookie": "0x5344e20000000001"},
+    }]
+
+    result = module.FlowService(
+        repository,
+        StatsControllerClient(),
+    ).get_flows()
+
+    assert result["total"] == 1
+    assert result["items"][0]["packet_count"] == 31
+    assert result["items"][0]["byte_count"] == 3100
+    assert result["controller"] == {
+        "available": True,
+        "updated_at": "2026-07-21T00:00:00+00:00",
+        "switches": [
+            {"switch_id": "s1", "state": "connected"},
+            {"switch_id": "s2", "state": "disconnected"},
+        ],
+        "links": [
+            {
+                "source": "s1",
+                "destination": "s2",
+                "state": "active",
+            },
+        ],
+        "error": None,
+    }
+
+
+def test_get_flows_keeps_db_history_when_controller_is_unavailable(
+    load_service_module,
+):
+    class StubControllerClientError(RuntimeError):
+        pass
+
+    class UnavailableControllerClient:
+        def get_topology(self):
+            raise StubControllerClientError("controller unavailable")
+
+    module = load_service_module(
+        "flow_service",
+        stubs={
+            "app.clients.controller": {
+                "ControllerClient": UnavailableControllerClient,
+                "ControllerClientError": StubControllerClientError,
+            },
+            "app.repositories.flow_repository": {
+                "FlowRepository": StubFlowRepository,
+            },
+        },
+    )
+    repository = StubFlowRepository()
+    repository.flows = [repository.get_flow("rule-1")]
+
+    result = module.FlowService(
+        repository,
+        UnavailableControllerClient(),
+    ).get_flows()
+
+    assert result["items"] == repository.flows
+    assert result["total"] == 1
+    assert result["controller"]["available"] is False
+    assert result["controller"]["error"] == "controller unavailable"
 
 
 def test_delete_flow_persists_removing_and_removed_lifecycle(
