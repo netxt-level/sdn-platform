@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.db.session import SessionLocal
 from app.models.flow_rule import FlowRule
@@ -136,35 +137,51 @@ class FlowRepository:
             return None
 
         action = str(mitigation["action"]).upper()
+        event_id = event.get("event_id")
         fingerprint = event.get("event_fingerprint")
 
-        with SessionLocal.begin() as session:
-            flow_rule = None
-            if fingerprint:
+        try:
+            with SessionLocal.begin() as session:
+                flow_rule = None
+                if event_id:
+                    stmt = select(FlowRule).where(
+                        FlowRule.source_event_id == event_id,
+                        FlowRule.action == action,
+                    )
+                    flow_rule = session.execute(stmt).scalar_one_or_none()
+
+                if flow_rule is None:
+                    flow_rule = FlowRule(
+                        source_event_id=event_id,
+                        source_event_fingerprint=fingerprint,
+                        security_response_id=security_response_id,
+                        analyzer_id=event["analyzer_id"],
+                        switch_id=mitigation.get("switch_id"),
+                        target=mitigation.get("target", "flow"),
+                        action=action,
+                        match=mitigation.get("match") or {},
+                        priority=int(mitigation["priority"]),
+                        idle_timeout=_optional_int(mitigation.get("idle_timeout")),
+                        hard_timeout=_optional_int(mitigation.get("hard_timeout")),
+                        rate_limit_pps=_optional_int(
+                            mitigation.get("rate_limit_pps")
+                        ),
+                    )
+                    session.add(flow_rule)
+                    session.flush()
+
+                return _to_dict(flow_rule)
+        except IntegrityError:
+            if not event_id:
+                raise
+            with SessionLocal() as session:
                 stmt = select(FlowRule).where(
-                    FlowRule.source_event_fingerprint == fingerprint,
+                    FlowRule.source_event_id == event_id,
                     FlowRule.action == action,
                 )
                 flow_rule = session.execute(stmt).scalar_one_or_none()
-
             if flow_rule is None:
-                flow_rule = FlowRule(
-                    source_event_id=event.get("event_id"),
-                    source_event_fingerprint=fingerprint,
-                    security_response_id=security_response_id,
-                    analyzer_id=event["analyzer_id"],
-                    switch_id=mitigation.get("switch_id"),
-                    target=mitigation.get("target", "flow"),
-                    action=action,
-                    match=mitigation.get("match") or {},
-                    priority=int(mitigation["priority"]),
-                    idle_timeout=_optional_int(mitigation.get("idle_timeout")),
-                    hard_timeout=_optional_int(mitigation.get("hard_timeout")),
-                    rate_limit_pps=_optional_int(mitigation.get("rate_limit_pps")),
-                )
-                session.add(flow_rule)
-                session.flush()
-
+                raise
             return _to_dict(flow_rule)
 
     def update_status(
