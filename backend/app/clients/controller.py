@@ -33,6 +33,7 @@ class ControllerClient:
         timeout_seconds: float | None = None,
         max_attempts: int | None = None,
         retry_delay_seconds: float = 0.2,
+        api_key: str | None = None,
     ):
         self.base_url = (
             settings.controller_base_url if base_url is None else base_url
@@ -48,6 +49,7 @@ class ControllerClient:
             else max_attempts
         )
         self.retry_delay_seconds = retry_delay_seconds
+        self.api_key = settings.controller_api_key if api_key is None else api_key
 
     def install_flow_rule(self, flow_rule: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -131,6 +133,7 @@ class ControllerClient:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                **({"X-API-Key": self.api_key} if self.api_key else {}),
             },
             method=method,
         )

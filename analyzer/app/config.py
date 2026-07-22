@@ -11,6 +11,7 @@ class AnalyzerConfig:
     window_sec: int
     status_interval_sec: int
     backend_base_url: str
+    backend_api_key: str
     outbox_path: str
     outbox_delivery_poll_sec: float
     outbox_delivery_batch_size: int
@@ -70,6 +71,7 @@ def load_config() -> AnalyzerConfig:
         window_sec=get_int_env("ANALYZER_WINDOW_SEC", 1),
         status_interval_sec=get_int_env("ANALYZER_STATUS_INTERVAL_SEC", 5),
         backend_base_url=os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000"),
+        backend_api_key=os.getenv("ANALYZER_API_KEY", ""),
         outbox_path=os.getenv(
             "ANALYZER_OUTBOX_PATH",
             "/var/lib/sdn-analyzer/outbox.db",

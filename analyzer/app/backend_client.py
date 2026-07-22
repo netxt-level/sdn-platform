@@ -19,10 +19,12 @@ class BackendClient:
         self,
         base_url: str,
         timeout_sec: float = 3.0,
+        api_key: str = "",
     ):
         # base_url 끝의 /를 제거해 path를 붙일 때 //가 생기지 않게 한다.
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
+        self.headers = {"X-API-Key": api_key} if api_key else {}
 
     # 패킷 요약 데이터를 백엔드에 저장하고 WebSocket으로 broadcast하게 전송
     def send_packet_summary(self, packet_summary: dict) -> bool:
@@ -69,6 +71,7 @@ class BackendClient:
             response = requests.post(
                 url,
                 json=payload,
+                headers=self.headers,
                 timeout=self.timeout_sec,
             )
             # 4xx/5xx 응답은 예외로 변환해 실패로 처리

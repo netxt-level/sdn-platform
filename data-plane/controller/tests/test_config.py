@@ -31,6 +31,15 @@ class ControllerSettingsTests(unittest.TestCase):
         self.assertEqual(18080, settings.rest_port)
         self.assertEqual(2.5, settings.stats_interval_seconds)
 
+    def test_reads_api_auth_settings(self):
+        settings = load_settings({
+            "CONTROLLER_API_KEY": "secret",
+            "ALLOW_INSECURE_DEV_AUTH": "true",
+        })
+
+        self.assertEqual("secret", settings.api_key)
+        self.assertTrue(settings.allow_insecure_dev_auth)
+
     def test_rejects_non_numeric_port(self):
         with self.assertRaisesRegex(
             ValueError,

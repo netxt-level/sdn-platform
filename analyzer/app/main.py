@@ -64,6 +64,7 @@ security_event_builder = SecurityEventBuilder(
 backend_client = BackendClient(
     base_url=BACKEND_BASE_URL,
     timeout_sec=3.0,
+    api_key=config.backend_api_key,
 )
 outbox = DurableOutbox(config.outbox_path)
 

@@ -6,6 +6,7 @@ from app.api import build_switches_response
 from app.api import build_topology_response
 from app.api import create_api
 from app.api import FlowRuleInstallRequest
+from app.api import controller_auth_error
 from app.config import ControllerSettings
 from app.datapaths import DatapathRegistry
 from app.flow_operations import FlowOperationRegistry
@@ -181,6 +182,25 @@ class ControllerApiTests(unittest.TestCase):
                 "/paths/recalculate",
             },
             routes,
+        )
+
+    def test_controller_api_requires_valid_key(self):
+        settings = ControllerSettings(
+            openflow_port=6653,
+            rest_host="127.0.0.1",
+            rest_port=8080,
+            api_key="controller-secret",
+        )
+        self.assertEqual(
+            (401, "controller API key is invalid"),
+            controller_auth_error(settings, "wrong"),
+        )
+        self.assertIsNone(controller_auth_error(settings, "controller-secret"))
+
+    def test_controller_api_fails_closed_without_configuration(self):
+        self.assertEqual(
+            (503, "controller API authentication is not configured"),
+            controller_auth_error(self.settings, None),
         )
 
     def test_post_flow_rule_returns_only_after_applied_confirmation(self):

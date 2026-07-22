@@ -4,10 +4,13 @@ from threading import Thread
 
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pydantic import Field
 from typing import Literal
 import uvicorn
+from secrets import compare_digest
 
 from app.flow_manager import build_external_flow_cookie
 from app.flow_manager import delete_external_flow_with_barrier
@@ -21,6 +24,16 @@ from app.topology import get_host_binding
 
 
 FLOW_CONFIRM_TIMEOUT_SECONDS = 5.0
+
+
+def controller_auth_error(settings, received_key):
+    if not settings.api_key:
+        if settings.allow_insecure_dev_auth:
+            return None
+        return 503, "controller API authentication is not configured"
+    if not received_key or not compare_digest(received_key, settings.api_key):
+        return 401, "controller API key is invalid"
+    return None
 
 
 class FlowRuleInstallRequest(BaseModel):
@@ -180,6 +193,20 @@ def create_api(
         redoc_url=None,
         openapi_url=None,
     )
+
+    @app.middleware("http")
+    async def authenticate_controller_api(request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+        received_key = request.headers.get("X-API-Key")
+        auth_error = controller_auth_error(settings, received_key)
+        if auth_error is not None:
+            status_code, detail = auth_error
+            return JSONResponse(
+                status_code=status_code,
+                content={"detail": detail},
+            )
+        return await call_next(request)
 
     @app.get("/health")
     def health():

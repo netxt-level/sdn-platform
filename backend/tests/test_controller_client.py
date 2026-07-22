@@ -29,6 +29,7 @@ def test_install_sends_stable_backend_rule_id_to_controller():
         base_url="http://controller:8080",
         timeout_seconds=1,
         max_attempts=1,
+        api_key="controller-secret",
     )
     response = {
         "controller_rule_id": "rule-1",
@@ -56,6 +57,7 @@ def test_install_sends_stable_backend_rule_id_to_controller():
     assert payload["rule_id"] == "rule-1"
     assert payload["rate_limit_pps"] == 100
     assert request.full_url == "http://controller:8080/flow-rules"
+    assert request.get_header("X-api-key") == "controller-secret"
 
 
 def test_http_error_preserves_controller_failure_response():

@@ -16,8 +16,16 @@ services:
       CONTROLLER_MAX_ATTEMPTS: ${CONTROLLER_MAX_ATTEMPTS:-2}
       FLOW_RECONCILE_INTERVAL_SECONDS: ${FLOW_RECONCILE_INTERVAL_SECONDS:-30}
       SWITCH_PORT_CAPACITY_BPS: ${SWITCH_PORT_CAPACITY_BPS:-10000000}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      ANALYZER_API_KEY: ${ANALYZER_API_KEY:-}
+      CONTROLLER_API_KEY: ${CONTROLLER_API_KEY:-}
+      WEBSOCKET_TOKEN_SECRET: ${WEBSOCKET_TOKEN_SECRET:-}
+      WEBSOCKET_ALLOWED_ORIGINS: ${WEBSOCKET_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      WEBSOCKET_TOKEN_TTL_SECONDS: ${WEBSOCKET_TOKEN_TTL_SECONDS:-60}
+      WEBSOCKET_SEND_TIMEOUT_SECONDS: ${WEBSOCKET_SEND_TIMEOUT_SECONDS:-2}
+      ALLOW_INSECURE_DEV_AUTH: ${ALLOW_INSECURE_DEV_AUTH:-false}
     ports:
-      - "8000:8000"
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     depends_on:
       - postgres
       - influxdb
@@ -59,6 +67,7 @@ services:
       RATE_LIMIT_HARD_TIMEOUT: ${RATE_LIMIT_HARD_TIMEOUT:-300}
       RATE_LIMIT_PPS: ${RATE_LIMIT_PPS:-100}
       BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://backend:8000}
+      ANALYZER_API_KEY: ${ANALYZER_API_KEY:-}
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -81,6 +90,8 @@ services:
       CONTROLLER_REST_HOST: ${CONTROLLER_REST_HOST:-0.0.0.0}
       CONTROLLER_REST_PORT: ${CONTROLLER_REST_PORT:-8080}
       CONTROLLER_STATS_INTERVAL_SECONDS: ${CONTROLLER_STATS_INTERVAL_SECONDS:-5}
+      CONTROLLER_API_KEY: ${CONTROLLER_API_KEY:-}
+      ALLOW_INSECURE_DEV_AUTH: ${ALLOW_INSECURE_DEV_AUTH:-false}
     healthcheck:
       test:
         - CMD
@@ -99,9 +110,10 @@ services:
     container_name: sdn-frontend
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     environment:
       BACKEND_INTERNAL_URL: ${FRONTEND_BACKEND_INTERNAL_URL:-http://backend:8000}
+      BACKEND_API_KEY: ${ADMIN_API_KEY:-}
       NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/ws/analyzer}
     depends_on:
       - backend
@@ -115,7 +127,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${POSTGRES_HOST_PORT}:5432"
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_HOST_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -131,7 +143,7 @@ services:
       DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
     ports:
-      - "${INFLUXDB_PORT}:8086"
+      - "${INFLUXDB_BIND_ADDRESS:-127.0.0.1}:${INFLUXDB_PORT}:8086"
     volumes:
       - influxdb_data:/var/lib/influxdb2
       - influxdb_config:/etc/influxdb2
@@ -145,8 +157,8 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS}
     ports:
-      - "${ELASTICSEARCH_HTTP_PORT}:9200"
-      - "${ELASTICSEARCH_TRANSPORT_PORT}:9300"
+      - "${ELASTICSEARCH_BIND_ADDRESS:-127.0.0.1}:${ELASTICSEARCH_HTTP_PORT}:9200"
+      - "${ELASTICSEARCH_BIND_ADDRESS:-127.0.0.1}:${ELASTICSEARCH_TRANSPORT_PORT}:9300"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
 

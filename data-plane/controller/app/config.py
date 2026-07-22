@@ -10,6 +10,17 @@ class ControllerSettings:
     rest_host: str
     rest_port: int
     stats_interval_seconds: float = 5.0
+    api_key: str = ""
+    allow_insecure_dev_auth: bool = False
+
+
+def _read_bool(environ, name, default=False):
+    raw_value = str(environ.get(name, "true" if default else "false")).lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _read_port(environ, name, default):
@@ -42,4 +53,9 @@ def load_settings(environ=None):
             8080,
         ),
         stats_interval_seconds=stats_interval,
+        api_key=environ.get("CONTROLLER_API_KEY", ""),
+        allow_insecure_dev_auth=_read_bool(
+            environ,
+            "ALLOW_INSECURE_DEV_AUTH",
+        ),
     )
