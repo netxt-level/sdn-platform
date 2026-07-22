@@ -34,6 +34,11 @@ services:
       ANALYZER_INTERFACE: ${ANALYZER_INTERFACE:-eth0}
       ANALYZER_WINDOW_SEC: ${ANALYZER_WINDOW_SEC:-1}
       ANALYZER_STATUS_INTERVAL_SEC: ${ANALYZER_STATUS_INTERVAL_SEC:-5}
+      ANALYZER_OUTBOX_PATH: ${ANALYZER_OUTBOX_PATH:-/var/lib/sdn-analyzer/outbox.db}
+      ANALYZER_OUTBOX_DELIVERY_POLL_SEC: ${ANALYZER_OUTBOX_DELIVERY_POLL_SEC:-1}
+      ANALYZER_OUTBOX_DELIVERY_BATCH_SIZE: ${ANALYZER_OUTBOX_DELIVERY_BATCH_SIZE:-100}
+      ANALYZER_OUTBOX_RETRY_BASE_SEC: ${ANALYZER_OUTBOX_RETRY_BASE_SEC:-1}
+      ANALYZER_OUTBOX_RETRY_MAX_SEC: ${ANALYZER_OUTBOX_RETRY_MAX_SEC:-60}
       PORT_SCAN_WINDOW_SEC: ${PORT_SCAN_WINDOW_SEC:-5}
       PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD: ${PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD:-20}
       PORT_SCAN_SYN_COUNT_THRESHOLD: ${PORT_SCAN_SYN_COUNT_THRESHOLD:-20}
@@ -59,6 +64,8 @@ services:
       - NET_ADMIN
     depends_on:
       - backend
+    volumes:
+      - analyzer_outbox:/var/lib/sdn-analyzer
 
   controller:
     profiles:
@@ -144,6 +151,7 @@ services:
       - elasticsearch_data:/usr/share/elasticsearch/data
 
 volumes:
+  analyzer_outbox:
   postgres_data:
   influxdb_data:
   influxdb_config:

@@ -11,6 +11,11 @@ class AnalyzerConfig:
     window_sec: int
     status_interval_sec: int
     backend_base_url: str
+    outbox_path: str
+    outbox_delivery_poll_sec: float
+    outbox_delivery_batch_size: int
+    outbox_retry_base_sec: float
+    outbox_retry_max_sec: float
     port_scan_window_sec: int
     port_scan_unique_dst_port_threshold: int
     port_scan_syn_count_threshold: int
@@ -59,12 +64,32 @@ def get_float_env(name: str, default: float) -> float:
 
 
 def load_config() -> AnalyzerConfig:
-    return AnalyzerConfig(
+    config = AnalyzerConfig(
         analyzer_id=os.getenv("ANALYZER_ID", "analyzer-1"),
         interface=os.getenv("ANALYZER_INTERFACE", "en0"),
         window_sec=get_int_env("ANALYZER_WINDOW_SEC", 1),
         status_interval_sec=get_int_env("ANALYZER_STATUS_INTERVAL_SEC", 5),
         backend_base_url=os.getenv("BACKEND_BASE_URL", "http://127.0.0.1:8000"),
+        outbox_path=os.getenv(
+            "ANALYZER_OUTBOX_PATH",
+            "/var/lib/sdn-analyzer/outbox.db",
+        ),
+        outbox_delivery_poll_sec=get_float_env(
+            "ANALYZER_OUTBOX_DELIVERY_POLL_SEC",
+            1.0,
+        ),
+        outbox_delivery_batch_size=get_int_env(
+            "ANALYZER_OUTBOX_DELIVERY_BATCH_SIZE",
+            100,
+        ),
+        outbox_retry_base_sec=get_float_env(
+            "ANALYZER_OUTBOX_RETRY_BASE_SEC",
+            1.0,
+        ),
+        outbox_retry_max_sec=get_float_env(
+            "ANALYZER_OUTBOX_RETRY_MAX_SEC",
+            60.0,
+        ),
         port_scan_window_sec=get_int_env("PORT_SCAN_WINDOW_SEC", 5),
         port_scan_unique_dst_port_threshold=get_int_env(
             "PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD",
@@ -106,3 +131,14 @@ def load_config() -> AnalyzerConfig:
         rate_limit_hard_timeout=get_int_env("RATE_LIMIT_HARD_TIMEOUT", 300),
         rate_limit_pps=get_int_env("RATE_LIMIT_PPS", 100),
     )
+    if config.outbox_delivery_poll_sec <= 0:
+        raise RuntimeError("ANALYZER_OUTBOX_DELIVERY_POLL_SEC must be positive")
+    if config.outbox_delivery_batch_size <= 0:
+        raise RuntimeError("ANALYZER_OUTBOX_DELIVERY_BATCH_SIZE must be positive")
+    if config.outbox_retry_base_sec <= 0:
+        raise RuntimeError("ANALYZER_OUTBOX_RETRY_BASE_SEC must be positive")
+    if config.outbox_retry_max_sec < config.outbox_retry_base_sec:
+        raise RuntimeError(
+            "ANALYZER_OUTBOX_RETRY_MAX_SEC must be at least the retry base"
+        )
+    return config
