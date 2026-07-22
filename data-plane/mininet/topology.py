@@ -23,6 +23,8 @@ from sensor import DEFAULT_SWITCH
 from sensor import SensorConfig
 from sensor import attach_mirror
 from sensor import detach_mirror
+from web_service import WebServiceConfig
+from web_service import WebServiceProxy
 
 
 SWITCH_DPIDS = {
@@ -164,6 +166,20 @@ def parse_args():
         dest="mirror_source_ports",
         help="Ingress source port to mirror; repeat for multiple ports.",
     )
+    parser.add_argument(
+        "--mutillidae-proxy",
+        action="store_true",
+        help=(
+            "Expose the loopback-only Mutillidae service as web:80 through "
+            "an isolated management veth."
+        ),
+    )
+    parser.add_argument(
+        "--mutillidae-host-port",
+        type=int,
+        default=8088,
+        help="VM loopback port published by the Mutillidae container.",
+    )
     args = parser.parse_args()
     try:
         args.link_configs = parse_link_configs(args.link_config)
@@ -274,9 +290,21 @@ def run(args):
     )
 
     mirror_attached = False
+    web_service = None
     try:
         network.build()
         network.start()
+
+        if args.mutillidae_proxy:
+            web_service = WebServiceProxy(
+                network.get("web"),
+                WebServiceConfig(target_port=args.mutillidae_host_port),
+            )
+            web_service.start()
+            print(
+                "Mutillidae proxy ready: "
+                f"web 10.0.0.100:80 -> VM loopback:{args.mutillidae_host_port}"
+            )
 
         if args.sensor_mirror:
             attach_mirror(args.sensor_config)
@@ -303,6 +331,8 @@ def run(args):
         CLI(network)
         return 0
     finally:
+        if web_service is not None:
+            web_service.stop()
         if mirror_attached:
             detach_mirror(args.sensor_config)
         network.stop()
