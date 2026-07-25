@@ -306,10 +306,7 @@ Elasticsearch `sdn-security-events` 인덱스의 최신 보안 이벤트에서 �
 GET /api/flows
 ```
 
-PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회하고,
-Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 지정하면
-`match.ipv4_src` 기준으로 필터링한다. Controller 연결에 실패해도 DB 이력은
-반환하며 `controller.available=false`와 오류 원인을 함께 제공한다.
+PostgreSQL `sdn_controller.flow_rules`에 저장된 flow rule 목록을 조회한다. `src_ip`를 지정하면 `match.ipv4_src` 기준으로 필터링한다.
 
 ### Query Parameters
 
@@ -328,7 +325,7 @@ Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 �
       "source_event_fingerprint": "0ebbf7a9e17e3c7c894f6f06be0d0405f911adab",
       "security_response_id": "resp-uuid-001",
       "analyzer_id": "analyzer-1",
-      "switch_id": "s1",
+      "switch_id": null,
       "target": "flow",
       "action": "RATE_LIMIT",
       "match": {
@@ -341,71 +338,22 @@ Controller topology 및 OpenFlow 통계 snapshot을 결합한다. `src_ip`를 �
       "idle_timeout": 60,
       "hard_timeout": 300,
       "rate_limit_pps": 100,
-      "status": "APPLIED",
-      "controller_rule_id": "rule-uuid-001",
-      "controller_response": {
-        "status": "APPLIED",
-        "switch_id": "s1",
-        "meter_id": 494950321
-      },
+      "status": "PENDING",
+      "controller_rule_id": null,
+      "controller_response": null,
       "error_message": null,
-      "requested_at": "2026-05-24T10:00:00+00:00",
-      "applied_at": "2026-05-24T10:00:01+00:00",
-      "removed_at": null,
+      "requested_at": null,
+      "applied_at": null,
       "created_at": "2026-05-24T10:00:00+00:00",
       "updated_at": "2026-05-24T10:00:00+00:00",
       "timestamp": "2026-05-24T10:00:00+00:00",
       "src_ip": "10.0.0.2",
       "dst_ip": "10.0.0.4",
-      "protocol": "ICMP",
-      "packet_count": 31,
-      "byte_count": 3100
+      "protocol": "ICMP"
     }
-  ],
-  "total": 1,
-  "controller": {
-    "available": true,
-    "updated_at": "2026-07-21T00:00:00+00:00",
-    "switches": [
-      {
-        "switch_id": "s1",
-        "dpid": "0000000000000001",
-        "state": "connected"
-      }
-    ],
-    "links": [
-      {
-        "source": "s1",
-        "destination": "s2",
-        "state": "active"
-      }
-    ],
-    "hosts": [
-      {
-        "name": "h1",
-        "mac": "00:00:00:00:00:01",
-        "ipv4": "10.0.0.1",
-        "switch_id": "s1",
-        "port": 1
-      },
-      {
-        "name": "web",
-        "mac": "00:00:00:00:01:00",
-        "ipv4": "10.0.0.100",
-        "switch_id": "s4",
-        "port": 3
-      }
-    ],
-    "error": null
-  }
+  ]
 }
 ```
-
-`packet_count`와 `byte_count`는 Controller가 저장 시 반환한 cookie와 현재
-OpenFlow 통계 cookie가 일치할 때 제공되며, 아직 통계가 수집되지 않았거나
-규칙이 스위치에 없으면 `null`이다.
-이미 종료된 `REMOVED`, `EXPIRED` 이력은 스위치 Flow Rule 목록에서 제외한다.
-`controller.hosts`는 Controller가 학습한 호스트만 포함한다.
 
 ### 4.2 Flow Rule 수동 생성
 
@@ -413,27 +361,7 @@ OpenFlow 통계 cookie가 일치할 때 제공되며, 아직 통계가 수집되
 POST /api/flows
 ```
 
-운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL
-`sdn_controller.flow_rules`에 저장하고 SDN Controller의
-`POST /flow-rules`로 전송한다. 저장 상태는 다음 순서로 변경된다.
-
-현재 수동 생성 화면은 Controller가 학습한 출발지 호스트와 `web` 목적지를
-사용한다. 운영자는 출발지, 프로토콜, 목적지 포트만 선택하며 화면이
-`eth_type`, `ipv4_src`, `ipv4_dst`, `ip_proto`, TCP/UDP 목적지 포트와
-출발지의 연결 switch를 자동으로 구성한다. ICMP는 포트 조건을 만들지 않는다.
-`모든 포트 접근 금지`를 선택하면 TCP/UDP 목적지 포트 조건을 생략하고 action을
-`DROP`으로 고정해 선택한 프로토콜의 모든 목적지 포트를 차단한다.
-
-```text
-PENDING -> APPLYING -> APPLIED
-                    -> FAILED
-```
-
-`APPLIED`는 Controller가 Flow-Mod 뒤의 OpenFlow Barrier Reply를 받은 경우에만
-기록한다. Controller 연결 실패, 미연결 switch, 유효하지 않은 match/action,
-OpenFlow Error 및 Barrier timeout은 `FAILED`로 기록하고 `controller_response`와
-`error_message`를 보존한다. 네트워크 연결 오류는 동일한 backend rule ID로
-최대 `CONTROLLER_MAX_ATTEMPTS`만큼 재시도한다.
+운영자가 Flow Rule 화면에서 입력한 rule을 PostgreSQL `sdn_controller.flow_rules`에 `PENDING` 상태로 저장한다. 현재 구현은 DB 생성까지이며 SDN 컨트롤러 실제 설치는 수행하지 않는다.
 
 ### Request Body
 
@@ -465,46 +393,7 @@ OpenFlow Error 및 Barrier timeout은 `FAILED`로 기록하고 `controller_respo
 
 ### Response Body
 
-최종 저장된 flow rule 객체를 반환한다. 응답 필드는 `GET /api/flows`의 item과
-동일하며 성공 시 `status=APPLIED`, 실패 시 `status=FAILED`다. 실패한 요청도
-DB 레코드는 유지된다.
-
-현재 Controller 설치 action은 `DROP`, `OUTPUT:<port|인접 switch>`,
-`RATE_LIMIT`을 지원한다. 예: `OUTPUT:4`, `output:s2`. `RATE_LIMIT`은
-`rate_limit_pps`를 OpenFlow 1.3 Meter의 PKTPS 단위로 사용하며 적용된
-`meter_id`는 `controller_response`에 저장된다.
-
-### 4.3 Flow Rule 삭제
-
-```http
-DELETE /api/flows/{flow_rule_id}
-```
-
-PostgreSQL의 Flow Rule을 조회한 뒤 Controller
-`DELETE /flow-rules/{controller_rule_id}`에 전달한다. Controller는 rule ID로
-계산한 정확한 cookie만 Table 0에서 삭제하고 Barrier Reply를 확인한다.
-
-```text
-APPLIED -> REMOVING -> REMOVED
-                    -> REMOVE_FAILED
-```
-
-성공 시 Controller의 `REMOVED` 응답을 반환한 뒤 PostgreSQL의 해당 Flow Rule
-레코드를 영구 삭제하므로 다음 `GET /api/flows` 목록에는 나타나지 않는다.
-`RATE_LIMIT` 규칙의 마지막 Meter 참조도 함께 해제한다. Controller 제거가
-실패한 레코드는 `REMOVE_FAILED` 상태와 오류를 저장해 재시도하며, 존재하지
-않는 Backend rule ID는 HTTP 404를 반환한다.
-
-### 4.4 Flow Rule 상태 재조정
-
-```http
-POST /api/flows/reconcile
-```
-
-Controller의 현재 Flow Rule 목록과 PostgreSQL을 비교한다. Controller가
-`EXPIRED` 또는 `REMOVED`로 보고한 상태를 DB에 반영하며, Backend에는
-`APPLIED`지만 Controller 추적 목록에 없는 규칙은 동일 rule ID/cookie로 다시
-설치한다. Controller 연결 실패는 명시적인 `FAILED` 결과로 반환한다.
+생성된 flow rule 객체를 반환한다. 응답 필드는 `GET /api/flows`의 item과 동일하다.
 
 ## 5. Path API
 
@@ -514,10 +403,7 @@ Controller의 현재 Flow Rule 목록과 PostgreSQL을 비교한다. Controller�
 GET /api/path/status
 ```
 
-Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치별 BPS와
-포트 용량 대비 사용률을 계산한다. 링크별 사용률은 양 끝의 실제 연결 포트
-counter를 사용하며, 물리 링크 상태(`state`)와 선택 경로 여부(`selected`)를
-분리해 반환한다.
+대시보드 요약과 `sdn_controller.flow_rules`를 조합해 경로 제어 화면에서 사용할 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
 
 ### Response Body
 
@@ -544,47 +430,11 @@ counter를 사용하며, 물리 링크 상태(`state`)와 선택 경로 여부(`
       "id": "s1-s2",
       "source": "s1",
       "target": "s2",
-      "source_port": 4,
-      "target_port": 1,
       "path": "primary",
-      "state": "active",
-      "selected": false,
-      "active": true,
-      "bps": 1000000.0,
-      "rx_bps": 1000000.0,
-      "tx_bps": 500000.0,
-      "utilization": 10.0,
-      "capacity_bps": 10000000,
-      "sampled": true
+      "active": false,
+      "utilization": 0
     }
   ],
-  "switches": [
-    {
-      "switch_id": "s1",
-      "dpid": "0000000000000001",
-      "state": "connected",
-      "bps": 2000000.0,
-      "rx_bps": 1000000.0,
-      "tx_bps": 2000000.0,
-      "utilization": 20.0,
-      "capacity_bps": 10000000,
-      "sample_interval_seconds": 5.0,
-      "sampled": true,
-      "ports": [
-        {
-          "port_no": 4,
-          "bps": 1000000.0,
-          "rx_bps": 1000000.0,
-          "tx_bps": 500000.0,
-          "utilization": 10.0,
-          "capacity_bps": 10000000,
-          "sampled": true
-        }
-      ],
-      "status": "normal"
-    }
-  ],
-  "utilization_source": "openflow_port_counter_delta",
   "history": [
     {
       "id": "rule-uuid-001",
@@ -598,15 +448,7 @@ counter를 사용하며, 물리 링크 상태(`state`)와 선택 경로 여부(`
 }
 ```
 
-사용률은 topology에 등록된 호스트/스위치 연결 포트의 RX/TX byte 증분을
-BPS로 변환해 계산한다. OVS 미러 출력처럼 topology에 없는 관측용 포트는
-스위치 사용률에서 제외한다. 링크 BPS와 사용률은 양 끝 연결 포트 중 더 큰
-단방향 값을 사용한다. 기준 포트 용량은
-`SWITCH_PORT_CAPACITY_BPS`로 설정하며 기본값은 10 Mbps다. 첫 snapshot은
-비교 대상이 없어 `sampled=false`, `status=sampling`을 반환한다. 70% 이상은
-`warning`, 90% 이상은 `critical`이다. `active_path`는 Controller topology의
-primary 링크 상태를 우선 반영한다. `links[].active`/`state`는 실제 물리 링크
-상태이고, `links[].selected`는 현재 트래픽 경로 선택 여부다.
+현재 `active_path`는 네트워크 상태와 `PENDING` 대응 flow rule 존재 여부를 기반으로 파생한다. 실제 컨트롤러 경로 전환 상태와 동기화하는 기능은 아직 연결되어 있지 않다.
 
 ## 6. Security API
 
@@ -625,10 +467,8 @@ POST /api/security/events
 ### Side Effects
 
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
-- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 저장한다.
-- 이벤트에 `mitigation`이 없으면 대응 내역을 `PENDING`으로 유지한다.
-- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule을 생성하고 Controller에 자동 전송한다.
-- Barrier 확인 결과에 따라 flow rule과 대응 내역을 `APPLIED` 또는 `FAILED`로 저장한다. Analyzer payload에 `switch_id`가 없으면 Controller가 학습한 `ipv4_src`의 접속 switch를 사용한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
 - WebSocket으로 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 
 `security_responses`는 `event_fingerprint + response_action`, `flow_rules`는 `event_fingerprint + action` 기준으로 중복 생성을 방지한다.
@@ -722,26 +562,18 @@ PostgreSQL `sdn_controller.security_responses`에 저장된 최신 보안 대응
       "recommended_action": "rate_limit",
       "response_action": "RATE_LIMIT",
       "response_level": "L2",
-      "status": "APPLIED",
-      "decision_reason": "analyzer mitigation applied automatically",
+      "status": "PENDING",
+      "decision_reason": "created from analyzer security event recommendation",
       "mitigation": {
         "action": "RATE_LIMIT",
         "target": "flow"
       },
-      "response_payload": {
-        "flow_rule_id": "rule-uuid-001",
-        "controller_rule_id": "rule-uuid-001",
-        "controller_response": {
-          "status": "APPLIED",
-          "switch_id": "s1",
-          "meter_id": 494950321
-        }
-      },
-      "approved_by": "automatic-policy",
+      "response_payload": null,
+      "approved_by": null,
       "detected_at": "2026-05-24T10:00:00+00:00",
-      "approved_at": "2026-05-24T10:00:00+00:00",
-      "requested_at": "2026-05-24T10:00:00+00:00",
-      "completed_at": "2026-05-24T10:00:01+00:00",
+      "approved_at": null,
+      "requested_at": null,
+      "completed_at": null,
       "error_message": null,
       "created_at": "2026-05-24T10:00:00+00:00",
       "updated_at": "2026-05-24T10:00:00+00:00"
