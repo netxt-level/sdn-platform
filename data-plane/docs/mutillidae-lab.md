@@ -108,3 +108,6 @@ Mininet CLI에서 `exit`한 뒤 컨테이너를 중지한다.
 
 DB와 적용 가능한 보조 서비스 볼륨은 보존된다. DB를 초기 상태로 되돌릴 때는
 다음 시작에서 명시적으로 `--initialize`를 사용한다.
+
+정상 100명, 피크 300명, 스트레스 500명을 기준으로 한 웹 부하와 SDN 경로
+테스트 계획은 `data-plane/docs/web-load-test-plan.md`를 참고한다.
