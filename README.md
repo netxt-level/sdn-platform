@@ -1,344 +1,419 @@
 # SDN Platform
 
-SDN Platform은 네트워크 트래픽을 수집, 분석하고 대시보드에서 실시간으로 확인하기 위한 통합 플랫폼이다. 현재 구현은 분석 서버, 백엔드 API 서버, 프론트엔드 대시보드, PostgreSQL, InfluxDB, Elasticsearch를 Docker Compose로 함께 실행하는 구조다.
+> 탐지부터 대응 검증까지 연결하는 네트워크 보안 자동화 플랫폼
 
-## 현재 진행 요약
+SDN Platform은 네트워크 트래픽에서 위협을 탐지하고, 탐지 결과를 실행 가능한
+대응 정책으로 변환하며, SDN Controller를 통해 정책을 적용한 뒤 실제 적용
+상태까지 추적한다.
 
-| 영역 | 경로 | 진행 상태 |
-|---|---|---|
-| 분석 서버 | `analyzer/` | 패킷 캡처, 패킷 요약, ICMP Flood/Port Scan 탐지, 백엔드 전송 구현 |
-| 백엔드 서버 | `backend/` | 분석 데이터 수신, DB 저장, 조회/생성 API, WebSocket broadcast 구현 |
-| 프론트엔드 | `frontend/` | 실시간 대시보드와 보안 이벤트/경로/Flow Rule 운영 화면 구현 |
-
-## 전체 구조
+이 프로젝트의 중심은 스위치 자체나 트래픽 대시보드가 아니다. 핵심은 다음
+보안 대응 흐름을 하나의 시스템으로 연결하는 것이다.
 
 ```text
-패킷 캡처
-  -> analyzer
-  -> backend API
-  -> PostgreSQL / InfluxDB / Elasticsearch
-  -> WebSocket / REST API
-  -> frontend dashboard
+관측          탐지          정책 판단          대응 적용          결과 검증
+Packet ──> Analyzer ──> Backend ──> Controller ──> Flow/Meter
+   ^                          │                         │
+   └──────────────────────────┴── 통계·상태 재조정 <───┘
 ```
 
-### 주요 서비스
+Mininet과 Open vSwitch는 제품의 목적이 아니라 이 흐름이 실제 네트워크
+동작으로 이어지는지 재현하고 검증하기 위한 격리된 실행 환경이다.
 
-| 서비스 | 기본 포트 | 역할 |
-|---|---:|---|
-| Frontend | `3000` | Next.js 대시보드 |
-| Backend | `8000` | FastAPI API 서버 |
-| PostgreSQL | `5433` -> `5432` | 분석 서버 상태 저장 |
-| InfluxDB | `8086` | 트래픽 시계열/탐지 지표 저장 |
-| Elasticsearch | `9200`, `9300` | 보안 이벤트 저장 |
+## 해결하려는 문제
 
-## 기술 스택
+일반적인 모니터링 시스템은 이상 트래픽을 보여주거나 알림을 발생시키는 데서
+끝난다. 실제 네트워크 대응은 운영자가 별도의 장비나 도구에서 수행해야 하며,
+명령이 정상적으로 적용됐는지도 다시 확인해야 한다.
 
-### Analyzer
+SDN Platform은 이 간극을 다음과 같이 연결한다.
 
-- Python
-- Scapy
-- requests
+1. 네트워크 패킷과 트래픽 지표를 수집한다.
+2. 공격 유형과 심각도를 판별하고 보안 이벤트를 생성한다.
+3. 이벤트를 `RATE_LIMIT` 또는 `DROP` 같은 대응 정책으로 변환한다.
+4. SDN Controller가 OpenFlow Rule과 OVS Meter를 적용한다.
+5. Barrier 응답, Flow 통계, Controller 상태를 이용해 적용 결과를 확인한다.
+6. Backend 기록과 실제 Controller 상태가 다르면 재조정한다.
+7. 운영자는 전체 탐지·판단·대응 이력을 대시보드에서 확인하고 개입할 수 있다.
 
-### Backend
+대표 검증 시나리오는 다음과 같다.
 
-- Python
-- FastAPI
-- SQLAlchemy
-- psycopg
-- InfluxDB Client
-- Elasticsearch Python Client
-- Alembic
+```text
+격리된 공격 트래픽 발생
+  -> Analyzer가 이상 징후 탐지
+  -> Backend가 이벤트 저장 및 대응 정책 결정
+  -> Controller가 RATE_LIMIT 또는 DROP 적용
+  -> OVS Flow/Meter와 트래픽 통계로 효과 확인
+  -> Backend와 대시보드에 최종 상태 반영
+```
 
-### Frontend
+## 제품 범위
 
-- Next.js 15
-- React 19
-- TypeScript
-- Tailwind CSS
-- Recharts
-- lucide-react
+### 핵심 기능
 
-### Infrastructure
+- 패킷 캡처와 트래픽 요약
+- ICMP Flood 및 TCP SYN 기반 Port Scan 탐지
+- 탐지 이벤트의 심각도·대응 레벨·중복 억제 정책
+- 자동 또는 운영자 승인 기반 보안 대응
+- `DROP`, `OUTPUT`, `RATE_LIMIT` Flow Rule 적용
+- OVS Meter 기반 패킷 속도 제한
+- Flow Rule 적용·실패·제거·만료 lifecycle 추적
+- Backend–Controller 상태 재조정
+- 보안 이벤트, 대응 내역, Flow 통계의 실시간 시각화
 
-- Docker Compose
+### 대응을 지지하는 네트워크 기능
 
-## 구현된 기능
+- OpenFlow 1.3 스위치 연결과 L2 Forwarding
+- 호스트 학습과 최단 경로 계산
+- Primary/Backup 경로와 링크 장애 우회
+- 포트·Flow 통계 수집과 혼잡 기반 경로 재계산
+- OVS Mirror와 전용 Sensor 인터페이스를 이용한 Analyzer 캡처 경로
 
-보안 탐지 항목과 대응 레벨 정책은 `SECURITY_DETECTION_POLICY.md`를 기준으로 한다.
+### 실행·검증 환경
 
-### 분석 서버
+- Mininet 기반 격리 토폴로지
+- Open vSwitch 기반 Flow Rule 및 Meter 검증
+- Multipass Ubuntu VM 기반 macOS/Windows 개발 환경
+- Mutillidae 기반 격리 웹 보안 실험 환경
+- 공격 탐지, 자동 대응, 장애 우회, 속도 제한 자동 검증 시나리오
 
-- 지정 네트워크 인터페이스에서 패킷 캡처
-- IP, 포트, 프로토콜, 패킷 크기, TCP flag 등 메타데이터 파싱
-- `ANALYZER_WINDOW_SEC` 단위 패킷 요약 생성
-- 프로토콜별 패킷 수 집계
-- 출발지/목적지/프로토콜별 host traffic 집계
-- 전체 패킷 수와 전체 bit 수 계산
-- ICMP pps 기반 ICMP Flood 탐지
-- TCP SYN 패턴 기반 Port Scan 의심 탐지
-- 분석 서버 상태 주기적 보고
-- 백엔드 전송 실패, timeout, HTTP 오류 처리
-- 분석 루프/상태 전송 루프 예외 발생 시 오류 상태 기록 후 루프 유지
+공격 및 부하 생성 시나리오는 반드시 격리된 Mininet Lab 안에서만 실행한다.
 
-### 백엔드 서버
+## 시스템 구성
 
-- 분석 서버 상태 수신 및 PostgreSQL upsert
-- 패킷 요약 수신 및 InfluxDB 저장
-- 트래픽 상태 요약 수신 및 InfluxDB 저장
-- 보안 이벤트 수신 및 Elasticsearch 저장
-- 대시보드 조회 API 제공
-- 보안 이벤트 조회 API 제공
-- Flow 목록 조회 및 수동 Flow Rule 생성 API 제공
-- 경로 제어 상태 조회 API 제공
-- 보안 대응 내역과 flow rule을 PostgreSQL에 저장하고 mitigation을 Controller에 자동 적용
-- WebSocket으로 분석 이벤트 실시간 broadcast
-
-### 프론트엔드
-
-- 분석 서버 상태 표시
-- 전체 패킷, BPS, 의심 호스트 수 등 주요 지표 표시
-- 최근 5분 트래픽 시계열 차트
-- 최근 1분 프로토콜 통계 표시
-- 의심 호스트 목록 표시
-- ICMP Flood/Port Scan 유형별 필터링
-- WebSocket 실시간 수신
-- 백엔드 히스토리 API 초기 조회
-- DB 의심 호스트 polling 및 실시간 데이터 병합
-- 보안 이벤트 목록/상세 화면을 실제 보안 이벤트 API에 연결
-- 처리 완료/긴급 처리 필터와 미처리 high 이상 이벤트 알림 표시
-- 대시보드 스위치 사용률을 백엔드 경로 상태 API에 연결
-- Flow Rule 화면을 실제 조회/수동 생성 API에 연결
-
-## 화면 구성
-
-| 화면 | 경로 | 상태 |
-|---|---|---|
-| 대시보드 | `/` | 구현됨 |
-| Flow Rules | `/flow-rules` | 구현됨 |
-| Security Events | `/security/events` | 구현됨 |
-| Topology | `/topology` | 구현중 |
-| Settings | `/settings` | 구현중 |
-
-## API 요약
-
-### Backend HTTP API
-
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `GET` | `/health` | 백엔드 상태 확인 |
-| `GET` | `/api/analyzer/status` | 분석 서버 상태 조회 |
-| `POST` | `/api/analyzer/status` | 분석 서버 상태 수신 |
-| `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
-| `POST` | `/api/analyzer/detection-summary` | 트래픽 상태 요약 수신 |
-| `GET` | `/api/dashboard/summary` | 대시보드 요약 조회 |
-| `GET` | `/api/dashboard/traffic` | 트래픽 시계열 조회 |
-| `GET` | `/api/dashboard/protocols` | 프로토콜 통계 조회 |
-| `GET` | `/api/dashboard/suspicious-hosts` | 의심 호스트 조회 |
-| `GET` | `/api/flows` | Flow 목록 조회 |
-| `POST` | `/api/flows` | 수동 Flow Rule 생성 |
-| `DELETE` | `/api/flows/{id}` | Flow Rule 제거 |
-| `POST` | `/api/flows/reconcile` | Backend–Controller Flow Rule 상태 재조정 |
-| `GET` | `/api/path/status` | 경로 제어 상태 조회 |
-| `GET` | `/api/security/events` | 보안 이벤트 조회 |
-| `GET` | `/api/security/responses` | 보안 대응 내역 조회 |
-
-### WebSocket
-
-| 경로 | 설명 |
+| 구성요소 | 책임 |
 |---|---|
-| `/ws/analyzer` | 분석 서버 상태, 패킷 요약, 탐지 요약 실시간 broadcast |
+| Analyzer | 패킷 캡처, 트래픽 집계, 이상 징후 탐지, 전달 실패 데이터 보존 |
+| Backend | 이벤트 저장, 대응 정책 결정, Flow lifecycle 관리, Controller 연동 및 재조정 |
+| Controller | OpenFlow Rule과 Meter 적용, 경로 계산, 스위치·토폴로지·통계 관리 |
+| Frontend | 탐지 이벤트, 대응 결과, Flow Rule, 토폴로지, 서비스 상태 표시 및 운영자 개입 |
+| PostgreSQL | Analyzer 상태, 보안 대응, Flow Rule, 런타임 설정 저장 |
+| InfluxDB | 트래픽·프로토콜·호스트·네트워크 시계열 저장 |
+| Elasticsearch | 보안 이벤트와 탐지 문서 저장 |
+| Mininet/OVS | Controller 명령의 실행 대상이자 전체 보안 자동화 흐름의 검증 환경 |
 
-현재 백엔드가 직접 broadcast하는 메시지 타입은 다음과 같다.
+### 배치 구조
 
-| 타입 | 발생 시점 |
+기본 개발 환경은 제어 영역과 Linux 데이터 플레인을 분리한다.
+
+```text
+Development host                         Ubuntu Multipass VM
+----------------                         -------------------
+Frontend                                 Analyzer
+Backend                                  SDN Controller
+PostgreSQL / InfluxDB / Elasticsearch    Mininet / Open vSwitch
+                                         Sensor veth / OVS Mirror
+```
+
+Analyzer는 VM의 기본 네트워크 인터페이스가 아니라 OVS Mirror에 연결된 전용
+`sdn-sensor0` 인터페이스에서 Mininet 트래픽을 관찰한다.
+
+## 탐지와 대응
+
+탐지 기준과 대응 레벨은
+[`SECURITY_DETECTION_POLICY.md`](SECURITY_DETECTION_POLICY.md)를 기준으로 한다.
+
+| 탐지 유형 | 주요 기준 | 기본 처리 |
+|---|---|---|
+| `PORT_SCAN` | TCP SYN, 동일 출발지·목적지, 고유 목적지 포트 수 | 관찰 또는 운영자 판단 |
+| `ICMP_FLOOD` | 동일 출발지·목적지의 ICMP PPS 임계값 | 정책에 따른 Rate Limit 후보 |
+
+Backend는 이벤트 심각도와 mitigation을 검토해 대응 여부를 결정한다. 자동
+대응 설정을 끌 수 있으며, 운영자는 Security Events 화면에서 이벤트를 직접
+차단·무시·종료할 수 있다.
+
+### 상태 추적
+
+보안 이벤트는 다음 운영 상태를 사용한다.
+
+```text
+detected -> blocked | ignored | resolved
+```
+
+보안 대응과 Flow Rule은 요청과 실제 적용 결과를 분리해 기록한다.
+
+```text
+PENDING -> APPLYING -> APPLIED
+                    -> FAILED
+
+APPLIED -> REMOVING -> REMOVED
+                     -> REMOVE_FAILED
+        -> EXPIRED
+```
+
+Flow Rule은 Controller가 OpenFlow Barrier Reply를 확인한 뒤에만 `APPLIED`로
+기록된다. Backend는 주기적으로 Controller의 실제 규칙과 저장된 상태를
+비교해 누락되거나 만료된 규칙을 재조정한다.
+
+## 현재 구현 상태
+
+| 영역 | 상태 |
 |---|---|
-| `analyzer_status` | 분석 서버 상태 수신 후 |
-| `packet_summary` | 패킷 요약 수신 후 |
-| `detection_summary` | 탐지 요약 수신 후 |
-| `security_events` | 보안 이벤트 수신 후 |
+| 패킷 캡처·요약 | 구현 |
+| Port Scan·ICMP Flood 탐지 | 구현 |
+| 보안 이벤트 저장·실시간 전달 | 구현 |
+| 자동/수동 대응 정책 | 구현 |
+| Flow Rule 설치·삭제·상태 재조정 | 구현 |
+| OVS Meter 기반 `RATE_LIMIT` | 구현 |
+| L2 Forwarding·최단 경로·장애 우회 | 구현 |
+| OVS Mirror 기반 Analyzer 관찰 경로 | 구현 |
+| 토폴로지·Flow·보안 이벤트 운영 화면 | 구현 |
+| 격리된 데이터 플레인 자동 검증 | 구현 |
 
-상세 API 명세는 아래 문서를 참고한다.
+세부 구현 현황은
+[`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md)에서 확인할 수 있다.
 
-- `backend/backend-api.md`
-- `analyzer/analyzer-backend-api.md`
+## 프로젝트 구조
 
-## 실행 방법
+```text
+analyzer/                 패킷 수집, 탐지, Backend 전송
+backend/                  정책 판단, 저장, API, Controller 연동
+frontend/                 보안 운영 대시보드
+data-plane/
+  controller/             OpenFlow 1.3 Controller
+  mininet/                토폴로지와 검증 시나리오
+  infrastructure/         Multipass VM 구성
+  scripts/                시작, 종료, 정리, 검증
+  docs/                   데이터 플레인 운영 문서
+migrations/               PostgreSQL Alembic migration
+docker-compose.yml        전체 서비스 정의
+```
 
-### 1. 환경변수 준비
+## 시작하기
+
+### 1. 사전 요구사항
+
+- Docker와 Docker Compose
+- 전체 데이터 플레인 검증 시 Multipass
+- 프로젝트 루트의 `.env`
+
+Mininet과 Open vSwitch는 Linux 커널 기능을 사용하므로 macOS와 Windows에서는
+Multipass Ubuntu VM이 필요하다.
+
+### 2. 환경변수 준비
 
 ```bash
 cp .env.example .env
 ```
 
-기본값은 Docker Compose 실행 기준으로 작성되어 있다. 분석 서버가 캡처할 인터페이스는 환경에 맞게 수정해야 한다.
+`.env.example`의 다음 값은 실행 전에 서로 다른 안전한 값으로 교체한다.
 
-```env
-ANALYZER_INTERFACE=eth0
-```
+- `POSTGRES_PASSWORD`
+- `INFLUXDB_PASSWORD`
+- `INFLUXDB_TOKEN`
+- `ADMIN_API_KEY`
+- `ANALYZER_API_KEY`
+- `CONTROLLER_API_KEY`
+- `WEBSOCKET_TOKEN_SECRET`
 
-로컬 macOS에서 직접 분석 서버를 실행하는 경우에는 보통 `en0` 같은 인터페이스를 사용한다.
+인증 키가 비어 있으면 보호된 API가 요청을 거부한다. `.env.example`의 예시
+값은 공개된 값이므로 그대로 사용하지 않는다. 격리된 로컬 개발에서만 인증을
+생략해야 할 경우 `ALLOW_INSECURE_DEV_AUTH=true`를 명시적으로 사용한다.
 
-### 2. 전체 서비스 실행
+### 3. 애플리케이션 영역만 실행
+
+Controller와 Mininet 없이 Backend, Frontend, 저장소를 확인하려면 다음과
+같이 실행한다.
 
 ```bash
-docker compose up --build
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.control-plane.yml \
+  up -d --build postgres influxdb elasticsearch
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.control-plane.yml \
+  run --rm migrate
+
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.control-plane.yml \
+  up -d --build backend frontend
 ```
 
-실행 후 주요 접속 URL은 다음과 같다.
-
-| 항목 | URL |
+| 서비스 | 기본 주소 |
 |---|---|
-| 프론트엔드 | `http://localhost:3000` |
-| 백엔드 API | `http://localhost:8000` |
-| FastAPI Docs | `http://localhost:8000/docs` |
-| InfluxDB | `http://localhost:8086` |
-| Elasticsearch | `http://localhost:9200` |
+| Frontend | `http://127.0.0.1:3000` |
+| Backend | `http://127.0.0.1:8000` |
+| Backend Health | `http://127.0.0.1:8000/health` |
 
-### 3. 백엔드 상태 확인
+Backend의 Swagger/OpenAPI 문서는 보안상 기본 비활성화되어 있다.
 
-```bash
-curl http://localhost:8000/health
-```
+### 4. 전체 보안 자동화 환경 실행
 
-정상 응답:
-
-```json
-{
-  "status": "ok"
-}
-```
-
-### 4. 서비스 종료
+macOS 또는 Linux 호스트에서는 기본 `dataplane` 프로필을 권장한다.
 
 ```bash
-docker compose down
+./data-plane/infrastructure/multipass/bootstrap.sh
 ```
 
-볼륨까지 삭제하려면 다음 명령을 사용한다.
+Windows PowerShell:
+
+```powershell
+.\data-plane\infrastructure\multipass\bootstrap.ps1
+```
+
+이 명령은 호스트에 Backend, Frontend, 저장소를 실행하고 VM에 Analyzer,
+Controller, Mininet/OVS 실행 환경과 Sensor 인터페이스를 구성한다.
+
+모든 서비스를 VM 안에서 실행하려면 다음 프로필을 사용한다.
 
 ```bash
-docker compose down -v
+./data-plane/infrastructure/multipass/bootstrap.sh --profile full
 ```
 
-## 환경변수
+자세한 설치와 복구 절차는
+[`data-plane/docs/vm-setup.md`](data-plane/docs/vm-setup.md)를 참고한다.
 
-주요 환경변수는 `.env.example`에 정의되어 있다.
+### 5. 상태 확인
 
-| 이름 | 기본값 | 설명 |
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Controller는 VM 내부에서 실행된다.
+
+```bash
+VM_IP="$(multipass list --format csv | awk -F, '$1 == "sdn-lab" {print $3}')"
+curl "http://${VM_IP}:8080/health"
+curl "http://${VM_IP}:8080/switches"
+```
+
+### 6. 종료와 정리
+
+애플리케이션 영역 종료:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.control-plane.yml \
+  down
+```
+
+Mininet, OVS, Sensor 상태 정리:
+
+```bash
+./data-plane/scripts/cleanup.sh
+```
+
+데이터베이스 볼륨 삭제는 저장 데이터를 영구 제거하므로 필요한 경우에만
+`docker compose down -v`를 실행한다.
+
+## 주요 API
+
+관리 API는 `X-API-Key: <ADMIN_API_KEY>`, Analyzer 수신 API는
+`X-API-Key: <ANALYZER_API_KEY>`를 요구한다.
+
+### 탐지 수신과 조회
+
+| 메서드 | 경로 | 설명 |
 |---|---|---|
-| `POSTGRES_DB` | `sdn_platform` | PostgreSQL DB 이름 |
-| `POSTGRES_USER` | `sdn_user` | PostgreSQL 사용자 |
-| `POSTGRES_PASSWORD` | `sdn_password` | PostgreSQL 비밀번호 |
-| `POSTGRES_HOST_PORT` | `5433` | 호스트에서 접근할 PostgreSQL 포트 |
-| `INFLUXDB_ORG` | `sdn_org` | InfluxDB organization |
-| `INFLUXDB_BUCKET` | `sdn_metrics` | InfluxDB bucket |
-| `INFLUXDB_TOKEN` | `influx_id_token` | InfluxDB admin token |
-| `ELASTICSEARCH_HTTP_PORT` | `9200` | Elasticsearch HTTP 포트 |
-| `ANALYZER_ID` | `analyzer-1` | 분석 서버 ID |
-| `ANALYZER_INTERFACE` | `eth0` | 패킷 캡처 인터페이스 |
-| `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 생성 주기 |
-| `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 분석 서버 상태 전송 주기 |
-| `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
-| `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
-| `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
-| `PORT_SCAN_MULTI_TARGET_WINDOW_SEC` | `30` | Port Scan 다중 목적지 판단 윈도우 |
-| `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
-| `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
-| `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
-| `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
-| `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
-| `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
-| `ICMP_HIGH_PPS_MULTIPLIER` | `3.0` | ICMP Flood high pps 배수 기준 |
-| `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | ICMP baseline 급증 배수 기준 |
-| `ICMP_BASELINE_MIN_PPS` | `100` | ICMP baseline 급증 최소 pps 기준 |
-| `ICMP_ALERT_COOLDOWN_SEC` | `60` | ICMP Flood 중복 알림 억제 시간 |
-| `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
-| `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
-| `RATE_LIMIT_IDLE_TIMEOUT` | `60` | Rate limit 후보 idle timeout |
-| `RATE_LIMIT_HARD_TIMEOUT` | `300` | Rate limit 후보 hard timeout |
-| `RATE_LIMIT_PPS` | `100` | Rate limit 후보 제한 pps |
-| `BACKEND_BASE_URL` | `http://backend:8000` | 분석 서버가 호출할 백엔드 주소 |
-| `FRONTEND_PORT` | `3000` | 프론트엔드 호스트 포트 |
-| `FRONTEND_BACKEND_INTERNAL_URL` | `http://backend:8000` | Next.js rewrite가 사용할 내부 백엔드 주소 |
-| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8000/ws/analyzer` | 브라우저 WebSocket 주소 |
-| `SWITCH_PORT_CAPACITY_BPS` | `10000000` | 스위치 사용률 계산 기준 포트 용량(bps) |
+| `POST` | `/api/analyzer/packet-summary` | 패킷 요약 수신 |
+| `POST` | `/api/analyzer/detection-summary` | 트래픽·탐지 요약 수신 |
+| `POST` | `/api/security/events` | 보안 이벤트 수신 및 대응 정책 처리 |
+| `GET` | `/api/security/events` | 보안 이벤트 조회 |
+| `GET` | `/api/security/responses` | 대응 이력 조회 |
+| `POST` | `/api/security/events/{event_id}/actions` | 차단·무시·종료 수동 처리 |
 
-## 데이터 저장 구조
+### 대응 적용과 검증
 
-| 저장소 | 저장 내용 |
-|---|---|
-| PostgreSQL | 분석 서버 최신 상태, 보안 대응 내역, flow rule 적용 상태, `sdn_controller.analyzer`, `sdn_controller.security_responses`, `sdn_controller.flow_rules` |
-| InfluxDB | 트래픽 시계열, 프로토콜 통계, 포트 포함 host traffic, 네트워크 상태 |
-| Elasticsearch | 보안 이벤트 문서, `sdn-security-events` |
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/api/controller/status` | Controller 연결 및 준비 상태 |
+| `GET` | `/api/flows` | 저장된 규칙과 실제 Flow 통계 조회 |
+| `POST` | `/api/flows` | 수동 Flow Rule 생성 및 적용 |
+| `DELETE` | `/api/flows/{id}` | Flow Rule 제거 |
+| `POST` | `/api/flows/reconcile` | Backend–Controller 상태 재조정 |
+| `GET` | `/api/path/status` | 경로, 링크, 스위치 사용률 조회 |
+| `GET`/`PUT` | `/api/settings` | 자동 대응 런타임 설정 조회·변경 |
 
-Alembic migration은 `migrations/`에 있다.
+### 운영 화면 데이터
 
-| 파일 | 내용 |
-|---|---|
-| `migrations/versions/001_init_schema.py` | `sdn_controller` schema 및 `updated_at` trigger 함수 생성 |
-| `migrations/versions/002_create_sdn_tables.py` | `sdn_controller.analyzer` 테이블 생성 |
-| `migrations/versions/003_create_flow_rules.py` | `sdn_controller.flow_rules` 테이블 생성 |
-| `migrations/versions/004_create_security_responses.py` | `sdn_controller.security_responses` 테이블 생성 및 flow rule 연결 컬럼 추가 |
-| `migrations/versions/005_add_flow_rule_removed_at.py` | Flow Rule 제거 완료 시각 컬럼 추가 |
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/api/dashboard/summary` | 대시보드 요약 |
+| `GET` | `/api/dashboard/traffic` | 트래픽 시계열 |
+| `GET` | `/api/dashboard/protocols` | 프로토콜 통계 |
+| `GET` | `/api/dashboard/suspicious-hosts` | 의심 호스트 |
+| `POST` | `/ws/token` | WebSocket 접속 토큰 발급 |
+| `WS` | `/ws/analyzer` | 상태·탐지·대응 실시간 전달 |
 
-## 현재 제한 사항
+상세 계약은 [`backend/backend-api.md`](backend/backend-api.md)와
+[`analyzer/analyzer-backend-api.md`](analyzer/analyzer-backend-api.md)를
+참고한다.
 
-- `/api/dashboard/summary`는 InfluxDB 최근 5분 트래픽 시계열을 기반으로 요약 지표를 계산한다.
-- `/api/security/events`는 보안 이벤트를 Elasticsearch에 저장한다. `mitigation`이 있는 이벤트는 PostgreSQL에 보안 대응 내역과 flow rule을 생성한 뒤 Controller에 자동 적용하고, 결과를 `APPLIED` 또는 `FAILED`로 저장한다.
-- `/api/flows`는 `sdn_controller.flow_rules` 조회·생성·삭제 기능을 제공한다. 조회 시 Controller topology와 cookie별 OpenFlow packet/byte 통계를 결합하며, Controller 장애 시에도 DB 이력을 반환한다. 생성과 삭제는 각각 OpenFlow Barrier 응답에 따라 `APPLIED`/`FAILED`, `REMOVED`/`REMOVE_FAILED` 상태와 Controller 응답을 저장한다.
-- `RATE_LIMIT`은 `rate_limit_pps`를 OVS Meter의 PKTPS 단위로 적용하며 Controller 응답의 `meter_id`를 함께 저장한다.
-- Backend는 `FLOW_RECONCILE_INTERVAL_SECONDS` 주기로 `PENDING`, `FAILED`, `APPLIED`, 제거 실패 규칙을 Controller와 재조정한다.
-- 자동 대응 정책은 `critical=DROP`, `high=mitigation 적용`, `medium 이하=승인 대기`로 동작한다.
-- 동일 공격이 `RATE_LIMIT`에서 `DROP`으로 격상되면 이전 rule과 마지막 Meter 참조를 먼저 제거한다.
-- `/api/path/status`는 Controller의 연속 Port 통계 snapshot을 비교해 topology 포트별 BPS와 사용률을 계산하고, 실제 링크 UP/DOWN 상태와 선택 경로를 분리해 반환한다. 미러 출력처럼 topology에 없는 포트는 스위치 사용률에서 제외한다.
-- 대시보드의 경로 상태 영역은 정적 사용률 대신 `/api/path/status`의 실제 스위치 사용률을 5초마다 표시한다.
-- Flow Rule 화면은 실제 `/api/flows` 응답의 연결 스위치, 인접 링크, packet/byte 통계를 5초마다 갱신한다. 다른 일부 화면에는 아직 mock/static UI가 남아 있다.
-- 프론트엔드 타입에는 과거 호환용 WebSocket 메시지 타입이 일부 남아 있다.
-- 패킷 캡처는 OS/컨테이너 권한과 네트워크 인터페이스 설정에 영향을 받는다.
+## 운영 화면
 
-## 테스트
+| 화면 | 경로 | 목적 |
+|---|---|---|
+| Dashboard | `/` | 트래픽, 탐지, 서비스 상태 요약 |
+| Security Events | `/security/events` | 이벤트 확인과 수동 대응 |
+| Flow Rules | `/flow-rules` | 적용 규칙, 통계, 수동 생성·삭제 |
+| Topology | `/topology` | 실제 링크, 경로, 포트 사용률 확인 |
+| Settings | `/settings` | 자동 대응 정책 활성화 설정 |
 
-Analyzer 보안 탐지 명세 단위 테스트는 표준 라이브러리 `unittest`로 실행한다.
+## 검증
+
+### 단위 테스트
+
+Python 3.10 이상 환경에 `requirements-dev.txt`와 각 구성요소의
+`requirements.txt`가 설치되어 있어야 한다. 서비스별 `app` 패키지가
+충돌하지 않도록 테스트도 구성요소별로 실행한다.
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/sdn-platform-pycache python3 -m unittest discover -s analyzer/tests -v
+python3 -m pytest analyzer/tests
+python3 -m pytest backend/tests
+(cd data-plane/controller && python3 -m unittest discover -s tests -v)
+(cd data-plane/mininet && python3 -m unittest discover -s tests -v)
 ```
 
-## 성능 확인 및 테스트 다음 단계
+### 데이터 플레인 통합 검증
 
-성능 테스트는 다음 순서로 진행하는 것이 좋다.
+```bash
+./data-plane/scripts/verify.sh
+```
 
-1. 백엔드 API별 기본 응답 시간 확인
-2. `k6`, `JMeter`, `Locust` 중 하나로 부하 테스트 스크립트 작성
-3. `/api/analyzer/packet-summary`, `/api/analyzer/detection-summary`, `/api/dashboard/traffic`, `/api/security/events`를 우선 테스트
-4. 동시 사용자 수 또는 요청량을 단계적으로 증가
-5. CPU, 메모리, DB connection, InfluxDB query latency, Elasticsearch search latency 확인
-6. 30분 이상 장시간 테스트로 메모리 증가 여부 확인
-7. 병목 API를 기준으로 쿼리, 저장 로직, WebSocket broadcast, 프론트 렌더링을 분리해 점검
+통합 검증은 다음 항목을 확인한다.
 
-우선 수집하면 좋은 지표는 다음과 같다.
+- 스위치 연결, 호스트 학습, `pingall`
+- Primary/Backup 경로와 링크 장애·복구
+- Flow Rule 설치·삭제와 OpenFlow Barrier 응답
+- OVS Meter 설치·정리와 Rate Limit 효과
+- OVS Mirror와 Sensor 인터페이스의 양방향 패킷 관찰
+- 검증 종료 후 남은 OVS Bridge 부재
 
-| 지표 | 설명 |
-|---|---|
-| 평균 응답 시간 | 일반적인 요청 처리 속도 |
-| p95/p99 응답 시간 | 느린 요청의 꼬리 지연 |
-| RPS | 초당 처리 요청 수 |
-| 에러율 | 4xx/5xx, timeout 비율 |
-| CPU/Memory | 서버 자원 사용량 |
-| DB connection | PostgreSQL/InfluxDB/Elasticsearch 연결 상태 |
-| WebSocket client 수 | 실시간 broadcast 부하 기준 |
+Analyzer 탐지부터 Backend 대응, Controller 적용까지의 시나리오는
+`data-plane/mininet/scenarios/analyzer_detection_response.py`에 있다.
+
+## 알려진 제한사항
+
+- 현재 기본 탐지 범위는 Port Scan과 ICMP Flood다.
+- Mininet/OVS 없는 애플리케이션 영역 실행만으로는 실제 대응 효과를 검증할 수 없다.
+- Analyzer가 Mininet 트래픽을 보려면 `sdn-sensor0`과 OVS Mirror가 모두 필요하다.
+- 자동 대응 품질은 탐지 임계값과 운영 정책에 의존하며 실제 운영망 적용 전 별도 검증이 필요하다.
+- Controller가 일시적으로 사용할 수 없어도 이벤트와 pending 대응은 보존하지만 실제 네트워크 적용은 지연된다.
+- 일부 과거 호환용 Frontend WebSocket 타입과 정적 UI가 남아 있다.
 
 ## 주요 문서
 
-- `IMPLEMENTATION_STATUS.md`: 현재 구현 상태 상세 정리
-- `backend/backend-api.md`: 백엔드 HTTP/WebSocket API 명세
-- `analyzer/README.md`: 분석 서버 구현 및 운영 메모
-- `analyzer/analyzer-backend-api.md`: 분석 서버와 백엔드 사이의 API 계약
-- `migrations/README`: Alembic migration 안내
+- [`SECURITY_DETECTION_POLICY.md`](SECURITY_DETECTION_POLICY.md): 탐지 조건과 대응 정책
+- [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md): 구성요소별 구현 상태
+- [`backend/backend-api.md`](backend/backend-api.md): Backend HTTP/WebSocket 계약
+- [`analyzer/analyzer-backend-api.md`](analyzer/analyzer-backend-api.md): Analyzer–Backend 계약
+- [`data-plane/docs/controller-foundation.md`](data-plane/docs/controller-foundation.md): Controller 구조와 REST API
+- [`data-plane/docs/analyzer-mirror.md`](data-plane/docs/analyzer-mirror.md): Mirror와 Sensor 캡처 경로
+- [`data-plane/docs/mininet-topology.md`](data-plane/docs/mininet-topology.md): Lab 토폴로지와 주소·포트 맵
+- [`data-plane/docs/vm-setup.md`](data-plane/docs/vm-setup.md): Multipass 설치, 실행, 복구
+- [`data-plane/docs/mutillidae-lab.md`](data-plane/docs/mutillidae-lab.md): 격리 웹 보안 실험 환경
 
-## 커밋 전 체크
+## 개발 원칙
 
-- `__pycache__/`, `.DS_Store`, `.next/`, `node_modules/` 같은 생성 파일은 커밋하지 않는다.
-- 분석 서버 payload를 수정하면 백엔드 Pydantic schema와 API 문서를 함께 확인한다.
-- 백엔드 broadcast 메시지를 수정하면 프론트엔드 `types/realtime.ts`, `hooks/useRealtime.ts`를 함께 확인한다.
-- DB 구조를 수정하면 Alembic migration을 추가한다.
+- 기능은 `관측 -> 탐지 -> 정책 판단 -> 대응 적용 -> 결과 검증` 흐름에 어떤
+  역할을 하는지 설명할 수 있어야 한다.
+- Packet-In 처리 경로에서 동기 Backend 요청을 수행하지 않는다.
+- Controller 명령 전송과 실제 적용 완료를 같은 상태로 취급하지 않는다.
+- Analyzer는 탐지, Controller는 네트워크 제어, Backend는 정책과 상태 관리의
+  책임을 유지한다.
+- 공격 및 부하 테스트는 외부 네트워크가 아닌 격리된 Mininet Lab에서만 수행한다.
+- API payload를 변경하면 Analyzer, Backend schema, Frontend 타입과 관련
+  문서를 함께 확인한다.
