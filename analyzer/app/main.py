@@ -8,6 +8,7 @@ from app.config import load_config
 from app.detection.port_scan import PortScanDetector
 from app.detection.security_events import SecurityEventBuilder
 from app.detection.traffic_stats import TrafficStatsBuilder
+from app.outbox import DurableOutbox
 from app.packet.capture import PacketCaptureError, start_capture
 from app.packet.parser import parse_packet
 from app.packet.summary import PacketSummaryBuilder
@@ -63,7 +64,9 @@ security_event_builder = SecurityEventBuilder(
 backend_client = BackendClient(
     base_url=BACKEND_BASE_URL,
     timeout_sec=3.0,
+    api_key=config.backend_api_key,
 )
+outbox = DurableOutbox(config.outbox_path)
 
 # 분석 서버의 캡처 상태, 백엔드 연결 상태, 최근 처리 시각을 관리
 analyzer_status = AnalyzerStatus(
@@ -104,10 +107,9 @@ def analysis_loop():
         try:
             time.sleep(WINDOW_SEC)
 
-            # 현재 윈도우의 패킷만 분석하기 위해 snapshot을 만든 뒤 버퍼를 초기화
+            # Outbox 저장이 끝날 때까지 원본 버퍼를 유지해 디스크 오류 시 재처리한다.
             with packets_lock:
                 packets_snapshot = list(packets)
-                packets.clear()
 
             # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
             port_scan_alerts = port_scan_detector.detect(packets_snapshot)
@@ -129,31 +131,66 @@ def analysis_loop():
                 port_scan_alerts=port_scan_alerts,
             )
 
-            # 패킷 요약과 탐지 요약은 각각 별도 API로 전송
-            packet_summary_sent = backend_client.send_packet_summary(
-                packet_summary
-            )
-
-            traffic_stats_sent = backend_client.send_traffic_stats(
-                traffic_stats
-            )
-
+            messages = [
+                {
+                    "path": "/api/analyzer/packet-summary",
+                    "label": "packet summary",
+                    "payload": packet_summary,
+                },
+                {
+                    "path": "/api/analyzer/detection-summary",
+                    "label": "traffic stats",
+                    "payload": traffic_stats,
+                },
+            ]
             if security_events["events"]:
-                backend_client.send_security_events(security_events)
-
-            # 두 요약 전송이 모두 성공한 경우에만 백엔드 연결 상태를 정상으로 표시
-            if packet_summary_sent and traffic_stats_sent:
-                analyzer_status.mark_summary_sent()
-            else:
-                analyzer_status.mark_backend_failed(
-                    "failed to send analyzer metrics"
+                messages.append(
+                    {
+                        "path": "/api/security/events",
+                        "label": "security events",
+                        "payload": security_events,
+                    }
                 )
+
+            # 한 분석 윈도우의 결과를 원자적으로 저장한다.
+            outbox.enqueue_batch(messages)
+
+            # 저장 성공 후 snapshot만 제거하고 캡처 중 새로 들어온 패킷은 보존한다.
+            with packets_lock:
+                del packets[: len(packets_snapshot)]
 
         except Exception as exc:
             # 탐지 로직 예외로 분석 스레드가 죽지 않도록 오류 상태를 남기고 다음 윈도우로 넘어간다.
             error_message = f"analysis loop failed: {exc}"
             analyzer_status.mark_backend_failed(error_message)
             logger.exception(error_message)
+
+
+def delivery_loop():
+    while True:
+        try:
+            result = outbox.deliver_due(
+                client=backend_client,
+                batch_size=config.outbox_delivery_batch_size,
+                retry_base_sec=config.outbox_retry_base_sec,
+                retry_max_sec=config.outbox_retry_max_sec,
+            )
+            if result.delivered:
+                analyzer_status.mark_summary_sent()
+            if result.retried:
+                analyzer_status.mark_backend_failed(
+                    f"{result.retried} analyzer payload(s) queued for retry"
+                )
+            if result.dead_lettered:
+                analyzer_status.mark_backend_failed(
+                    f"{result.dead_lettered} analyzer payload(s) rejected"
+                )
+        except Exception as exc:
+            error_message = f"outbox delivery failed: {exc}"
+            analyzer_status.mark_backend_failed(error_message)
+            logger.exception(error_message)
+
+        time.sleep(config.outbox_delivery_poll_sec)
 
 
 # STATUS_INTERVAL_SEC마다 분석 서버의 현재 상태를 백엔드로 보고
@@ -191,6 +228,11 @@ if __name__ == "__main__":
 
         threading.Thread(
             target=status_loop,
+            daemon=True,
+        ).start()
+
+        threading.Thread(
+            target=delivery_loop,
             daemon=True,
         ).start()
 

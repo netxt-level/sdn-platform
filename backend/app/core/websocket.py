@@ -1,13 +1,17 @@
+import asyncio
+
 from fastapi.encoders import jsonable_encoder
 from fastapi import WebSocket
+
+from app.core.config import settings
 
 
 class WebSocketManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, subprotocol: str | None = None):
+        await websocket.accept(subprotocol=subprotocol)
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
@@ -15,16 +19,24 @@ class WebSocketManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        disconnected_connections = []
+        encoded_message = jsonable_encoder(message)
 
-        for websocket in self.active_connections:
+        async def send(websocket: WebSocket):
             try:
-                await websocket.send_json(jsonable_encoder(message))
-            except RuntimeError:
-                disconnected_connections.append(websocket)
+                await asyncio.wait_for(
+                    websocket.send_json(encoded_message),
+                    timeout=settings.websocket_send_timeout_seconds,
+                )
+                return websocket, True
+            except (RuntimeError, TimeoutError):
+                return websocket, False
 
-        for websocket in disconnected_connections:
-            self.disconnect(websocket)
+        results = await asyncio.gather(
+            *(send(websocket) for websocket in list(self.active_connections))
+        )
+        for websocket, sent in results:
+            if not sent:
+                self.disconnect(websocket)
 
 
 manager = WebSocketManager()

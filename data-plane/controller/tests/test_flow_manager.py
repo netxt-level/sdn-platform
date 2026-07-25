@@ -4,6 +4,8 @@ from os_ken.ofproto import ofproto_v1_3
 from os_ken.ofproto import ofproto_v1_3_parser
 
 from app.flow_manager import TABLE_MISS_COOKIE
+from app.flow_manager import POLICY_TABLE_ID
+from app.flow_manager import FORWARDING_TABLE_ID
 from app.flow_manager import TABLE_MISS_PRIORITY
 from app.flow_manager import TABLE_MISS_TABLE_ID
 from app.flow_manager import L2_FORWARDING_COOKIE_MASK
@@ -11,11 +13,18 @@ from app.flow_manager import L2_FORWARDING_COOKIE_PREFIX
 from app.flow_manager import L2_FORWARDING_HARD_TIMEOUT
 from app.flow_manager import L2_FORWARDING_IDLE_TIMEOUT
 from app.flow_manager import L2_FORWARDING_PRIORITY
+from app.flow_manager import EXTERNAL_FLOW_COOKIE_PREFIX
+from app.flow_manager import build_external_flow
+from app.flow_manager import build_external_flow_delete
+from app.flow_manager import build_external_flow_cookie
+from app.flow_manager import build_policy_table_miss_flow
+from app.flow_manager import build_rate_limit_meter
 from app.flow_manager import build_l2_forwarding_cookie
 from app.flow_manager import build_l2_forwarding_flow
 from app.flow_manager import build_packet_out
 from app.flow_manager import build_port_description_request
 from app.flow_manager import delete_all_l2_forwarding_flows
+from app.flow_manager import delete_external_flow_with_barrier
 from app.flow_manager import delete_l2_forwarding_flows_for_mac
 from app.flow_manager import install_table_miss_flow
 from app.flow_manager import install_table_miss_with_barrier
@@ -48,6 +57,7 @@ class TableMissFlowTests(unittest.TestCase):
         self.assertEqual([flow_mod], datapath.sent_messages)
         self.assertEqual(TABLE_MISS_COOKIE, flow_mod.cookie)
         self.assertEqual(TABLE_MISS_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(FORWARDING_TABLE_ID, flow_mod.table_id)
         self.assertEqual(TABLE_MISS_PRIORITY, flow_mod.priority)
         self.assertEqual(ofproto_v1_3.OFPFC_ADD, flow_mod.command)
         self.assertEqual(0, flow_mod.idle_timeout)
@@ -63,14 +73,23 @@ class TableMissFlowTests(unittest.TestCase):
     def test_sends_table_miss_before_barrier_request(self):
         datapath = FakeDatapath()
 
-        flow_mod, barrier_request = install_table_miss_with_barrier(datapath)
+        flow_mods, barrier_request = install_table_miss_with_barrier(datapath)
 
         self.assertEqual(
-            [flow_mod, barrier_request],
+            [*flow_mods, barrier_request],
             datapath.sent_messages,
         )
-        self.assertEqual(1, flow_mod.xid)
-        self.assertEqual(2, barrier_request.xid)
+        self.assertEqual([1, 2], [flow_mod.xid for flow_mod in flow_mods])
+        self.assertEqual(3, barrier_request.xid)
+
+    def test_policy_table_miss_continues_to_forwarding_table(self):
+        flow_mod = build_policy_table_miss_flow(FakeDatapath())
+
+        self.assertEqual(POLICY_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(
+            FORWARDING_TABLE_ID,
+            flow_mod.instructions[0].table_id,
+        )
 
 
 class PortDescriptionRequestTests(unittest.TestCase):
@@ -273,6 +292,109 @@ class L2ForwardingFlowTests(unittest.TestCase):
             [],
             flow_mod.match.to_jsondict()["OFPMatch"]["oxm_fields"],
         )
+
+
+class ExternalFlowRuleTests(unittest.TestCase):
+    def test_cookie_is_stable_and_in_external_range(self):
+        cookie = build_external_flow_cookie("rule-uuid-1")
+
+        self.assertEqual(
+            cookie,
+            build_external_flow_cookie("rule-uuid-1"),
+        )
+        self.assertEqual(
+            EXTERNAL_FLOW_COOKIE_PREFIX,
+            cookie & 0xFFFFFF0000000000,
+        )
+
+    def test_builds_drop_rule_with_ipv4_prerequisite(self):
+        datapath = FakeDatapath()
+
+        flow_mod = build_external_flow(
+            datapath,
+            rule_id="rule-1",
+            match={"ipv4_src": "10.0.0.2", "ip_proto": 1},
+            action="DROP",
+            priority=500,
+            idle_timeout=60,
+            hard_timeout=300,
+        )
+
+        self.assertEqual(0x0800, flow_mod.match["eth_type"])
+        self.assertEqual("10.0.0.2", flow_mod.match["ipv4_src"])
+        self.assertEqual(1, flow_mod.match["ip_proto"])
+        self.assertEqual([], flow_mod.instructions)
+        self.assertEqual(500, flow_mod.priority)
+        self.assertEqual(60, flow_mod.idle_timeout)
+        self.assertEqual(300, flow_mod.hard_timeout)
+
+    def test_resolves_adjacent_switch_output_action(self):
+        datapath = FakeDatapath()
+        datapath.id = 1
+
+        flow_mod = build_external_flow(
+            datapath,
+            rule_id="rule-2",
+            match={"ipv4_dst": "10.0.0.100"},
+            action="output:s2",
+            priority=500,
+            switch_link_ports={1: {2: 4}},
+        )
+
+        action = flow_mod.instructions[0].actions[0]
+        self.assertEqual(4, action.port)
+
+    def test_builds_rate_limit_rule_with_meter_and_goto(self):
+        flow_mod = build_external_flow(
+            FakeDatapath(),
+            rule_id="rule-3",
+            match={"ipv4_src": "10.0.0.2"},
+            action="RATE_LIMIT",
+            priority=500,
+            meter_id=7,
+            rate_limit_pps=100,
+        )
+
+        self.assertEqual(POLICY_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(7, flow_mod.instructions[0].meter_id)
+        self.assertEqual(
+            FORWARDING_TABLE_ID,
+            flow_mod.instructions[1].table_id,
+        )
+
+    def test_builds_packet_per_second_drop_meter(self):
+        meter_mod = build_rate_limit_meter(FakeDatapath(), 7, 100)
+
+        self.assertEqual(ofproto_v1_3.OFPMC_ADD, meter_mod.command)
+        self.assertEqual(ofproto_v1_3.OFPMF_PKTPS, meter_mod.flags)
+        self.assertEqual(7, meter_mod.meter_id)
+        self.assertEqual(100, meter_mod.bands[0].rate)
+
+    def test_strict_delete_uses_exact_cookie_and_policy_table(self):
+        datapath = FakeDatapath()
+
+        flow_mod = build_external_flow_delete(datapath, "rule-1")
+
+        self.assertEqual(ofproto_v1_3.OFPFC_DELETE, flow_mod.command)
+        self.assertEqual(POLICY_TABLE_ID, flow_mod.table_id)
+        self.assertEqual(
+            build_external_flow_cookie("rule-1"),
+            flow_mod.cookie,
+        )
+        self.assertEqual(0xFFFFFFFFFFFFFFFF, flow_mod.cookie_mask)
+        self.assertEqual(ofproto_v1_3.OFPP_ANY, flow_mod.out_port)
+        self.assertEqual(ofproto_v1_3.OFPG_ANY, flow_mod.out_group)
+
+    def test_delete_is_followed_by_barrier(self):
+        datapath = FakeDatapath()
+
+        flow_mods, barrier = delete_external_flow_with_barrier(
+            datapath,
+            "rule-1",
+        )
+
+        self.assertEqual([*flow_mods, barrier], datapath.sent_messages)
+        self.assertEqual([1, 2], [message.xid for message in datapath.sent_messages])
 
 
 if __name__ == "__main__":

@@ -1,16 +1,30 @@
 import logging
+from dataclasses import dataclass
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class DeliveryResult:
+    success: bool
+    retryable: bool = False
+    error: str | None = None
+
+
 # 분석 서버가 만든 payload를 백엔드 FastAPI 서버로 전송하는 HTTP 클라이언트
 class BackendClient:
-    def __init__(self, base_url: str, timeout_sec: float = 3.0):
+    def __init__(
+        self,
+        base_url: str,
+        timeout_sec: float = 3.0,
+        api_key: str = "",
+    ):
         # base_url 끝의 /를 제거해 path를 붙일 때 //가 생기지 않게 한다.
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
+        self.headers = {"X-API-Key": api_key} if api_key else {}
 
     # 패킷 요약 데이터를 백엔드에 저장하고 WebSocket으로 broadcast하게 전송
     def send_packet_summary(self, packet_summary: dict) -> bool:
@@ -46,6 +60,9 @@ class BackendClient:
 
     # 모든 전송 API가 공유하는 POST 처리 함수
     def _post(self, path: str, payload: dict, label: str) -> bool:
+        return self.post(path=path, payload=payload, label=label).success
+
+    def post(self, path: str, payload: dict, label: str) -> DeliveryResult:
         # 전송 실패는 예외를 밖으로 던지지 않고 False로 반환해 분석 루프를 계속 유지한다.
         url = f"{self.base_url}{path}"
 
@@ -54,21 +71,30 @@ class BackendClient:
             response = requests.post(
                 url,
                 json=payload,
+                headers=self.headers,
                 timeout=self.timeout_sec,
             )
             # 4xx/5xx 응답은 예외로 변환해 실패로 처리
             response.raise_for_status()
-            return True
+            return DeliveryResult(success=True)
 
         # 백엔드 서버가 내려가 있거나 네트워크 연결 자체가 실패한 경우
         except requests.exceptions.ConnectionError:
             logger.warning("%s 전송 실패: 서버에 연결할 수 없습니다.", label)
-            return False
+            return DeliveryResult(
+                success=False,
+                retryable=True,
+                error="connection failed",
+            )
 
         # 백엔드 응답이 지정한 timeout 안에 오지 않은 경우
         except requests.exceptions.Timeout:
             logger.warning("%s 전송 실패: 요청 시간이 초과되었습니다.", label)
-            return False
+            return DeliveryResult(
+                success=False,
+                retryable=True,
+                error="request timed out",
+            )
 
         # 백엔드가 HTTP 오류 상태 코드를 반환한 경우
         except requests.exceptions.HTTPError as exc:
@@ -82,9 +108,20 @@ class BackendClient:
                 label,
                 status_code,
             )
-            return False
+            retryable = status_code in {408, 425, 429} or (
+                isinstance(status_code, int) and status_code >= 500
+            )
+            return DeliveryResult(
+                success=False,
+                retryable=retryable,
+                error=f"HTTP {status_code}",
+            )
 
         # requests 계열의 기타 예외를 분석 서버 밖으로 전파하지 않고 실패로 처리
         except requests.exceptions.RequestException:
             logger.warning("%s 전송 실패: 요청 처리 중 오류가 발생했습니다.", label)
-            return False
+            return DeliveryResult(
+                success=False,
+                retryable=True,
+                error="request failed",
+            )

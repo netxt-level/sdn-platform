@@ -10,6 +10,9 @@ CONTROLLER_CONTAINER="${CONTROLLER_CONTAINER:-sdn-controller}"
 FAILOVER_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/failover.py"
 HOST_SPOOFING_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/host_spoofing.py"
 PERFORMANCE_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/link_performance.py"
+EXTERNAL_FLOW_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/external_flow.py"
+RATE_LIMIT_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/rate_limit.py"
+MIRROR_SCENARIO="${VM_PROJECT_DIR}/data-plane/mininet/scenarios/mirror_capture.py"
 
 "${SCRIPT_DIR}/sync-vm.sh"
 CONTROLLER_REBUILD=true "${SCRIPT_DIR}/start.sh"
@@ -28,9 +31,23 @@ multipass exec "${VM_NAME}" -- sudo python3 -u "${PERFORMANCE_SCENARIO}" \
   --controller-host 127.0.0.1 \
   --controller-port "${CONTROLLER_OPENFLOW_PORT}"
 
+multipass exec "${VM_NAME}" -- sudo python3 -u "${EXTERNAL_FLOW_SCENARIO}" \
+  --controller-host 127.0.0.1 \
+  --controller-port "${CONTROLLER_OPENFLOW_PORT}" \
+  --controller-rest-port "${CONTROLLER_REST_PORT}"
+
+multipass exec "${VM_NAME}" -- sudo python3 -u "${RATE_LIMIT_SCENARIO}" \
+  --controller-host 127.0.0.1 \
+  --controller-port "${CONTROLLER_OPENFLOW_PORT}" \
+  --controller-rest-port "${CONTROLLER_REST_PORT}"
+
+multipass exec "${VM_NAME}" -- sudo python3 -u "${MIRROR_SCENARIO}" \
+  --controller-host 127.0.0.1 \
+  --controller-port "${CONTROLLER_OPENFLOW_PORT}"
+
 if [[ -n "$(multipass exec "${VM_NAME}" -- sudo ovs-vsctl list-br)" ]]; then
   echo "Stale OVS bridges remain after validation." >&2
   exit 1
 fi
 
-echo "Data-plane failover, host spoofing, and link performance validation passed."
+echo "Data-plane routing, Flow Rule, Meter, performance, and mirror validation passed."

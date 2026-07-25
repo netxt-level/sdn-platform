@@ -9,6 +9,18 @@ class ControllerSettings:
     openflow_port: int
     rest_host: str
     rest_port: int
+    stats_interval_seconds: float = 5.0
+    api_key: str = ""
+    allow_insecure_dev_auth: bool = False
+
+
+def _read_bool(environ, name, default=False):
+    raw_value = str(environ.get(name, "true" if default else "false")).lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _read_port(environ, name, default):
@@ -25,6 +37,9 @@ def _read_port(environ, name, default):
 
 def load_settings(environ=None):
     environ = os.environ if environ is None else environ
+    stats_interval = float(environ.get("CONTROLLER_STATS_INTERVAL_SECONDS", "5"))
+    if stats_interval <= 0:
+        raise ValueError("CONTROLLER_STATS_INTERVAL_SECONDS must be positive")
     return ControllerSettings(
         openflow_port=_read_port(
             environ,
@@ -36,5 +51,11 @@ def load_settings(environ=None):
             environ,
             "CONTROLLER_REST_PORT",
             8080,
+        ),
+        stats_interval_seconds=stats_interval,
+        api_key=environ.get("CONTROLLER_API_KEY", ""),
+        allow_insecure_dev_auth=_read_bool(
+            environ,
+            "ALLOW_INSECURE_DEV_AUTH",
         ),
     )

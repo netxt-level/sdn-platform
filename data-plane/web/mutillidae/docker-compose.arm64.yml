@@ -1,0 +1,40 @@
+services:
+  database:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: mutillidae
+    networks:
+      - data
+    volumes:
+      - database-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD
+        - healthcheck.sh
+        - --connect
+        - --innodb_initialized
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  www:
+    image: sdn-mutillidae-www:arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.arm64
+      args:
+        MUTILLIDAE_COMMIT: 84f2c00d9141dbb9e26a448c8288e651e0b5bb04
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MUTILLIDAE_HOST_PORT:-8088}:80"
+    networks:
+      - data
+    restart: unless-stopped
+
+networks:
+  data:
+
+volumes:
+  database-data:

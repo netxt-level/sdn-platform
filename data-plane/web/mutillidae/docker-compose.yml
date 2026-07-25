@@ -1,0 +1,36 @@
+services:
+  database:
+    image: webpwnized/mutillidae:database
+    networks:
+      - data
+    volumes:
+      - database-data:/var/lib/mysql
+
+  directory:
+    image: webpwnized/mutillidae:ldap
+    networks:
+      - ldap
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+
+  www:
+    image: webpwnized/mutillidae:www
+    depends_on:
+      - database
+      - directory
+    ports:
+      - "127.0.0.1:${MUTILLIDAE_HOST_PORT:-8088}:80"
+    networks:
+      - data
+      - ldap
+    restart: unless-stopped
+
+networks:
+  data:
+  ldap:
+
+volumes:
+  database-data:
+  ldap-data:
+  ldap-config:

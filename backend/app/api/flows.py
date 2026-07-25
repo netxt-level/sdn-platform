@@ -1,7 +1,9 @@
 from fastapi import APIRouter
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from app.services.flow_service import FlowService
+from app.services.flow_service import FlowRuleNotFoundError
 
 router = APIRouter()
 flow_service = FlowService()
@@ -25,3 +27,21 @@ def get_flows(src_ip: str | None = None):
 @router.post("")
 def create_flow(payload: FlowRuleCreateRequest):
     return flow_service.create_flow(payload.model_dump())
+
+
+@router.delete("/{flow_rule_id}")
+def delete_flow(flow_rule_id: str):
+    try:
+        return flow_service.delete_flow(flow_rule_id)
+    except FlowRuleNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Flow Rule not found: {flow_rule_id}",
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/reconcile")
+def reconcile_flows():
+    return flow_service.reconcile_flows()

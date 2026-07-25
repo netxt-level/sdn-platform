@@ -49,6 +49,8 @@ export default function SecurityEventsPage() {
   const [attackTypeDropdownOpen, setAttackTypeDropdownOpen] = useState(false);
   const [ipSearch, setIpSearch] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const visibleEvents = useMemo(
     () =>
       state.securityEvents.filter((event) => {
@@ -108,6 +110,46 @@ export default function SecurityEventsPage() {
 
     setSelectedEventId(visibleEvents[0]?.id ?? null);
   }, [selectedEventId, visibleEvents]);
+
+  const handleEventAction = async (
+    action: "block" | "ignore" | "resolve"
+  ) => {
+    if (!selectedEvent) return;
+
+    setPendingAction(action);
+    setActionError(null);
+    try {
+      const response = await fetch(
+        `/api/security/events/${encodeURIComponent(selectedEvent.event_id ?? selectedEvent.id)}/actions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action })
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "이벤트 대응 요청에 실패했습니다.");
+      }
+
+      const payload = await response.json();
+      const statusByAction = {
+        block: "blocked",
+        ignore: "ignored",
+        resolve: "resolved"
+      } as const;
+      state.updateSecurityEventStatus(
+        selectedEvent.id,
+        payload.event?.status ?? statusByAction[action]
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "이벤트 대응 요청에 실패했습니다."
+      );
+    } finally {
+      setPendingAction(null);
+    }
+  };
 
   return (
     <>
@@ -256,22 +298,19 @@ export default function SecurityEventsPage() {
                   <span className="text-faint">발생 시간</span>
                   <strong>{formatDateTime(selectedEvent.occurred_at)}</strong>
                 </div>
-                {selectedEvent.severity === "critical" ? (
-                  <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red">
-                    처리 확인
-                  </button>
-                ) : isCompletedEvent(selectedEvent) ? (
+                {isCompletedEvent(selectedEvent) ? (
                   <div className="flex items-center justify-between rounded border border-green bg-[var(--green-dim)] px-3 py-2 text-green">
                     <span>처리 완료</span>
                     <StatusBadge value={selectedEvent.status} tone="normal" />
                   </div>
                 ) : (
                   <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
-                    <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red">차단</button>
-                    <button className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-center text-yellow">무시</button>
-                    <button className="rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-center text-green">해결</button>
+                    <button disabled={pendingAction !== null} onClick={() => handleEventAction("block")} className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red disabled:opacity-50">{pendingAction === "block" ? "차단 중" : "차단"}</button>
+                    <button disabled={pendingAction !== null} onClick={() => handleEventAction("ignore")} className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-center text-yellow disabled:opacity-50">{pendingAction === "ignore" ? "처리 중" : "무시"}</button>
+                    <button disabled={pendingAction !== null} onClick={() => handleEventAction("resolve")} className="rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-center text-green disabled:opacity-50">{pendingAction === "resolve" ? "처리 중" : "해결"}</button>
                   </div>
                 )}
+                {actionError ? <div className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-red">{actionError}</div> : null}
               </div>
             ) : (
               <div className="font-mono-ui rounded border border-line bg-sidebar p-4 text-[11px] text-muted">

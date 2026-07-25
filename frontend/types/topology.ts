@@ -13,8 +13,12 @@ export type TopologyLink = {
   source: string;
   target: string;
   path: "access" | "primary" | "backup";
+  state: "up" | "down" | "unknown";
+  selected: boolean;
   active: boolean;
+  bps: number;
   utilization: number;
+  sampled: boolean;
 };
 
 export type TopologyState = {

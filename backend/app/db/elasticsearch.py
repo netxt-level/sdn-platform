@@ -77,8 +77,57 @@ def index_security_event(payload: dict) -> None:
 
     es.index(
         index="sdn-security-events",
+        id=payload.get("event_id"),
         document=document,
     )
+
+
+def get_security_event(event_id: str) -> dict | None:
+    es = get_elasticsearch_client()
+    try:
+        if es.exists(index="sdn-security-events", id=event_id):
+            response = es.get(index="sdn-security-events", id=event_id)
+            return {"id": response["_id"], **response["_source"]}
+
+        response = es.search(
+            index="sdn-security-events",
+            size=1,
+            query={
+                "bool": {
+                    "should": [
+                        {"ids": {"values": [event_id]}},
+                        {"term": {"event_id": event_id}},
+                    ],
+                    "minimum_should_match": 1,
+                },
+            },
+        )
+        hits = response["hits"]["hits"]
+        if not hits:
+            return None
+
+        return {"id": hits[0]["_id"], **hits[0]["_source"]}
+    finally:
+        es.close()
+
+
+def update_security_event_status(event_id: str, status: str) -> dict | None:
+    event = get_security_event(event_id)
+    if event is None:
+        return None
+
+    es = get_elasticsearch_client()
+    try:
+        es.update(
+            index="sdn-security-events",
+            id=event["id"],
+            doc={"status": status},
+            refresh="wait_for",
+        )
+    finally:
+        es.close()
+
+    return {**event, "status": status}
 
 
 def search_security_events(limit: int = 50) -> list[dict]:

@@ -186,12 +186,26 @@ class SecurityEventBuilder:
 
                 score = min(score, 100)
                 is_l2 = score >= 80
-                severity = "high" if is_l2 else "medium"
+                is_critical = score >= 95
+                severity = (
+                    "critical"
+                    if is_critical
+                    else "high" if is_l2 else "medium"
+                )
                 confidence = "high" if score >= 95 else "medium"
-                recommended_action = "rate_limit" if is_l2 else "monitor"
+                recommended_action = (
+                    "drop"
+                    if is_critical
+                    else "rate_limit" if is_l2 else "monitor"
+                )
                 response_level = "L2" if is_l2 else "L1"
                 mitigation = (
-                    self._rate_limit_mitigation(
+                    self._drop_mitigation(
+                        src_ip=src_ip,
+                        dst_ip=dst_ip,
+                    )
+                    if is_critical
+                    else self._rate_limit_mitigation(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
                     )
@@ -244,6 +258,21 @@ class SecurityEventBuilder:
             "idle_timeout": self.rate_limit_idle_timeout,
             "hard_timeout": self.rate_limit_hard_timeout,
             "rate_limit_pps": self.rate_limit_pps,
+        }
+
+    def _drop_mitigation(self, *, src_ip: str, dst_ip: str) -> dict[str, Any]:
+        return {
+            "action": "DROP",
+            "target": "flow",
+            "match": {
+                "eth_type": 2048,
+                "ipv4_src": src_ip,
+                "ipv4_dst": dst_ip,
+                "ip_proto": 1,
+            },
+            "priority": self.rate_limit_priority + 100,
+            "idle_timeout": self.rate_limit_idle_timeout,
+            "hard_timeout": self.rate_limit_hard_timeout,
         }
 
     def _event(

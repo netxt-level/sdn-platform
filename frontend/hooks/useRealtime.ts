@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   AnalyzerStatus,
@@ -23,6 +23,10 @@ export type RealtimeState = {
   detectionSummary: DetectionSummary;
   trafficSeries: TrafficSeriesPoint[];
   securityEvents: SecurityEvent[];
+  updateSecurityEventStatus: (
+    eventId: string,
+    status: SecurityEvent["status"]
+  ) => void;
   topology: TopologyState;
 };
 
@@ -91,6 +95,10 @@ type DashboardSuspiciousHostsResponse = {
 
 type SecurityEventsResponse = {
   items?: RawSecurityEvent[];
+};
+
+type WebSocketTokenResponse = {
+  token: string;
 };
 
 const FIVE_SECONDS_MS = 5 * 1000;
@@ -922,8 +930,25 @@ export function useRealtime(): RealtimeState {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let closedByEffect = false;
 
-    const connect = () => {
-      socket = new WebSocket(getWebsocketUrl());
+    const connect = async () => {
+      try {
+        const response = await fetch("/ws/token", {
+          method: "POST",
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          throw new Error(`WebSocket token request failed: ${response.status}`);
+        }
+        const { token } = (await response.json()) as WebSocketTokenResponse;
+        if (closedByEffect) return;
+        socket = new WebSocket(getWebsocketUrl(), ["sdn-realtime", token]);
+      } catch {
+        setConnected(false);
+        if (!closedByEffect) {
+          reconnectTimer = setTimeout(() => void connect(), 3000);
+        }
+        return;
+      }
 
       socket.onopen = () => {
         setConnected(true);
@@ -933,7 +958,7 @@ export function useRealtime(): RealtimeState {
         setConnected(false);
 
         if (!closedByEffect) {
-          reconnectTimer = setTimeout(connect, 3000);
+          reconnectTimer = setTimeout(() => void connect(), 3000);
         }
       };
 
@@ -1055,7 +1080,7 @@ export function useRealtime(): RealtimeState {
       };
     };
 
-    connect();
+    void connect();
 
     return () => {
       closedByEffect = true;
@@ -1088,6 +1113,18 @@ export function useRealtime(): RealtimeState {
     () => buildTrafficSeries(trafficSamples),
     [trafficSamples]
   );
+  const updateSecurityEventStatus = useCallback(
+    (eventId: string, status: SecurityEvent["status"]) => {
+      setSecurityEvents((events) =>
+        events.map((event) =>
+          event.id === eventId || event.event_id === eventId
+            ? { ...event, status }
+            : event
+        )
+      );
+    },
+    []
+  );
 
   return useMemo(
     () => ({
@@ -1099,6 +1136,7 @@ export function useRealtime(): RealtimeState {
       detectionSummary: visibleDetectionSummary,
       trafficSeries,
       securityEvents,
+      updateSecurityEventStatus,
       topology
     }),
     [
@@ -1110,6 +1148,7 @@ export function useRealtime(): RealtimeState {
       source,
       topology,
       trafficSeries,
+      updateSecurityEventStatus,
       visibleDetectionSummary
     ]
   );

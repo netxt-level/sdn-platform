@@ -4,7 +4,6 @@ import type {
   PacketSummary
 } from "@/types/analyzer";
 import type { SecurityEvent, SecurityRule } from "@/types/security";
-import type { TopologyState } from "@/types/topology";
 
 const now = new Date().toISOString();
 
@@ -162,27 +161,3 @@ export const mockRules: SecurityRule[] = [
     created_at: new Date(Date.now() - 1000 * 60 * 46).toISOString()
   }
 ];
-
-export const mockTopology: TopologyState = {
-  active_path: "primary",
-  nodes: [
-    { id: "h1", label: "h1", role: "정상 사용자", type: "host", status: "normal" },
-    { id: "h2", label: "h2", role: "공격자", type: "host", status: "warning" },
-    { id: "h3", label: "h3", role: "관리자", type: "host", status: "normal" },
-    { id: "h4", label: "h4", role: "수신 서버", type: "host", status: "normal" },
-    { id: "s1", label: "s1", role: "진입/미러링", type: "switch", status: "normal" },
-    { id: "s2", label: "s2", role: "기본 경로", type: "switch", status: "normal" },
-    { id: "s3", label: "s3", role: "우회 경로", type: "switch", status: "normal" },
-    { id: "s4", label: "s4", role: "목적지 연결", type: "switch", status: "normal" }
-  ],
-  links: [
-    { id: "h1-s1", source: "h1", target: "s1", path: "access", active: true, utilization: 34 },
-    { id: "h2-s1", source: "h2", target: "s1", path: "access", active: true, utilization: 68 },
-    { id: "h3-s1", source: "h3", target: "s1", path: "access", active: true, utilization: 26 },
-    { id: "s1-s2", source: "s1", target: "s2", path: "primary", active: true, utilization: 72 },
-    { id: "s2-s4", source: "s2", target: "s4", path: "primary", active: true, utilization: 70 },
-    { id: "s1-s3", source: "s1", target: "s3", path: "backup", active: false, utilization: 18 },
-    { id: "s3-s4", source: "s3", target: "s4", path: "backup", active: false, utilization: 12 },
-    { id: "s4-h4", source: "s4", target: "h4", path: "access", active: true, utilization: 58 }
-  ]
-};

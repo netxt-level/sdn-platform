@@ -1,8 +1,8 @@
 # OpenFlow Controller 인프라
 
-- 상태: Controller·L2·경로 우회 구현 및 자동 검증 완료
-- 적용 범위: `feat/data-plane-infrastructure`
-- 최종 수정일: 2026-07-16
+- 상태: Controller·L2·경로 우회·외부 Flow Rule·OVS Meter 구현 및 검증 완료
+- 적용 범위: `feat/analyzer-sensor-integration`
+- 최종 수정일: 2026-07-20
 
 ## 목표와 현재 범위
 
@@ -22,17 +22,15 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 - PortStatus 기반 링크 down/up 감지
 - 토폴로지 변경 시 내부 L2 Flow 무효화
 - Controller 재시작 후 OVS 재연결과 호스트 재학습
-- 읽기 전용 Health/Switch REST API
+- Health/Switch REST API
+- Backend 요청 Flow Rule 설치 및 Barrier 기반 적용 확인
+- Backend 요청 Flow Rule 삭제 및 Barrier 기반 제거 확인
+- OVS Meter PKTPS 기반 `RATE_LIMIT`과 timeout cleanup
+- 활성 Topology 조회와 L2 경로 재계산 API
 
 현재 브랜치에서 제외하는 기능:
 
-- Backend Flow Rule 적용과 상태 동기화
-- `POST /flows`, `DELETE /flows/{id}`, `GET /topology`
-- OVS Meter 기반 `RATE_LIMIT`
-- Analyzer OVS Mirror와 Mininet 트래픽 캡처
-- 보안 이벤트 기반 DROP/Rate Limit 종단 간 대응
-
-위 기능은 인프라 브랜치를 기반으로 별도 연동 브랜치에서 구현한다.
+- Backend와 Controller의 만료 상태 재조정
 
 ## 기술 구성
 
@@ -82,6 +80,7 @@ data-plane/controller/
 │   ├── controller.py
 │   ├── datapaths.py
 │   ├── flow_manager.py
+│   ├── flow_operations.py
 │   ├── hosts.py
 │   ├── packet_parser.py
 │   ├── routing.py
@@ -101,8 +100,9 @@ data-plane/controller/
 | `topology.py` | 고정 포트 맵, 활성 스위치·링크, Flooding Tree |
 | `routing.py` | 순수 Dijkstra와 출력 포트 계산 |
 | `flow_manager.py` | Table-Miss, L2 Flow, Packet-Out, Flow 삭제 메시지 |
+| `flow_operations.py` | Backend 요청 Flow-Mod의 Barrier/Error lifecycle 추적 |
 | `table_miss.py` | Barrier/Error/timeout 기반 Table-Miss 상태 추적 |
-| `api.py` | `/health`, `/switches` 읽기 전용 API |
+| `api.py` | Health, switch 조회, 외부 Flow Rule 설치 REST API |
 | `config.py` | OpenFlow/REST 포트 환경변수 검증 |
 
 경로 알고리즘과 활성 토폴로지 계산은 OpenFlow 객체와 분리되어 단위 테스트가
@@ -114,7 +114,7 @@ data-plane/controller/
 OVS TCP connect
 → OpenFlow 1.3 negotiation
 → Switch Features
-→ Table-Miss Flow-Mod
+→ Policy Table-Miss와 Forwarding Table-Miss Flow-Mod
 → Barrier Request
 → Barrier Reply 또는 OpenFlow Error
 → MAIN_DISPATCHER Datapath registration
@@ -128,16 +128,16 @@ DEAD_DISPATCHER 이벤트는 현재 연결을 제거하지 않는다. 스위치�
 transit 포트를 미확인 상태로 두고 OpenFlow Port Description을 요청한다. 링크
 양쪽 포트의 현재 상태가 모두 정상으로 확인된 뒤에만 경로 계산에 포함한다.
 
-Table-Miss Rule:
+Controller는 정책과 포워딩을 두 테이블로 분리한다.
 
-| 항목 | 값 |
-|---|---|
-| Table | `0` |
-| Priority | `0` |
-| Match | 전체 |
-| Action | `CONTROLLER` |
-| Idle/Hard timeout | `0 / 0` |
-| Cookie | `0x53444e0000000001` |
+| Table | 역할 | Table-Miss |
+|---|---|---|
+| `0` | 외부 보안 정책, DROP, RATE_LIMIT | `GOTO_TABLE:1` |
+| `1` | 학습형 L2 포워딩 | `CONTROLLER` |
+
+정책 Table-Miss cookie는 `0x53444e0000000002`, 포워딩 Table-Miss cookie는
+`0x53444e0000000001`이다. 두 Flow-Mod 뒤의 단일 Barrier Reply로 파이프라인
+전체 설치를 확인한다.
 
 Table-Miss 상태는 다음 lifecycle을 사용한다.
 
@@ -152,8 +152,8 @@ unknown → pending → installed
 
 DPID뿐 아니라 현재 Datapath 객체와 Flow/Barrier XID를 함께 비교한다. 따라서
 재연결 전 Datapath에서 늦게 도착한 Reply, Error, disconnect가 새 연결 상태를
-변경하지 않는다. 이 확인 구조는 현재 Table-Miss에만 적용하며 외부 Flow Rule
-lifecycle은 후속 연동 단계에서 구현한다.
+변경하지 않는다. 외부 Flow Rule도 별도 registry에서 동일하게 Barrier,
+OpenFlow Error 및 disconnect를 추적한다.
 
 ## Packet-In과 호스트 학습
 
@@ -182,6 +182,7 @@ IPv6, LLDP 및 그 밖의 Ethertype는 현재 전달 대상에서 제외한다.
 | 항목 | 값 |
 |---|---|
 | Match | `in_port`, `eth_src`, `eth_dst`, `eth_type`, 출발지 IP |
+| Table | `1` |
 | Priority | `100` |
 | Idle timeout | `60초` |
 | Hard timeout | `0` |
@@ -250,7 +251,99 @@ Backup 경로를 통과할 수 있다.
 }
 ```
 
-현재 REST API는 읽기 전용이며 API 문서 URL은 비활성화되어 있다.
+### `POST /flow-rules`
+
+Backend가 저장한 rule ID를 그대로 받아 안정적인 OpenFlow cookie를 생성한다.
+지원 match는 IPv4 source/destination, IP protocol, TCP/UDP port,
+ICMP type/code 및 Ethernet source/destination이다. IPv4 전제 필드는
+`eth_type=2048`을 자동으로 추가한다.
+
+지원 action:
+
+- `DROP`
+- `OUTPUT:<port>`
+- `OUTPUT:<인접 switch>` (예: `output:s2`)
+- `RATE_LIMIT` (`rate_limit_pps` 필수)
+
+Flow-Mod 전송 후 Barrier Reply를 확인한 경우에만 `APPLIED`를 반환한다.
+OpenFlow Error 또는 5초 timeout은 오류 응답에 원인을 포함한다. 동일한
+`rule_id`의 `pending`/`installed` 요청은 다시 전송하지 않는다.
+
+`RATE_LIMIT`은 `rate_limit_pps`를 OpenFlow Meter `OFPMF_PKTPS` rate로
+그대로 변환한다. Meter의 drop band를 통과한 패킷은 Table 1의 기존 L2
+포워딩을 계속 사용하므로 Packet-In hot path를 증가시키지 않는다. 동일한
+switch와 rate를 쓰는 rule은 Meter를 안전하게 공유하며, 마지막 rule의
+idle/hard timeout이 발생하면 Meter를 삭제한다.
+
+### `GET /flow-rules`
+
+현재 Controller 프로세스가 추적하는 Backend 요청 rule과 적용 상태를 반환한다.
+이 목록은 메모리 상태이며 영속 상태의 기준은 PostgreSQL
+`sdn_controller.flow_rules`이다.
+
+### `DELETE /flow-rules/{rule_id}`
+
+안정적인 rule cookie와 exact cookie mask를 사용해 Table 0의 해당 정책만
+삭제한다. Flow-Mod 뒤의 Barrier Reply 또는 FlowRemoved를 확인한 경우에만
+`REMOVED`를 반환한다. 동일 rule의 반복 삭제는 멱등하게 처리한다. Controller
+재시작으로 메모리 기록이 없으면 `switch_id` query가 필요하며 Backend가 이를
+자동으로 전달한다. `RATE_LIMIT`의 마지막 참조가 제거되면 Meter도 삭제한다.
+
+### `GET /meters`
+
+현재 Controller가 할당한 `meter_id`, DPID, `rate_limit_pps`, 참조 rule ID를
+반환한다.
+
+### `GET /topology`
+
+구성된 switch, 현재 활성/비활성 link와 양쪽 port, link cost, 학습된 Host
+위치를 반환한다.
+
+### `GET /stats`
+
+`CONTROLLER_STATS_INTERVAL_SECONDS` 주기로 수집한 switch port packet/byte/error
+counter와 flow packet/byte/duration counter의 최신 snapshot을 반환한다.
+
+### `POST /paths/recalculate`
+
+요청 본문의 `preferred_path`에 `primary` 또는 `backup`을 전달한다. Controller는
+선택 경로의 link cost를 1, 대기 경로의 link cost를 10으로 원자적으로 바꾼 뒤
+현재 모든 학습형 L2 Flow를 제거한다. 다음 패킷은 갱신된 활성 topology
+snapshot에서 경로를 다시 계산한다. 요청 본문을 생략하면 `primary`를 사용한다.
+
+```json
+{
+  "preferred_path": "backup"
+}
+```
+
+Backend의 `GET /api/path/status`는 OpenFlow port counter 사용률이 저장된 혼잡
+임계값 이상이고 대기 경로의 사용률이 더 낮을 때 이 API를 호출한다. 복귀 시에는
+임계값보다 10% 낮은 히스테리시스를 적용한다.
+
+API 문서 URL은 비활성화되어 있다.
+
+격리된 Mininet 설치 검증:
+
+```bash
+sudo python3 data-plane/mininet/scenarios/external_flow.py
+sudo python3 data-plane/mininet/scenarios/rate_limit.py
+sudo python3 data-plane/mininet/scenarios/automatic_response.py \
+  --backend-url http://127.0.0.1:8000
+sudo python3 data-plane/mininet/scenarios/analyzer_detection_response.py \
+  --backend-url http://127.0.0.1:8000 \
+  --analyzer-id analyzer-1
+```
+
+이 시나리오는 h1→web ICMP가 정상 전달되는지 먼저 확인한 뒤 s1에 우선순위
+500 DROP rule을 설치한다. REST 응답의 `APPLIED`, OVS flow dump의 cookie와
+DROP action, ICMP 차단, topology 조회, 경로 재계산, `REMOVED`, 통신 복구를
+차례로 검증하고 Mininet 상태를 정리한다.
+RATE_LIMIT 시나리오는 1200-byte UDP를 100Mbps로 전송해 baseline을 측정한 뒤
+100pps Meter 적용 후 대역폭 감소와 hard timeout 뒤 Meter 정리를 확인한다.
+자동 대응 시나리오는 Analyzer 형식 이벤트의 DB/Controller 적용을 확인하고,
+Analyzer 탐지 시나리오는 OVS Mirror로 복제한 실제 ICMP Flood를 Analyzer가
+탐지해 `security_responses`, `flow_rules`, s1 Meter까지 연결하는지 확인한다.
 
 ## 환경변수
 
@@ -329,16 +422,16 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - `host_learned`, `host_ip_updated`, `host_moved`
 - `host_spoof_rejected`
 - `l2_path_installed`, `l2_flows_invalidated`
+- `external_flow_installed`, `external_flow_failed`
+- `external_flow_removed`, `external_flow_expired`, `meter_removed`, `meters_released`
 
 ## 알려진 제한사항
 
 - OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
 - 현재 Host 바인딩은 고정 Mininet 토폴로지의 네 호스트 전용이다. 동적 Host
   이동, DHCP 주소 변경, 신규 access 포트 등록은 지원하지 않는다.
-- REST API는 실제 Flow 설치/삭제 명령을 아직 제공하지 않는다.
-- Barrier/Error 확인은 Table-Miss에만 적용되며 외부 Flow Rule lifecycle은
-  구현하지 않았다.
+- Controller는 timeout 만료와 Meter 정리를 추적하지만 이를 Backend의
+  `EXPIRED` 상태로 재조정하는 기능은 아직 없다.
 - 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
 - Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
   Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.
-- Analyzer는 아직 Mininet Mirror 인터페이스에 연결되지 않았다.
