@@ -1,4 +1,8 @@
 services:
+  backend:
+    ports:
+      - "${BACKEND_VM_BIND_ADDRESS:?set BACKEND_VM_BIND_ADDRESS to the Multipass host gateway}:8000:8000"
+
   migrate:
     build:
       context: ./backend

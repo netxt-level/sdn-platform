@@ -178,6 +178,7 @@ if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   fi
   BACKEND_URL="http://${HOST_GATEWAY}:8000"
   FRONTEND_URL="http://${HOST_GATEWAY}:${FRONTEND_PORT:-3000}"
+  export BACKEND_VM_BIND_ADDRESS="${HOST_GATEWAY}"
   CONTROL_COMPOSE=(
     docker compose
     -f "${REPO_ROOT}/docker-compose.yml"
