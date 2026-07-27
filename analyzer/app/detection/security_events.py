@@ -105,6 +105,24 @@ class SecurityEventBuilder:
             score = int(alert.get("score") or 60)
             recommended_action = alert.get("recommended_action") or "monitor"
             response_level = alert.get("response_level") or "L1"
+            evidence_window = float(
+                alert.get("window_seconds") or window_sec or 1
+            )
+            if evidence_window <= 0:
+                evidence_window = 1
+            syn_count = int(alert.get("syn_count") or 0)
+            packet_count = int(alert.get("packet_count") or syn_count)
+            bit_count = int(alert.get("bit_count") or 0)
+            pps = float(
+                alert.get("pps")
+                if alert.get("pps") is not None
+                else packet_count / evidence_window
+            )
+            bps = float(
+                alert.get("bps")
+                if alert.get("bps") is not None
+                else bit_count / evidence_window
+            )
             event = self._event(
                 timestamp=timestamp,
                 attack_category="RECON",
@@ -119,10 +137,14 @@ class SecurityEventBuilder:
                 response_level=response_level,
                 evidence={
                     "matched_conditions": matched_conditions,
-                    "window_seconds": alert.get("window_seconds") or window_sec,
+                    "window_seconds": evidence_window,
+                    "packet_count": packet_count,
+                    "bit_count": bit_count,
+                    "pps": pps,
+                    "bps": bps,
                     "unique_dst_port_count": unique_port_count,
                     "unique_dst_ports": unique_dst_ports,
-                    "syn_count": int(alert.get("syn_count") or 0),
+                    "syn_count": syn_count,
                     "score": score,
                 },
                 now=now,

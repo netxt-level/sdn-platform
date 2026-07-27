@@ -48,9 +48,12 @@ class PortScanDetector:
             src_ip = packet.get("src_ip")
             dst_ip = packet.get("dst_ip")
             dst_port = packet.get("dst_port")
+            packet_size = packet.get("packet_size", 0)
 
             if not src_ip or not dst_ip or dst_port is None:
                 continue
+            if not isinstance(packet_size, (int, float)) or packet_size < 0:
+                packet_size = 0
 
             # 이후 윈도우 집계를 위해 필요한 최소 정보만 저장한다.
             self.events.append({
@@ -58,6 +61,7 @@ class PortScanDetector:
                 "src_ip": src_ip,
                 "dst_ip": dst_ip,
                 "dst_port": dst_port,
+                "packet_size": int(packet_size),
             })
 
         # 탐지 윈도우 밖의 오래된 이벤트는 제거한다.
@@ -65,7 +69,13 @@ class PortScanDetector:
 
         window_cutoff = now - timedelta(seconds=self.window_sec)
         multi_target_cutoff = now - timedelta(seconds=self.multi_target_window_sec)
-        grouped = defaultdict(lambda: {"ports": set(), "syn_count": 0})
+        grouped = defaultdict(
+            lambda: {
+                "ports": set(),
+                "syn_count": 0,
+                "bit_count": 0,
+            }
+        )
         multi_target_grouped = defaultdict(set)
 
         # 출발지/목적지 쌍마다 접근한 목적지 포트 종류를 모은다.
@@ -74,6 +84,7 @@ class PortScanDetector:
                 key = (event["src_ip"], event["dst_ip"])
                 grouped[key]["ports"].add(event["dst_port"])
                 grouped[key]["syn_count"] += 1
+                grouped[key]["bit_count"] += event["packet_size"] * 8
 
             if event["timestamp"] >= multi_target_cutoff:
                 key = (event["src_ip"], event["dst_ip"])
@@ -87,6 +98,7 @@ class PortScanDetector:
         for (src_ip, dst_ip), stats in grouped.items():
             ports = stats["ports"]
             syn_count = stats["syn_count"]
+            bit_count = stats["bit_count"]
 
             # 고유 목적지 포트 수가 임계값보다 작으면 정상 연결 시도로 간주한다.
             if len(ports) < self.unique_port_threshold:
@@ -118,6 +130,7 @@ class PortScanDetector:
             has_auxiliary_condition = len(matched_conditions) > 3
             response_level = "L2" if has_auxiliary_condition else "L1"
             recommended_action = "alert" if has_auxiliary_condition else "monitor"
+            rate_window = self.window_sec if self.window_sec > 0 else 1
 
             alert_key = (src_ip, dst_ip)
             last_alert = self.last_alert_at.get(alert_key)
@@ -133,14 +146,16 @@ class PortScanDetector:
                 "host": src_ip,
                 "ip": src_ip,
                 "protocol": "TCP",
-                "bps": 0,
-                "pps": 0,
+                "bps": bit_count / rate_window,
+                "pps": syn_count / rate_window,
                 "attack_type": "PORT_SCAN",
                 "reasons": [
                     "Port Scan",
                 ],
                 "target_ip": dst_ip,
                 "window_seconds": self.window_sec,
+                "packet_count": syn_count,
+                "bit_count": bit_count,
                 "unique_dst_port_count": len(ports),
                 "unique_dst_ports": sorted(ports),
                 "syn_count": syn_count,

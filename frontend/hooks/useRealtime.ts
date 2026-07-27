@@ -348,6 +348,25 @@ function numberFromEvidence(
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function rateFromEvidence(
+  evidence: Record<string, unknown> | undefined,
+  rateKey: string,
+  countKeys: string[]
+): number {
+  const explicitRate = numberFromEvidence(evidence, rateKey);
+
+  if (explicitRate > 0) {
+    return explicitRate;
+  }
+
+  const count = countKeys
+    .map((key) => numberFromEvidence(evidence, key))
+    .find((value) => value > 0);
+  const windowSeconds = numberFromEvidence(evidence, "window_seconds");
+
+  return count && windowSeconds > 0 ? count / windowSeconds : explicitRate;
+}
+
 function actionFromSecurityEvent(event: RawSecurityEvent): SecurityEvent["action"] {
   const mitigationAction = event.mitigation?.action;
   const action = String(
@@ -432,11 +451,8 @@ function normalizeSecurityEvent(event: RawSecurityEvent): SecurityEvent {
     confidence: event.confidence,
     evidence,
     mitigation: event.mitigation ?? null,
-    pps:
-      numberFromEvidence(evidence, "pps") ||
-      numberFromEvidence(evidence, "syn_count") ||
-      numberFromEvidence(evidence, "packet_count"),
-    bps: numberFromEvidence(evidence, "bps"),
+    pps: rateFromEvidence(evidence, "pps", ["syn_count", "packet_count"]),
+    bps: rateFromEvidence(evidence, "bps", ["bit_count"]),
     action: actionFromSecurityEvent(event)
   };
 }
