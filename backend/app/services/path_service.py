@@ -33,7 +33,10 @@ class PathService:
         self.controller_client = controller_client or ControllerClient()
         self.utilization_tracker = (
             utilization_tracker
-            or SwitchUtilizationTracker(settings.switch_port_capacity_bps)
+            or SwitchUtilizationTracker(
+                settings.switch_port_capacity_bps,
+                settings.path_capacity_pps,
+            )
         )
         self.platform_settings_repository = (
             platform_settings_repository or PlatformSettingsRepository()
@@ -48,6 +51,11 @@ class PathService:
             ]
         )
         active_path = "primary"
+        distribution_mode = "primary"
+        path_capacity_pps = settings.path_capacity_pps
+        distribution_threshold_pps = settings.path_distribution_threshold_pps
+        distribution_recovery_pps = settings.path_distribution_recovery_pps
+        controller_manages_distribution = False
         controller_state = None
         switches = []
         topology = {"links": [], "switches": []}
@@ -57,6 +65,21 @@ class PathService:
             controller_state = {"topology": topology, "stats": stats}
             switches = self.utilization_tracker.update(stats, topology)
             active_path = self._reported_active_path(topology)
+            distribution = stats.get("path_distribution")
+            if isinstance(distribution, dict):
+                controller_manages_distribution = True
+                distribution_mode = str(
+                    distribution.get("mode") or "primary"
+                )
+                distribution_threshold_pps = int(
+                    distribution.get("threshold_pps")
+                    or distribution_threshold_pps
+                )
+                distribution_recovery_pps = int(
+                    distribution.get("recovery_pps")
+                    if distribution.get("recovery_pps") is not None
+                    else distribution_recovery_pps
+                )
         except ControllerClientError:
             pass
 
@@ -70,7 +93,10 @@ class PathService:
                 source,
                 target,
                 path,
-                selected=active_path == path,
+                selected=(
+                    distribution_mode == "balanced"
+                    or active_path == path
+                ),
                 topology_link=topology_links.get(
                     self._edge_key(source, target)
                 ),
@@ -80,7 +106,9 @@ class PathService:
         ]
         primary_utilization = self._path_utilization("primary", links)
         backup_utilization = self._path_utilization("backup", links)
-        if controller_state is not None:
+        primary_pps = self._path_pps("primary", links)
+        backup_pps = self._path_pps("backup", links)
+        if controller_state is not None and not controller_manages_distribution:
             desired_path = self._desired_active_path(
                 active_path,
                 links,
@@ -106,22 +134,65 @@ class PathService:
                     "name": "primary",
                     "nodes": primary_nodes,
                     "utilization": primary_utilization,
-                    "active": active_path == "primary",
+                    "pps": primary_pps,
+                    "pps_utilization": self._pps_utilization(
+                        primary_pps,
+                        path_capacity_pps,
+                    ),
+                    "active": (
+                        distribution_mode == "balanced"
+                        or active_path == "primary"
+                    ),
                 },
                 "backup": {
                     "name": "backup",
                     "nodes": backup_nodes,
                     "utilization": backup_utilization,
-                    "active": active_path == "backup",
+                    "pps": backup_pps,
+                    "pps_utilization": self._pps_utilization(
+                        backup_pps,
+                        path_capacity_pps,
+                    ),
+                    "active": (
+                        distribution_mode == "balanced"
+                        or active_path == "backup"
+                    ),
                 },
             },
             "links": links,
             "switches": switches,
             "utilization_source": "openflow_port_counter_delta",
             "congestion_threshold_percent": threshold,
+            "path_distribution_mode": distribution_mode,
+            "path_capacity_pps": path_capacity_pps,
+            "path_distribution_threshold_pps": distribution_threshold_pps,
+            "path_distribution_recovery_pps": distribution_recovery_pps,
             "history": [self._history_item(rule) for rule in flow_rules[:8]],
             "controller": controller_state,
         }
+
+    @staticmethod
+    def _path_pps(
+        path: str,
+        links: list[dict[str, Any]],
+    ) -> float:
+        return round(
+            max(
+                (
+                    float(link["pps"])
+                    for link in links
+                    if link["path"] == path
+                ),
+                default=0.0,
+            ),
+            2,
+        )
+
+    @staticmethod
+    def _pps_utilization(pps: float, threshold_pps: int) -> float:
+        if threshold_pps <= 0:
+            return 0.0
+        return round(pps / threshold_pps * 100, 2)
 
     @staticmethod
     def _path_utilization(
@@ -234,6 +305,32 @@ class PathService:
             "capacity_bps": max(
                 (int(item["capacity_bps"]) for item in samples),
                 default=settings.switch_port_capacity_bps,
+            ),
+            "pps": round(
+                max((float(item["pps"]) for item in samples), default=0.0),
+                2,
+            ),
+            "rx_pps": round(
+                max((float(item["rx_pps"]) for item in samples), default=0.0),
+                2,
+            ),
+            "tx_pps": round(
+                max((float(item["tx_pps"]) for item in samples), default=0.0),
+                2,
+            ),
+            "pps_utilization": round(
+                max(
+                    (
+                        float(item["pps_utilization"])
+                        for item in samples
+                    ),
+                    default=0.0,
+                ),
+                2,
+            ),
+            "capacity_pps": max(
+                (int(item["capacity_pps"]) for item in samples),
+                default=settings.path_capacity_pps,
             ),
             "sampled": any(bool(item.get("sampled")) for item in samples),
         }

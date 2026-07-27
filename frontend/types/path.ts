@@ -13,6 +13,11 @@ export type PathLink = {
   tx_bps: number;
   utilization: number;
   capacity_bps: number;
+  pps: number;
+  rx_pps: number;
+  tx_pps: number;
+  pps_utilization: number;
+  capacity_pps: number;
   sampled: boolean;
 };
 
@@ -20,6 +25,8 @@ export type PathInfo = {
   name: "primary" | "backup";
   nodes: string[];
   utilization: number;
+  pps: number;
+  pps_utilization: number;
   active: boolean;
 };
 
@@ -39,6 +46,11 @@ export type PortUtilization = {
   tx_bps: number;
   utilization: number;
   capacity_bps: number;
+  pps: number;
+  rx_pps: number;
+  tx_pps: number;
+  pps_utilization: number;
+  capacity_pps: number;
   sampled: boolean;
 };
 
@@ -51,10 +63,16 @@ export type SwitchUtilization = {
   tx_bps: number;
   utilization: number;
   capacity_bps: number;
+  pps: number;
+  rx_pps: number;
+  tx_pps: number;
+  pps_utilization: number;
+  capacity_pps: number;
   sample_interval_seconds?: number | null;
   sampled: boolean;
   ports: PortUtilization[];
   status: "sampling" | "normal" | "warning" | "critical" | "disconnected";
+  pps_status: "sampling" | "normal" | "warning" | "critical" | "disconnected";
 };
 
 export type ControllerSwitch = {
@@ -97,6 +115,10 @@ export type PathStatus = {
   switches: SwitchUtilization[];
   utilization_source: "openflow_port_counter_delta";
   congestion_threshold_percent: number;
+  path_distribution_mode: "primary" | "balanced";
+  path_capacity_pps: number;
+  path_distribution_threshold_pps: number;
+  path_distribution_recovery_pps: number;
   history: PathHistoryItem[];
   controller: {
     topology: ControllerTopology;

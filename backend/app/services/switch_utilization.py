@@ -23,12 +23,18 @@ def _parse_timestamp(value: Any) -> datetime | None:
 class SwitchUtilizationTracker:
     """Convert cumulative OpenFlow port counters into switch utilization."""
 
-    def __init__(self, capacity_bps: int):
+    def __init__(self, capacity_bps: int, capacity_pps: int = 1000):
         if capacity_bps <= 0:
             raise ValueError("capacity_bps must be positive")
+        if capacity_pps <= 0:
+            raise ValueError("capacity_pps must be positive")
         self.capacity_bps = capacity_bps
+        self.capacity_pps = capacity_pps
         self._previous_at: datetime | None = None
-        self._previous_counters: dict[tuple[str, int], tuple[int, int]] = {}
+        self._previous_counters: dict[
+            tuple[str, int],
+            tuple[int, int, int, int],
+        ] = {}
         self._last_usage: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
@@ -76,9 +82,18 @@ class SwitchUtilizationTracker:
             for switch_id in switch_ids:
                 max_rx_bps = 0.0
                 max_tx_bps = 0.0
+                max_rx_pps = 0.0
+                max_tx_pps = 0.0
+                total_port_pps = 0.0
+                max_port_pps = 0.0
                 port_usage = []
                 allowed_ports = topology_ports.get(switch_id)
-                for key, (rx_bytes, tx_bytes) in current.items():
+                for key, (
+                    rx_bytes,
+                    tx_bytes,
+                    rx_packets,
+                    tx_packets,
+                ) in current.items():
                     if key[0] != switch_id:
                         continue
                     if allowed_ports and key[1] not in allowed_ports:
@@ -91,13 +106,22 @@ class SwitchUtilizationTracker:
                         continue
                     rx_bps = max(0, rx_bytes - previous[0]) * 8 / interval
                     tx_bps = max(0, tx_bytes - previous[1]) * 8 / interval
+                    rx_pps = max(0, rx_packets - previous[2]) / interval
+                    tx_pps = max(0, tx_packets - previous[3]) / interval
+                    port_pps = rx_pps + tx_pps
                     max_rx_bps = max(max_rx_bps, rx_bps)
                     max_tx_bps = max(max_tx_bps, tx_bps)
+                    max_rx_pps = max(max_rx_pps, rx_pps)
+                    max_tx_pps = max(max_tx_pps, tx_pps)
+                    total_port_pps += port_pps
+                    max_port_pps = max(max_port_pps, port_pps)
                     port_usage.append(
                         self._port_usage_item(
                             key[1],
                             rx_bps=rx_bps,
                             tx_bps=tx_bps,
+                            rx_pps=rx_pps,
+                            tx_pps=tx_pps,
                             sampled=True,
                         )
                     )
@@ -107,6 +131,8 @@ class SwitchUtilizationTracker:
                     100.0,
                     (bps / self.capacity_bps) * 100,
                 )
+                pps = max(max_port_pps, total_port_pps / 2)
+                pps_utilization = (pps / self.capacity_pps) * 100
                 switch_sampled = any(
                     bool(item["sampled"]) for item in port_usage
                 )
@@ -119,6 +145,11 @@ class SwitchUtilizationTracker:
                     "tx_bps": round(max_tx_bps, 2),
                     "utilization": round(utilization, 2),
                     "capacity_bps": self.capacity_bps,
+                    "pps": round(pps, 2),
+                    "rx_pps": round(max_rx_pps, 2),
+                    "tx_pps": round(max_tx_pps, 2),
+                    "pps_utilization": round(pps_utilization, 2),
+                    "capacity_pps": self.capacity_pps,
                     "sample_interval_seconds": round(interval, 3),
                     "sampled": switch_sampled,
                     "ports": sorted(
@@ -128,6 +159,11 @@ class SwitchUtilizationTracker:
                     "status": self._status(
                         states.get(switch_id, "unknown"),
                         utilization,
+                        sampled=switch_sampled,
+                    ),
+                    "pps_status": self._status(
+                        states.get(switch_id, "unknown"),
+                        pps_utilization,
                         sampled=switch_sampled,
                     ),
                 }
@@ -164,7 +200,7 @@ class SwitchUtilizationTracker:
     @staticmethod
     def _port_counters(
         stats: dict[str, Any],
-    ) -> dict[tuple[str, int], tuple[int, int]]:
+    ) -> dict[tuple[str, int], tuple[int, int, int, int]]:
         counters = {}
         for switch in stats.get("switches", []):
             switch_id = switch.get("switch_id")
@@ -177,6 +213,8 @@ class SwitchUtilizationTracker:
                 counters[(switch_id, port_no)] = (
                     int(port.get("rx_bytes") or 0),
                     int(port.get("tx_bytes") or 0),
+                    int(port.get("rx_packets") or 0),
+                    int(port.get("tx_packets") or 0),
                 )
         return counters
 
@@ -204,9 +242,12 @@ class SwitchUtilizationTracker:
         *,
         rx_bps: float = 0.0,
         tx_bps: float = 0.0,
+        rx_pps: float = 0.0,
+        tx_pps: float = 0.0,
         sampled: bool,
     ) -> dict[str, Any]:
         bps = max(rx_bps, tx_bps)
+        pps = rx_pps + tx_pps
         return {
             "port_no": port_no,
             "bps": round(bps, 2),
@@ -217,6 +258,14 @@ class SwitchUtilizationTracker:
                 2,
             ),
             "capacity_bps": self.capacity_bps,
+            "pps": round(pps, 2),
+            "rx_pps": round(rx_pps, 2),
+            "tx_pps": round(tx_pps, 2),
+            "pps_utilization": round(
+                (pps / self.capacity_pps) * 100,
+                2,
+            ),
+            "capacity_pps": self.capacity_pps,
             "sampled": sampled,
         }
 
@@ -239,6 +288,11 @@ class SwitchUtilizationTracker:
                 "tx_bps": 0.0,
                 "utilization": 0.0,
                 "capacity_bps": self.capacity_bps,
+                "pps": 0.0,
+                "rx_pps": 0.0,
+                "tx_pps": 0.0,
+                "pps_utilization": 0.0,
+                "capacity_pps": self.capacity_pps,
                 "sample_interval_seconds": None,
                 "sampled": False,
                 "ports": [
@@ -246,6 +300,7 @@ class SwitchUtilizationTracker:
                     for port_no in current_ports
                 ],
                 "status": self._status(state, 0.0, sampled=False),
+                "pps_status": self._status(state, 0.0, sampled=False),
             }
         if state != "connected":
             return {
@@ -256,6 +311,10 @@ class SwitchUtilizationTracker:
                 "rx_bps": 0.0,
                 "tx_bps": 0.0,
                 "utilization": 0.0,
+                "pps": 0.0,
+                "rx_pps": 0.0,
+                "tx_pps": 0.0,
+                "pps_utilization": 0.0,
                 "ports": [
                     {
                         **port,
@@ -263,10 +322,15 @@ class SwitchUtilizationTracker:
                         "rx_bps": 0.0,
                         "tx_bps": 0.0,
                         "utilization": 0.0,
+                        "pps": 0.0,
+                        "rx_pps": 0.0,
+                        "tx_pps": 0.0,
+                        "pps_utilization": 0.0,
                     }
                     for port in previous.get("ports", [])
                 ],
                 "status": "disconnected",
+                "pps_status": "disconnected",
             }
         return {
             **previous,
@@ -275,6 +339,11 @@ class SwitchUtilizationTracker:
             "status": self._status(
                 state,
                 float(previous["utilization"]),
+                sampled=bool(previous["sampled"]),
+            ),
+            "pps_status": self._status(
+                state,
+                float(previous["pps_utilization"]),
                 sampled=bool(previous["sampled"]),
             ),
         }

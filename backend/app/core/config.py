@@ -140,5 +140,31 @@ class Settings:
             raise RuntimeError("SWITCH_PORT_CAPACITY_BPS must be positive")
         return value
 
+    @property
+    def path_distribution_threshold_pps(self) -> int:
+        value = int(get_env("PATH_DISTRIBUTION_THRESHOLD_PPS", "800"))
+        if value <= 0:
+            raise RuntimeError(
+                "PATH_DISTRIBUTION_THRESHOLD_PPS must be positive"
+            )
+        return value
+
+    @property
+    def path_distribution_recovery_pps(self) -> int:
+        value = int(get_env("PATH_DISTRIBUTION_RECOVERY_PPS", "600"))
+        if value < 0 or value >= self.path_distribution_threshold_pps:
+            raise RuntimeError(
+                "PATH_DISTRIBUTION_RECOVERY_PPS must be non-negative and "
+                "below PATH_DISTRIBUTION_THRESHOLD_PPS"
+            )
+        return value
+
+    @property
+    def path_capacity_pps(self) -> int:
+        value = int(get_env("PATH_CAPACITY_PPS", "1000"))
+        if value <= 0:
+            raise RuntimeError("PATH_CAPACITY_PPS must be positive")
+        return value
+
 
 settings = Settings()

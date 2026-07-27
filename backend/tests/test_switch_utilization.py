@@ -20,11 +20,19 @@ def stats(timestamp, ports):
     }
 
 
-def port(port_no, rx_bytes, tx_bytes):
+def port(
+    port_no,
+    rx_bytes,
+    tx_bytes,
+    rx_packets=0,
+    tx_packets=0,
+):
     return {
         "port_no": port_no,
         "rx_bytes": rx_bytes,
         "tx_bytes": tx_bytes,
+        "rx_packets": rx_packets,
+        "tx_packets": tx_packets,
     }
 
 
@@ -35,8 +43,8 @@ def test_counter_delta_becomes_busiest_port_utilization():
         stats(
             "2026-07-21T00:00:00+00:00",
             [
-                port(1, 100, 100),
-                port(2, 100, 100),
+                port(1, 100, 100, 100, 100),
+                port(2, 100, 100, 100, 100),
                 port(0xFFFFFFFE, 0, 9_000_000),
             ],
         ),
@@ -46,8 +54,8 @@ def test_counter_delta_becomes_busiest_port_utilization():
         stats(
             "2026-07-21T00:00:05+00:00",
             [
-                port(1, 625_100, 100),
-                port(2, 100, 1_250_100),
+                port(1, 625_100, 100, 600, 100),
+                port(2, 100, 1_250_100, 100, 1_100),
                 port(0xFFFFFFFE, 0, 99_000_000),
             ],
         ),
@@ -61,6 +69,9 @@ def test_counter_delta_becomes_busiest_port_utilization():
     assert second[0]["tx_bps"] == 2_000_000
     assert second[0]["bps"] == 2_000_000
     assert second[0]["utilization"] == 20.0
+    assert second[0]["pps"] == 200.0
+    assert second[0]["pps_utilization"] == 20.0
+    assert second[0]["capacity_pps"] == 1000
     assert second[0]["sample_interval_seconds"] == 5.0
     assert second[0]["status"] == "normal"
     assert second[0]["ports"] == [
@@ -71,6 +82,11 @@ def test_counter_delta_becomes_busiest_port_utilization():
             "tx_bps": 0.0,
             "utilization": 10.0,
             "capacity_bps": 10_000_000,
+            "pps": 100.0,
+            "rx_pps": 100.0,
+            "tx_pps": 0.0,
+            "pps_utilization": 10.0,
+            "capacity_pps": 1000,
             "sampled": True,
         },
         {
@@ -80,6 +96,11 @@ def test_counter_delta_becomes_busiest_port_utilization():
             "tx_bps": 2_000_000,
             "utilization": 20.0,
             "capacity_bps": 10_000_000,
+            "pps": 200.0,
+            "rx_pps": 0.0,
+            "tx_pps": 200.0,
+            "pps_utilization": 20.0,
+            "capacity_pps": 1000,
             "sampled": True,
         },
     ]

@@ -19,7 +19,7 @@ import { formatBitsPerSecond, formatNumber } from "@/lib/format";
 import { getPathStatus } from "@/lib/pathApi";
 import { useRealtime } from "@/hooks/useRealtime";
 import type { SuspiciousHost } from "@/types/analyzer";
-import type { PathStatus, SwitchUtilization } from "@/types/path";
+import type { PathInfo, PathStatus } from "@/types/path";
 
 const ALL_ATTACK_TYPES = "ALL";
 
@@ -57,25 +57,21 @@ function getSuspiciousHostTagClass(host: SuspiciousHost): string {
   return "border-accent bg-[var(--accent-dim)] text-accent";
 }
 
-function utilizationLabel(item: SwitchUtilization): string {
-  if (item.state !== "connected") return "연결 끊김";
-  if (!item.sampled) return "측정 중";
-  if (item.utilization > 0 && item.utilization < 0.01) return "<0.01%";
-  return `${item.utilization.toFixed(2)}%`;
+function utilizationLabel(item: PathInfo): string {
+  if (item.pps_utilization > 0 && item.pps_utilization < 0.01) return "<0.01%";
+  return `${item.pps_utilization.toFixed(2)}%`;
 }
 
-function utilizationColor(item: SwitchUtilization): string {
-  if (item.status === "critical") return "text-red";
-  if (item.status === "warning") return "text-yellow";
-  if (item.status === "normal") return "text-green";
-  return "text-faint";
+function utilizationColor(item: PathInfo): string {
+  if (item.pps_utilization >= 90) return "text-red";
+  if (item.pps_utilization >= 70) return "text-yellow";
+  return item.active ? "text-green" : "text-faint";
 }
 
-function utilizationBar(item: SwitchUtilization): string {
-  if (item.status === "critical") return "bg-red";
-  if (item.status === "warning") return "bg-yellow";
-  if (item.status === "normal") return "bg-green";
-  return "bg-faint";
+function utilizationBar(item: PathInfo): string {
+  if (item.pps_utilization >= 90) return "bg-red";
+  if (item.pps_utilization >= 70) return "bg-yellow";
+  return item.active ? "bg-green" : "bg-faint";
 }
 
 export default function DashboardPage() {
@@ -119,7 +115,7 @@ export default function DashboardPage() {
     }
 
     void loadSwitchUtilization();
-    const intervalId = window.setInterval(loadSwitchUtilization, 5000);
+    const intervalId = window.setInterval(loadSwitchUtilization, 1000);
     return () => {
       ignored = true;
       window.clearInterval(intervalId);
@@ -225,22 +221,38 @@ export default function DashboardPage() {
         </Panel>
 
         <Panel
-          title="경로 상태 · 스위치 사용률"
+          title="경로 PPS 사용률"
           className="col-span-6 max-xl:col-span-12"
           action={
             pathStatus
-              ? <StatusBadge value={`${pathStatus.active_path} active`} tone="normal" />
+              ? (
+                  <StatusBadge
+                    value={
+                      pathStatus.path_distribution_mode === "balanced"
+                        ? "1·2경로 분산 중"
+                        : pathStatus.active_path === "backup"
+                          ? "2경로 사용 중"
+                          : "1경로 사용 중"
+                    }
+                    tone="normal"
+                  />
+                )
               : <StatusBadge value="조회 중" tone="muted" />
           }
         >
           <div className="grid gap-4">
-            {(pathStatus?.switches ?? []).map((item) => (
-              <div key={item.switch_id} className="font-mono-ui">
+            {pathStatus &&
+              ([
+                ["primary", "1경로", pathStatus.paths.primary],
+                ["backup", "2경로", pathStatus.paths.backup]
+              ] as const).map(([key, label, item]) => (
+              <div key={key} className="font-mono-ui">
                 <div className="mb-2 flex items-center justify-between gap-3 text-[11px]">
                   <div>
-                    <strong className="block text-ink">{item.switch_id}</strong>
+                    <strong className="block text-ink">{label}</strong>
                     <span className="text-muted">
-                      {formatBitsPerSecond(item.bps)} / {formatBitsPerSecond(item.capacity_bps)}
+                      {item.nodes.join(" → ")} · {formatNumber(Math.round(item.pps))} PPS /
+                      {" "}{formatNumber(pathStatus.path_capacity_pps)} PPS
                     </span>
                   </div>
                   <span className={utilizationColor(item)}>{utilizationLabel(item)}</span>
@@ -251,16 +263,16 @@ export default function DashboardPage() {
                     style={{
                       width: `${Math.min(
                         100,
-                        Math.max(item.bps > 0 ? 1 : 0, item.utilization)
+                        Math.max(item.pps > 0 ? 1 : 0, item.pps_utilization)
                       )}%`
                     }}
                   />
                 </div>
               </div>
             ))}
-            {!pathStatus?.switches.length && (
+            {!pathStatus && (
               <p className="font-mono-ui text-[11px] text-muted">
-                Controller 스위치 통계를 기다리는 중입니다.
+                Controller 경로 PPS 통계를 기다리는 중입니다.
               </p>
             )}
           </div>

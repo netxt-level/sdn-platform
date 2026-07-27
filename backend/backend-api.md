@@ -403,7 +403,12 @@ POST /api/flows
 GET /api/path/status
 ```
 
-대시보드 요약과 `sdn_controller.flow_rules`를 조합해 경로 제어 화면에서 사용할 기본/우회 경로 상태, 링크 사용률, 경로 변경 이력을 반환한다.
+Controller의 연속된 OpenFlow 포트 통계 snapshot을 비교해 스위치와 경로별
+BPS/PPS를 계산한다. 메인 대시보드의 1경로·2경로 막대는 하드웨어 BPS 용량이
+아니라 `PATH_CAPACITY_PPS` 대비 경로 PPS를 사용한다. 기본 1,000 PPS의
+80%에서 분산을 시작하고 60% 미만이 3회 연속 관측되면 1경로로 복귀한다. 링크별
+수치는 양 끝의 실제 연결 포트 counter를 사용하며, 물리 링크 상태(`state`)와
+선택 경로 여부(`selected`)를 분리해 반환한다.
 
 ### Response Body
 
@@ -416,12 +421,16 @@ GET /api/path/status
       "name": "primary",
       "nodes": ["s1", "s2", "s4"],
       "utilization": 0,
+      "pps": 950,
+      "pps_utilization": 95,
       "active": false
     },
     "backup": {
       "name": "backup",
       "nodes": ["s1", "s3", "s4"],
       "utilization": 0,
+      "pps": 420,
+      "pps_utilization": 42,
       "active": true
     }
   },
@@ -430,11 +439,56 @@ GET /api/path/status
       "id": "s1-s2",
       "source": "s1",
       "target": "s2",
+      "source_port": 4,
+      "target_port": 1,
       "path": "primary",
-      "active": false,
-      "utilization": 0
+      "state": "active",
+      "selected": false,
+      "active": true,
+      "bps": 1000000.0,
+      "rx_bps": 1000000.0,
+      "tx_bps": 500000.0,
+      "utilization": 10.0,
+      "capacity_bps": 10000000,
+      "pps": 950.0,
+      "rx_pps": 500.0,
+      "tx_pps": 450.0,
+      "pps_utilization": 95.0,
+      "capacity_pps": 1000,
+      "sampled": true
     }
   ],
+  "switches": [
+    {
+      "switch_id": "s1",
+      "dpid": "0000000000000001",
+      "state": "connected",
+      "bps": 2000000.0,
+      "rx_bps": 1000000.0,
+      "tx_bps": 2000000.0,
+      "utilization": 20.0,
+      "capacity_bps": 10000000,
+      "sample_interval_seconds": 5.0,
+      "sampled": true,
+      "ports": [
+        {
+          "port_no": 4,
+          "bps": 1000000.0,
+          "rx_bps": 1000000.0,
+          "tx_bps": 500000.0,
+          "utilization": 10.0,
+          "capacity_bps": 10000000,
+          "sampled": true
+        }
+      ],
+      "status": "normal"
+    }
+  ],
+  "utilization_source": "openflow_port_counter_delta",
+  "path_distribution_mode": "balanced",
+  "path_capacity_pps": 1000,
+  "path_distribution_threshold_pps": 800,
+  "path_distribution_recovery_pps": 600,
   "history": [
     {
       "id": "rule-uuid-001",
@@ -448,7 +502,14 @@ GET /api/path/status
 }
 ```
 
-현재 `active_path`는 네트워크 상태와 `PENDING` 대응 flow rule 존재 여부를 기반으로 파생한다. 실제 컨트롤러 경로 전환 상태와 동기화하는 기능은 아직 연결되어 있지 않다.
+PPS는 topology에 등록된 포트의 RX/TX packet counter 증분으로 계산한다.
+OVS 미러 출력처럼 topology에 없는 관측용 포트는 제외한다. 경로 PPS는 해당
+경로 링크 가운데 가장 큰 값을 사용하고, 기본 1,000 PPS를 100%로 표시한다.
+800 PPS 이상에서 분산을 시작하며, 600 PPS 미만이 3회 연속 관측되면
+1경로로 복귀한다. 1,000 PPS를 넘으면 백분율은 100%를 초과할 수 있지만
+막대 길이는 100%로 제한한다. 첫 snapshot은 비교 대상이 없어
+`sampled=false`를 반환한다.
+`path_distribution_mode=balanced`이면 두 경로가 모두 선택 상태다.
 
 ## 6. Security API
 

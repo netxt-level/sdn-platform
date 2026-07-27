@@ -114,6 +114,11 @@ def port_usage(port_no, bps, utilization):
         "tx_bps": bps / 2,
         "utilization": utilization,
         "capacity_bps": 10_000_000,
+        "pps": bps / 10_000,
+        "rx_pps": bps / 10_000,
+        "tx_pps": bps / 20_000,
+        "pps_utilization": bps / 100_000,
+        "capacity_pps": 1000,
         "sampled": True,
     }
 
@@ -181,6 +186,10 @@ def test_path_status_uses_switch_counter_utilization(load_service_module):
     assert result["paths"]["backup"]["utilization"] == 30.0
     assert result["links"][0]["utilization"] == 10.0
     assert result["links"][0]["bps"] == 1_000_000
+    assert result["paths"]["primary"]["pps"] == 400.0
+    assert result["paths"]["backup"]["pps"] == 300.0
+    assert result["paths"]["primary"]["pps_utilization"] == 40.0
+    assert result["paths"]["backup"]["pps_utilization"] == 30.0
     assert result["links"][2]["utilization"] == 20.0
 
 
@@ -214,6 +223,19 @@ class CongestedUtilization(Utilization):
         return switches
 
 
+class DistributedController(ActiveController):
+    def get_stats(self):
+        return {
+            "path_distribution": {
+                "mode": "balanced",
+                "pps": 850.0,
+                "threshold_pps": 800.0,
+                "recovery_pps": 600.0,
+            },
+            "switches": [{"switch_id": "s1"}],
+        }
+
+
 def test_congestion_requests_actual_backup_path_recalculation(load_service_module):
     controller_module = types.ModuleType("app.clients.controller")
     controller_module.ControllerClient = ActiveController
@@ -243,3 +265,40 @@ def test_congestion_requests_actual_backup_path_recalculation(load_service_modul
     assert result["active_path"] == "backup"
     assert controller.recalculations == ["backup"]
     assert result["controller"]["path_control"]["status"] == "RECALCULATED"
+
+
+def test_controller_balancing_suppresses_legacy_global_path_switch(
+    load_service_module,
+):
+    controller_module = types.ModuleType("app.clients.controller")
+    controller_module.ControllerClient = DistributedController
+    controller_module.ControllerClientError = RuntimeError
+    sys.modules["app.clients.controller"] = controller_module
+    module = load_service_module(
+        "path_service",
+        stubs={
+            "app.repositories.flow_repository": {"FlowRepository": Flows},
+            "app.repositories.platform_settings_repository": {
+                "PlatformSettingsRepository": RuntimeSettings,
+            },
+            "app.services.dashboard_service": {"DashboardService": Dashboard},
+        },
+    )
+    controller = DistributedController()
+    service = module.PathService(
+        Dashboard(),
+        Flows(),
+        controller,
+        CongestedUtilization(),
+        RuntimeSettings(1),
+    )
+
+    result = service.get_status()
+
+    assert result["path_distribution_mode"] == "balanced"
+    assert result["path_capacity_pps"] == 1000
+    assert result["path_distribution_threshold_pps"] == 800
+    assert result["path_distribution_recovery_pps"] == 600
+    assert result["paths"]["primary"]["active"] is True
+    assert result["paths"]["backup"]["active"] is True
+    assert controller.recalculations == []
