@@ -28,6 +28,10 @@ from app.hosts import HostRegistry
 from app.meters import MeterRegistry
 from app.packet_parser import classify_destination
 from app.packet_parser import parse_packet_metadata
+from app.path_distribution import BALANCED_MODE
+from app.path_distribution import PRIMARY_PATH_COSTS
+from app.path_distribution import PathDistributionPolicy
+from app.path_distribution import prefer_path
 from app.routing import RoutingError
 from app.routing import calculate_input_ports
 from app.routing import calculate_weighted_bidirectional_routes
@@ -67,6 +71,11 @@ class SwitchConnectionController(app_manager.OSKenApp):
         self.hosts = HostRegistry()
         self.topology = ActiveTopology(WEIGHTED_SWITCH_GRAPH)
         self.stats = StatsRegistry()
+        self.path_distribution = PathDistributionPolicy(
+            threshold_pps=self.settings.path_distribution_threshold_pps,
+            recovery_pps=self.settings.path_distribution_recovery_pps,
+        )
+        self.stats.update_path_distribution(self.path_distribution.snapshot())
         self._stats_thread = None
         self.api_server = ControllerApiServer(
             self.datapaths,
@@ -106,7 +115,31 @@ class SwitchConnectionController(app_manager.OSKenApp):
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def handle_port_stats_reply(self, event):
-        self.stats.update_ports(event.msg.datapath.id, event.msg.body)
+        datapath = event.msg.datapath
+        entries = tuple(event.msg.body)
+        self.stats.update_ports(datapath.id, entries)
+        if datapath.id != 1:
+            return
+
+        update = self.path_distribution.update_s1_port_stats(entries)
+        self.stats.update_path_distribution(self.path_distribution.snapshot())
+        if not update.changed:
+            return
+
+        if update.mode != BALANCED_MODE:
+            self.topology.set_link_costs(PRIMARY_PATH_COSTS)
+        invalidated = self._invalidate_all_l2_flows(
+            f"path_distribution:{update.mode}",
+        )
+        self.logger.info(
+            "path_distribution_changed mode=%s pps=%.2f threshold_pps=%.2f "
+            "recovery_pps=%.2f invalidated_switches=%d",
+            update.mode,
+            update.pps,
+            self.path_distribution.threshold_pps,
+            self.path_distribution.recovery_pps,
+            invalidated,
+        )
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def handle_flow_stats_reply(self, event):
@@ -625,9 +658,16 @@ class SwitchConnectionController(app_manager.OSKenApp):
         if source is None or destination is None:
             return False
 
+        graph = self.topology.snapshot()
+        distribution_mode = self.path_distribution.mode
+        preferred_path = None
+        if distribution_mode == BALANCED_MODE:
+            preferred_path = self.path_distribution.select_path(metadata)
+            graph = prefer_path(graph, preferred_path)
+
         try:
             routes = calculate_weighted_bidirectional_routes(
-                graph=self.topology.snapshot(),
+                graph=graph,
                 link_ports=SWITCH_LINK_PORTS,
                 source_dpid=source.dpid,
                 source_port=source.port,
@@ -684,6 +724,14 @@ class SwitchConnectionController(app_manager.OSKenApp):
             )
             return False
 
+        ethertypes = L2_FORWARDING_ETHERTYPES
+        forward_match = None
+        reverse_match = None
+        if distribution_mode == BALANCED_MODE:
+            ethertypes = (metadata.ethertype,)
+            if metadata.ethertype == ether_types.ETH_TYPE_IP:
+                forward_match, reverse_match = self._ipv4_flow_matches(metadata)
+
         self._install_route_flows(
             routes.forward,
             route_datapaths,
@@ -691,6 +739,8 @@ class SwitchConnectionController(app_manager.OSKenApp):
             source.ipv4,
             destination.mac,
             source.port,
+            ethertypes=ethertypes,
+            flow_match=forward_match,
         )
         self._install_route_flows(
             routes.reverse,
@@ -699,6 +749,8 @@ class SwitchConnectionController(app_manager.OSKenApp):
             destination.ipv4,
             source.mac,
             destination.port,
+            ethertypes=ethertypes,
+            flow_match=reverse_match,
         )
         send_packet_out(
             datapath=msg.datapath,
@@ -707,14 +759,59 @@ class SwitchConnectionController(app_manager.OSKenApp):
             output_ports=(current_hop.output_port,),
             data=msg.data,
         )
-        self.logger.info(
-            "l2_path_installed src=%s dst=%s forward=%s reverse=%s",
+        path_log = (
+            self.logger.debug
+            if distribution_mode == BALANCED_MODE
+            else self.logger.info
+        )
+        path_log(
+            "l2_path_installed src=%s dst=%s forward=%s reverse=%s "
+            "distribution_mode=%s preferred_path=%s",
             source.mac,
             destination.mac,
             "-".join(str(dpid) for dpid in routes.forward.switches),
             "-".join(str(dpid) for dpid in routes.reverse.switches),
+            distribution_mode,
+            preferred_path or "configured",
         )
         return True
+
+    @staticmethod
+    def _ipv4_flow_matches(metadata):
+        if (
+            metadata.source_ipv4 is None
+            or metadata.destination_ipv4 is None
+            or metadata.ip_proto is None
+        ):
+            return None, None
+
+        forward = {
+            "ipv4_src": metadata.source_ipv4,
+            "ipv4_dst": metadata.destination_ipv4,
+            "ip_proto": metadata.ip_proto,
+        }
+        reverse = {
+            "ipv4_src": metadata.destination_ipv4,
+            "ipv4_dst": metadata.source_ipv4,
+            "ip_proto": metadata.ip_proto,
+        }
+        if (
+            metadata.source_port is not None
+            and metadata.destination_port is not None
+        ):
+            if metadata.ip_proto == 6:
+                source_field = "tcp_src"
+                destination_field = "tcp_dst"
+            elif metadata.ip_proto == 17:
+                source_field = "udp_src"
+                destination_field = "udp_dst"
+            else:
+                return forward, reverse
+            forward[source_field] = metadata.source_port
+            forward[destination_field] = metadata.destination_port
+            reverse[source_field] = metadata.destination_port
+            reverse[destination_field] = metadata.source_port
+        return forward, reverse
 
     @staticmethod
     def _install_route_flows(
@@ -724,6 +821,9 @@ class SwitchConnectionController(app_manager.OSKenApp):
         source_ipv4,
         destination_mac,
         source_port,
+        *,
+        ethertypes=L2_FORWARDING_ETHERTYPES,
+        flow_match=None,
     ):
         input_ports = calculate_input_ports(
             route.switches,
@@ -731,7 +831,7 @@ class SwitchConnectionController(app_manager.OSKenApp):
             source_port,
         )
         for hop, input_port in zip(route.hops, input_ports):
-            for ethertype in L2_FORWARDING_ETHERTYPES:
+            for ethertype in ethertypes:
                 install_l2_forwarding_flow(
                     datapath=datapaths[hop.dpid],
                     source_mac=source_mac,
@@ -740,6 +840,7 @@ class SwitchConnectionController(app_manager.OSKenApp):
                     ethertype=ethertype,
                     input_port=input_port,
                     output_port=hop.output_port,
+                    flow_match=flow_match,
                 )
 
     def _flood_packet(self, msg, metadata):

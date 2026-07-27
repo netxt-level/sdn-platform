@@ -13,6 +13,7 @@ TABLE_MISS_TABLE_ID = FORWARDING_TABLE_ID
 L2_FORWARDING_COOKIE_PREFIX = 0x53444E1000000000
 L2_FORWARDING_COOKIE_MASK = 0xFFFFFFFF00000000
 L2_FORWARDING_PRIORITY = 100
+L2_FLOW_FORWARDING_PRIORITY = 110
 L2_FORWARDING_IDLE_TIMEOUT = 60
 L2_FORWARDING_HARD_TIMEOUT = 0
 EXTERNAL_FLOW_COOKIE_PREFIX = 0x5344E20000000000
@@ -170,11 +171,21 @@ def send_packet_out(datapath, buffer_id, in_port, output_ports, data):
     return packet_out
 
 
-def build_l2_forwarding_cookie(source_mac, destination_mac, ethertype):
+def build_l2_forwarding_cookie(
+    source_mac,
+    destination_mac,
+    ethertype,
+    flow_match=None,
+):
     """Build a stable internal cookie for one L2 direction and Ethertype."""
+    flow_identity = ""
+    if flow_match:
+        flow_identity = ":" + ",".join(
+            f"{key}={flow_match[key]}" for key in sorted(flow_match)
+        )
     identity = (
         f"{source_mac.lower()}>{destination_mac.lower()}:"
-        f"{ethertype:04x}"
+        f"{ethertype:04x}{flow_identity}"
     ).encode("ascii")
     return L2_FORWARDING_COOKIE_PREFIX | zlib.crc32(identity)
 
@@ -187,6 +198,7 @@ def build_l2_forwarding_flow(
     ethertype,
     input_port,
     output_port,
+    flow_match=None,
 ):
     """Build an internal learned-unicast forwarding rule."""
     ofproto = datapath.ofproto
@@ -208,6 +220,8 @@ def build_l2_forwarding_flow(
         match_fields["ipv4_src"] = source_ipv4
     elif ethertype == 0x0806:
         match_fields["arp_spa"] = source_ipv4
+    if flow_match:
+        match_fields.update(flow_match)
 
     return parser.OFPFlowMod(
         datapath=datapath,
@@ -215,12 +229,17 @@ def build_l2_forwarding_flow(
             source_mac,
             destination_mac,
             ethertype,
+            flow_match,
         ),
         table_id=TABLE_MISS_TABLE_ID,
         command=ofproto.OFPFC_ADD,
         idle_timeout=L2_FORWARDING_IDLE_TIMEOUT,
         hard_timeout=L2_FORWARDING_HARD_TIMEOUT,
-        priority=L2_FORWARDING_PRIORITY,
+        priority=(
+            L2_FLOW_FORWARDING_PRIORITY
+            if flow_match
+            else L2_FORWARDING_PRIORITY
+        ),
         match=parser.OFPMatch(**match_fields),
         instructions=instructions,
     )
@@ -234,6 +253,7 @@ def install_l2_forwarding_flow(
     ethertype,
     input_port,
     output_port,
+    flow_match=None,
 ):
     """Build and send one internal learned-unicast rule."""
     flow_mod = build_l2_forwarding_flow(
@@ -244,6 +264,7 @@ def install_l2_forwarding_flow(
         ethertype,
         input_port,
         output_port,
+        flow_match,
     )
     datapath.send_msg(flow_mod)
     return flow_mod

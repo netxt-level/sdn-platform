@@ -9,7 +9,9 @@ class ControllerSettings:
     openflow_port: int
     rest_host: str
     rest_port: int
-    stats_interval_seconds: float = 5.0
+    stats_interval_seconds: float = 1.0
+    path_distribution_threshold_pps: float = 800.0
+    path_distribution_recovery_pps: float = 600.0
     api_key: str = ""
     allow_insecure_dev_auth: bool = False
 
@@ -37,9 +39,25 @@ def _read_port(environ, name, default):
 
 def load_settings(environ=None):
     environ = os.environ if environ is None else environ
-    stats_interval = float(environ.get("CONTROLLER_STATS_INTERVAL_SECONDS", "5"))
+    stats_interval = float(environ.get("CONTROLLER_STATS_INTERVAL_SECONDS", "1"))
     if stats_interval <= 0:
         raise ValueError("CONTROLLER_STATS_INTERVAL_SECONDS must be positive")
+    distribution_threshold = float(
+        environ.get("PATH_DISTRIBUTION_THRESHOLD_PPS", "800")
+    )
+    distribution_recovery = float(
+        environ.get("PATH_DISTRIBUTION_RECOVERY_PPS", "600")
+    )
+    if distribution_threshold <= 0:
+        raise ValueError("PATH_DISTRIBUTION_THRESHOLD_PPS must be positive")
+    if (
+        distribution_recovery < 0
+        or distribution_recovery >= distribution_threshold
+    ):
+        raise ValueError(
+            "PATH_DISTRIBUTION_RECOVERY_PPS must be non-negative and below "
+            "PATH_DISTRIBUTION_THRESHOLD_PPS"
+        )
     return ControllerSettings(
         openflow_port=_read_port(
             environ,
@@ -53,6 +71,8 @@ def load_settings(environ=None):
             8080,
         ),
         stats_interval_seconds=stats_interval,
+        path_distribution_threshold_pps=distribution_threshold,
+        path_distribution_recovery_pps=distribution_recovery,
         api_key=environ.get("CONTROLLER_API_KEY", ""),
         allow_insecure_dev_auth=_read_bool(
             environ,

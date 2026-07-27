@@ -24,6 +24,12 @@ class StatsRegistryTests(unittest.TestCase):
             byte_count=300,
             duration_sec=4,
         )])
+        registry.update_path_distribution({
+            "mode": "balanced",
+            "pps": 850.0,
+            "threshold_pps": 800.0,
+            "recovery_pps": 600.0,
+        })
 
         snapshot = registry.snapshot()
 
@@ -31,6 +37,10 @@ class StatsRegistryTests(unittest.TestCase):
         self.assertEqual("s1", snapshot["switches"][0]["switch_id"])
         self.assertEqual(10, snapshot["switches"][0]["ports"][0]["rx_packets"])
         self.assertEqual(30, snapshot["switches"][0]["flows"][0]["packet_count"])
+        self.assertEqual("balanced", snapshot["path_distribution"]["mode"])
+        self.assertEqual(850.0, snapshot["path_distribution"]["pps"])
+        self.assertEqual(800.0, snapshot["path_distribution"]["threshold_pps"])
+        self.assertEqual(600.0, snapshot["path_distribution"]["recovery_pps"])
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from app.flow_manager import L2_FORWARDING_COOKIE_PREFIX
 from app.flow_manager import L2_FORWARDING_HARD_TIMEOUT
 from app.flow_manager import L2_FORWARDING_IDLE_TIMEOUT
 from app.flow_manager import L2_FORWARDING_PRIORITY
+from app.flow_manager import L2_FLOW_FORWARDING_PRIORITY
 from app.flow_manager import EXTERNAL_FLOW_COOKIE_PREFIX
 from app.flow_manager import build_external_flow
 from app.flow_manager import build_external_flow_delete
@@ -234,6 +235,40 @@ class L2ForwardingFlowTests(unittest.TestCase):
 
         self.assertEqual("10.0.0.1", flow_mod.match["arp_spa"])
         self.assertNotIn("ipv4_src", flow_mod.match)
+
+    def test_builds_higher_priority_tcp_five_tuple_rule(self):
+        datapath = FakeDatapath()
+        flow_match = {
+            "ipv4_src": "10.0.0.1",
+            "ipv4_dst": "10.0.0.100",
+            "ip_proto": 6,
+            "tcp_src": 40123,
+            "tcp_dst": 80,
+        }
+
+        flow_mod = build_l2_forwarding_flow(
+            datapath=datapath,
+            source_mac=self.SOURCE_MAC,
+            source_ipv4="10.0.0.1",
+            destination_mac=self.DESTINATION_MAC,
+            ethertype=0x0800,
+            input_port=1,
+            output_port=5,
+            flow_match=flow_match,
+        )
+
+        self.assertEqual(L2_FLOW_FORWARDING_PRIORITY, flow_mod.priority)
+        for key, value in flow_match.items():
+            self.assertEqual(value, flow_mod.match[key])
+        self.assertEqual(5, flow_mod.instructions[0].actions[0].port)
+        self.assertNotEqual(
+            build_l2_forwarding_cookie(
+                self.SOURCE_MAC,
+                self.DESTINATION_MAC,
+                0x0800,
+            ),
+            flow_mod.cookie,
+        )
 
     def test_installs_l2_forwarding_rule(self):
         datapath = FakeDatapath()

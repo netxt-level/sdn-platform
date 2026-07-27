@@ -9,6 +9,7 @@ class StatsRegistry:
     def __init__(self):
         self._ports = {}
         self._flows = {}
+        self._path_distribution = None
         self._updated_at = None
         self._lock = RLock()
 
@@ -43,11 +44,20 @@ class StatsRegistry:
             )
             self._updated_at = datetime.now(timezone.utc).isoformat()
 
+    def update_path_distribution(self, snapshot):
+        with self._lock:
+            self._path_distribution = dict(snapshot)
+
     def snapshot(self):
         with self._lock:
             dpids = sorted(set(self._ports) | set(self._flows))
             return {
                 "updated_at": self._updated_at,
+                "path_distribution": (
+                    None
+                    if self._path_distribution is None
+                    else dict(self._path_distribution)
+                ),
                 "switches": [
                     {
                         "switch_id": f"s{dpid}",

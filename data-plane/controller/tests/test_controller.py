@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from os_ken.ofproto import ofproto_v1_3
 
 from app.controller import SwitchConnectionController
+from app.packet_parser import PacketMetadata
 
 
 class PortStatusTests(unittest.TestCase):
@@ -93,6 +94,33 @@ class PortStatusTests(unittest.TestCase):
                 link_down,
             )
         )
+
+
+class FlowMatchTests(unittest.TestCase):
+    def test_builds_symmetric_tcp_matches(self):
+        metadata = PacketMetadata(
+            source_mac="00:00:00:00:00:01",
+            destination_mac="00:00:00:00:01:00",
+            ethertype=0x0800,
+            source_ipv4="10.0.0.1",
+            destination_ipv4="10.0.0.100",
+            ip_proto=6,
+            source_port=40123,
+            destination_port=80,
+        )
+
+        forward, reverse = SwitchConnectionController._ipv4_flow_matches(
+            metadata,
+        )
+
+        self.assertEqual("10.0.0.1", forward["ipv4_src"])
+        self.assertEqual("10.0.0.100", forward["ipv4_dst"])
+        self.assertEqual(40123, forward["tcp_src"])
+        self.assertEqual(80, forward["tcp_dst"])
+        self.assertEqual("10.0.0.100", reverse["ipv4_src"])
+        self.assertEqual("10.0.0.1", reverse["ipv4_dst"])
+        self.assertEqual(80, reverse["tcp_src"])
+        self.assertEqual(40123, reverse["tcp_dst"])
 
 
 if __name__ == "__main__":

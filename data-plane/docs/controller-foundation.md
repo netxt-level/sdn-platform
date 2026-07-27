@@ -303,6 +303,15 @@ idle/hard timeout이 발생하면 Meter를 삭제한다.
 
 `CONTROLLER_STATS_INTERVAL_SECONDS` 주기로 수집한 switch port packet/byte/error
 counter와 flow packet/byte/duration counter의 최신 snapshot을 반환한다.
+`path_distribution`에는 s1의 두 transit port 합산 PPS, 현재 `primary` 또는
+`balanced` 모드, 분산 및 복귀 임계값이 포함된다.
+
+정상 TCP 트래픽이 `PATH_DISTRIBUTION_THRESHOLD_PPS` 이상이면 Controller는
+현재 학습형 L2 Flow를 무효화하고 이후 TCP 연결을 양방향 5-tuple 해시로
+`s1-s2-s4`와 `s1-s3-s4`에 분산한다. 기존 연결을 패킷 단위로 나누지 않으므로
+패킷 순서가 바뀌지 않는다. 합산 PPS가
+`PATH_DISTRIBUTION_RECOVERY_PPS` 미만인 상태가 3회 연속 관측되면 primary
+전용 모드로 복귀한다. ICMP와 ARP는 분산 대상이 아니다.
 
 ### `POST /paths/recalculate`
 
@@ -317,9 +326,12 @@ snapshot에서 경로를 다시 계산한다. 요청 본문을 생략하면 `pri
 }
 ```
 
-Backend의 `GET /api/path/status`는 OpenFlow port counter 사용률이 저장된 혼잡
-임계값 이상이고 대기 경로의 사용률이 더 낮을 때 이 API를 호출한다. 복귀 시에는
-임계값보다 10% 낮은 히스테리시스를 적용한다.
+신규 Controller는 s1의 OpenFlow packet counter를 직접 사용해 기준
+1,000 PPS의 80%인 800 PPS에서 자동 분산한다. 트래픽이 600 PPS 미만으로
+3회 연속 측정되면 1경로로 복귀하므로 Backend의 화면 조회에 의존하지 않는다.
+구버전 Controller와의
+호환을 위해 Backend의 BPS 기반 primary/backup 전환 로직은 fallback으로만
+유지한다.
 
 API 문서 URL은 비활성화되어 있다.
 
@@ -351,6 +363,9 @@ Analyzer 탐지 시나리오는 OVS Mirror로 복제한 실제 ICMP Flood를 Ana
 CONTROLLER_OPENFLOW_PORT=6653
 CONTROLLER_REST_HOST=0.0.0.0
 CONTROLLER_REST_PORT=8080
+CONTROLLER_STATS_INTERVAL_SECONDS=1
+PATH_DISTRIBUTION_THRESHOLD_PPS=1000
+PATH_DISTRIBUTION_RECOVERY_PPS=800
 ```
 
 OpenFlow bind host는 OS-Ken 실행기가 관리한다. Backend 주소나 인증 정보는

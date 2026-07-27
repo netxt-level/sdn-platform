@@ -5,6 +5,7 @@ from os_ken.lib.packet import ethernet
 from os_ken.lib.packet import ether_types
 from os_ken.lib.packet import ipv4
 from os_ken.lib.packet import packet
+from os_ken.lib.packet import tcp
 
 from app.packet_parser import SourceIdentity
 from app.packet_parser import classify_destination
@@ -81,6 +82,29 @@ class PacketParserTests(unittest.TestCase):
             SourceIdentity(mac=source_mac, ipv4="10.0.0.2"),
             parse_source_identity(data),
         )
+
+    def test_extracts_tcp_five_tuple_for_path_distribution(self):
+        data = serialize_packet(
+            ethernet.ethernet(
+                dst="00:00:00:00:01:00",
+                src="00:00:00:00:00:01",
+                ethertype=ether_types.ETH_TYPE_IP,
+            ),
+            ipv4.ipv4(
+                src="10.0.0.1",
+                dst="10.0.0.100",
+                proto=6,
+            ),
+            tcp.tcp(src_port=40123, dst_port=80),
+        )
+
+        metadata = parse_packet_metadata(data)
+
+        self.assertTrue(metadata.is_tcp_flow)
+        self.assertEqual("10.0.0.100", metadata.destination_ipv4)
+        self.assertEqual(6, metadata.ip_proto)
+        self.assertEqual(40123, metadata.source_port)
+        self.assertEqual(80, metadata.destination_port)
 
     def test_keeps_ethernet_source_when_network_protocol_is_unknown(self):
         source_mac = "00:00:00:00:00:03"
