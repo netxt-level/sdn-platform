@@ -1,6 +1,8 @@
+from os import link
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event # 이벤트들을 정의한 모듈
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3 # OpenFlow 1.3 ver
 from ryu.lib.packet import packet, ethernet, ipv4
@@ -8,9 +10,16 @@ import heapq # Dijkstra 알고리즘을 위한 우선순위 Queue
 import requests
 from datetime import datetime
 
+from ryu.app.wsgi import WSGIApplication, ControllerBase, route
+from webob import Response
+import json
+from datetime import datetime
+
 class MyRyuApp(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
+    _CONTEXTS = {'wsgi': WSGIApplication} # [방화벽] WSGI 서버 컨텍스트 변수 추가
+    
     def __init__(self, *args, **kwargs):
         super(MyRyuApp, self).__init__(*args, **kwargs)
         self.logger.info(">> Ryu Controller is Running!")
@@ -32,6 +41,21 @@ class MyRyuApp(app_manager.RyuApp):
             '00:00:00:00:01:02': (4, 5)  # 보안 서버
         }
     
+        # [방화벽] 연결된 스위치 객체 저장소 및 API 라우터 등록
+        self.datapaths = {}
+        wsgi = kwargs['wsgi']
+        wsgi.register(FirewallController, {'my_app': self})
+
+    # [방화벽] 스위치 연결 상태 추적 (모든 스위치에 차단 룰 적용)
+    @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
+    def _state_change_handler(self, ev):
+        datapath = ev.datapath
+        if ev.state == MAIN_DISPATCHER:
+            self.datapaths[datapath.id] = datapath
+        elif ev.state == DEAD_DISPATCHER:
+            if datapath.id in self.datapaths:
+                del self.datapaths[datapath.id]
+
     def add_flow(self, datapath, priority, match, actions): # datapath: 명령 받을 스위치 객체
                                                             # priority: 규칙 우선순위
                                                             # match: 조건문
@@ -197,3 +221,38 @@ class MyRyuApp(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
+
+
+# REST API 요청을 처리할 외부 컨트롤러 클래스
+
+class FirewallController(ControllerBase):
+    def __init__(self, req, link, data, **config):
+        super(FirewallController, self).__init__(req, link, data, **config)
+        self.my_app = data['my_app']
+            
+    @route('firewall', '/firewall/blocked', methods=['POST'])
+    def block_ip(self, req, **kwargs):
+        try:
+            body = req.json if req.body else {}
+            target_ip = body.get('ip')
+
+            if not target_ip:
+                return Response(status=400, body="차단할 IP 주소 없음.")
+                    
+            # 연결된 모든 스위치에 Rule 전송
+            for dp_ip, datapath in self.my_app.datapaths.items():
+                parser = datapath.ofproto_parser
+
+                # IPv4 통신 중 출발지 IP가 target_ip인 패킷 매칭 (ethertype=0x0800)
+                match = parser.OFPMatch(eth_type=0x0800, ipv4_src=target_ip)
+
+                # actions 리스트가 비어있으면 DROP
+                actions = []
+
+                # 라우팅보다 높은 Priority로 설정 (100)
+                self.my_app.add_flow(datapath, 100, match, actions)
+
+            print(f"\n [방화벽] 악성 IP {target_ip} 차단 규칙을 전체 스위치에 적용 완료")
+            return Response(status=200, body=json.dumps({"status": "success", "message": f"IP {target_ip} blocked."}))
+        except Exception as e:
+            return Response(status=500, body=str(e))
