@@ -408,24 +408,6 @@ Analyzer 탐지부터 Backend 대응, Controller 적용까지의 시나리오는
 검증 절차는
 `data-plane/docs/server-privilege-escalation-scenario.md`에 있다.
 
-## 알려진 제한사항
-
-- 현재 기본 탐지 범위는 Port Scan, ICMP Flood와 보호 서버의 역할 위반,
-  내부 확산, 비정상 송신량, 주기적 C2 연결이다.
-- 분석은 Ethernet/IPv4/TCP·UDP·ICMP 메타데이터와 시간창 통계 중심이며,
-  DNS·HTTP·TLS 애플리케이션 분석, 원본 PCAP 검색, 위협 인텔리전스 연동은
-  제공하지 않는다.
-- Mininet/OVS 없는 애플리케이션 영역 실행만으로는 실제 대응 효과를 검증할 수 없다.
-- Analyzer가 Mininet 트래픽을 보려면 `sdn-sensor0`뿐 아니라 실행 중인 OVS
-  Mirror가 필요하다.
-- 자동 대응 품질은 탐지 임계값과 운영 정책에 의존하며 실제 운영망 적용 전 별도 검증이 필요하다.
-- Controller가 일시적으로 사용할 수 없어도 이벤트와 pending 대응은 보존하지만 실제 네트워크 적용은 지연된다.
-- 현재 Sensor와 고정 호스트 바인딩은 단일 Mininet 토폴로지에 맞춰져 있다.
-  다중 Sensor, 동적 자산 등록, 고가용성, 운영망 규모 성능 검증은 후속 범위다.
-- 일부 과거 호환용 Frontend WebSocket 타입과 사용하지 않는 mock 데이터가 남아 있다.
-- `verify.sh`의 일부 Controller REST 시나리오는 아직 `X-API-Key`를 전달하지
-  않는다. 인증을 켠 환경에서는 시나리오에 Key 전달을 추가해야 한다.
-
 ## 주요 문서
 
 - [`SECURITY_DETECTION_POLICY.md`](SECURITY_DETECTION_POLICY.md): 탐지 조건과 대응 정책
