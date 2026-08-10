@@ -43,6 +43,7 @@ class SecurityEventBuilder:
         packet_summary: dict[str, Any],
         packets: list[dict[str, Any]],
         port_scan_alerts: list[dict[str, Any]] | None = None,
+        server_behavior_alerts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         timestamp = now.isoformat()
@@ -63,6 +64,14 @@ class SecurityEventBuilder:
             )
         )
         events.extend(
+            self._build_server_behavior_events(
+                timestamp=timestamp,
+                now=now,
+                window_start_epoch=window_start_epoch,
+                alerts=server_behavior_alerts or [],
+            )
+        )
+        events.extend(
             self._build_flood_events(
                 timestamp=timestamp,
                 now=now,
@@ -77,6 +86,54 @@ class SecurityEventBuilder:
             "analyzer_id": self.analyzer_id,
             "events": events,
         }
+
+    def _build_server_behavior_events(
+        self,
+        *,
+        timestamp: str,
+        now: datetime,
+        window_start_epoch: int,
+        alerts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        events = []
+
+        for alert in alerts:
+            required = (
+                "attack_category",
+                "attack_type",
+                "severity",
+                "confidence",
+                "src_ip",
+                "dst_ip",
+                "protocol",
+                "detection_rule",
+                "recommended_action",
+                "response_level",
+            )
+            if any(not alert.get(field) for field in required):
+                continue
+
+            event = self._event(
+                timestamp=timestamp,
+                attack_category=str(alert["attack_category"]),
+                attack_type=str(alert["attack_type"]),
+                severity=str(alert["severity"]),
+                confidence=str(alert["confidence"]),
+                src_ip=str(alert["src_ip"]),
+                dst_ip=str(alert["dst_ip"]),
+                protocol=str(alert["protocol"]),
+                detection_rule=str(alert["detection_rule"]),
+                recommended_action=str(alert["recommended_action"]),
+                response_level=str(alert["response_level"]),
+                evidence=dict(alert.get("evidence") or {}),
+                mitigation=None,
+                now=now,
+                window_start_epoch=window_start_epoch,
+            )
+            if event is not None:
+                events.append(event)
+
+        return events
 
     def _build_port_scan_events(
         self,

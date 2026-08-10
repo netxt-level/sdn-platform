@@ -111,3 +111,7 @@ DB와 적용 가능한 보조 서비스 볼륨은 보존된다. DB를 초기 상
 
 정상 100명, 피크 300명, 스트레스 500명을 기준으로 한 웹 부하와 SDN 경로
 테스트 계획은 `data-plane/docs/web-load-test-plan.md`를 참고한다.
+
+웹 접근 이후의 서버 권한 상승을 안전하게 모의하고 네트워크 증거와 호스트
+증거를 함께 확인하는 절차는
+`data-plane/docs/server-privilege-escalation-scenario.md`를 참고한다.

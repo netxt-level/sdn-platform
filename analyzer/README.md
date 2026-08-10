@@ -45,6 +45,21 @@ app/packet/capture.py
 | `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
+| `PROTECTED_SERVER_IPS` | `10.0.0.100` | 서버 행위 탐지 대상 IP 목록 |
+| `SERVER_EGRESS_ALLOWLIST` | 빈 값 | 보호 서버가 연결을 시작해도 허용할 목적지 IP 목록 |
+| `SERVER_BEHAVIOR_ALERT_COOLDOWN_SEC` | `60` | 서버 행위 이벤트 중복 억제 시간 |
+| `LATERAL_FANOUT_WINDOW_SEC` | `30` | 내부 확산 목적지 집계 윈도우 |
+| `LATERAL_FANOUT_UNIQUE_DST_THRESHOLD` | `2` | 내부 확산 고유 목적지 IP 기준 |
+| `LATERAL_FANOUT_CONNECTION_THRESHOLD` | `3` | 내부 확산 연결 시도 기준 |
+| `EXFIL_VOLUME_WINDOW_SEC` | `10` | 비정상 송신량 집계 윈도우 |
+| `EXFIL_OUTBOUND_BPS_THRESHOLD` | `1000000` | 비정상 송신량 절대 bps 기준 |
+| `EXFIL_BASELINE_MULTIPLIER` | `3.0` | 정상 기준선 대비 송신량 배수 |
+| `EXFIL_SUSTAINED_WINDOWS` | `3` | 송신량 기준을 연속 충족해야 하는 윈도우 수 |
+| `C2_BEACON_WINDOW_SEC` | `300` | 주기적 연결 관찰 윈도우 |
+| `C2_BEACON_MIN_CONNECTIONS` | `6` | Beacon 판정 최소 연결 수 |
+| `C2_BEACON_MIN_INTERVAL_SEC` | `20` | Beacon 주기 하한 |
+| `C2_BEACON_MAX_INTERVAL_SEC` | `90` | Beacon 주기 상한 |
+| `C2_BEACON_MAX_JITTER_RATIO` | `0.2` | 연결 주기 최대 편차 비율 |
 | `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
 | `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
 | `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
@@ -75,14 +90,20 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 ## 현재 탐지 범위
 
-현재 구현된 탐지는 다음 두 가지다.
+현재 구현된 탐지는 다음과 같다.
 
 | 탐지 | 구현 위치 | 설명 |
 |---|---|---|
 | Port Scan | `app/detection/port_scan.py`, `app/detection/security_events.py` | 짧은 시간 안에 같은 대상의 여러 TCP 목적지 포트로 SYN 패킷을 보내면 탐지 |
 | ICMP Flood | `app/detection/security_events.py` | ICMP pps가 기준 이상이면 탐지 |
+| Server Egress | `app/detection/server_behavior.py` | 보호 서버가 허용 목록 밖 목적지로 시작한 TCP 연결 탐지 |
+| Lateral Movement | `app/detection/server_behavior.py` | 보호 서버가 짧은 시간에 여러 목적지로 연결하는 행위 탐지 |
+| Data Exfiltration | `app/detection/server_behavior.py` | 서버가 시작한 Flow의 지속적인 outbound bps 이상 탐지 |
+| C2 Beacon | `app/detection/server_behavior.py` | 같은 목적지·포트로 반복되는 낮은 jitter 연결 탐지 |
 
-탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다. `PORT_SCAN`, `ICMP_FLOOD`의 탐지 조건과 대응 레벨 정책은 `../SECURITY_DETECTION_POLICY.md`를 기준으로 한다.
+탐지 기준값과 탐지 이벤트 상세 필드는 보안/탐지 담당자와 합의 후 변경한다.
+모든 탐지 조건과 대응 레벨 정책은 `../SECURITY_DETECTION_POLICY.md`를
+기준으로 한다.
 
 ## 개발 시 주의사항
 
@@ -99,6 +120,7 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 
 ```text
 app/detection/port_scan.py
+app/detection/server_behavior.py
 app/detection/security_events.py
 app/packet/parser.py
 ```

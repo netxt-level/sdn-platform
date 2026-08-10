@@ -177,13 +177,16 @@ class SecurityService:
             )
             responses.append(response)
 
+            if not apply_response:
+                continue
+
             self._remove_superseded_rate_limit(event)
 
             flow_rule = self.flow_repository.get_or_create_from_mitigation(
                 event=event,
                 security_response_id=response["id"],
             )
-            if flow_rule is not None and apply_response:
+            if flow_rule is not None:
                 response, flow_rule = self._apply_automatic_response(
                     response,
                     flow_rule,

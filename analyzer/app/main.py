@@ -7,6 +7,7 @@ from app.backend_client import BackendClient
 from app.config import load_config
 from app.detection.port_scan import PortScanDetector
 from app.detection.security_events import SecurityEventBuilder
+from app.detection.server_behavior import ServerBehaviorDetector
 from app.detection.traffic_stats import TrafficStatsBuilder
 from app.outbox import DurableOutbox
 from app.packet.capture import PacketCaptureError, start_capture
@@ -85,6 +86,28 @@ port_scan_detector = PortScanDetector(
     alert_cooldown_sec=config.port_scan_alert_cooldown_sec,
 )
 
+server_behavior_detector = ServerBehaviorDetector(
+    protected_server_ips=set(config.protected_server_ips),
+    egress_allowlist=set(config.server_egress_allowlist),
+    fanout_window_sec=config.lateral_fanout_window_sec,
+    fanout_unique_dst_threshold=(
+        config.lateral_fanout_unique_dst_threshold
+    ),
+    fanout_connection_threshold=(
+        config.lateral_fanout_connection_threshold
+    ),
+    alert_cooldown_sec=config.server_behavior_alert_cooldown_sec,
+    volume_window_sec=config.exfil_volume_window_sec,
+    outbound_bps_threshold=config.exfil_outbound_bps_threshold,
+    outbound_baseline_multiplier=config.exfil_baseline_multiplier,
+    outbound_sustained_windows=config.exfil_sustained_windows,
+    beacon_window_sec=config.c2_beacon_window_sec,
+    beacon_min_connections=config.c2_beacon_min_connections,
+    beacon_min_interval_sec=config.c2_beacon_min_interval_sec,
+    beacon_max_interval_sec=config.c2_beacon_max_interval_sec,
+    beacon_max_jitter_ratio=config.c2_beacon_max_jitter_ratio,
+)
+
 
 # packet_capture가 패킷을 하나 받을 때마다 호출하는 callback
 def handle_packet(packet):
@@ -113,6 +136,9 @@ def analysis_loop():
 
             # 포트 스캔 탐지는 원본 패킷 메타데이터의 TCP flag와 목적지 포트를 사용
             port_scan_alerts = port_scan_detector.detect(packets_snapshot)
+            server_behavior_alerts = server_behavior_detector.detect(
+                packets_snapshot,
+            )
 
             packet_summary = summary_builder.build_packet_summary(
                 packets_snapshot,
@@ -129,6 +155,7 @@ def analysis_loop():
                 packet_summary=packet_summary,
                 packets=packets_snapshot,
                 port_scan_alerts=port_scan_alerts,
+                server_behavior_alerts=server_behavior_alerts,
             )
 
             messages = [

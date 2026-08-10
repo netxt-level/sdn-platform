@@ -4,14 +4,20 @@
 
 이 문서는 SDN Platform에서 분석 서버가 생성하는 보안 탐지 이벤트, 탐지 기준, 대응 레벨, 대응 후보 payload를 정의한다.
 
-현재 확정된 탐지 범위는 다음 두 가지다.
+현재 확정된 탐지 범위는 다음과 같다.
 
 | attack_type | 설명 |
 |---|---|
 | `PORT_SCAN` | TCP SYN 기반 포트 스캔 탐지 |
 | `ICMP_FLOOD` | ICMP pps 기반 flood 탐지 |
+| `SERVER_EGRESS` | 보호 서버가 시작한 허용 목록 밖 TCP 연결 탐지 |
+| `LATERAL_MOVEMENT` | 보호 서버의 단시간 다중 목적지 연결 탐지 |
+| `DATA_EXFILTRATION` | 서버 시작 Flow의 지속적인 outbound bps 이상 탐지 |
+| `C2_BEACON` | 서버 시작 연결의 반복 주기와 jitter 기반 탐지 |
 
-그 외 탐지 항목은 이 문서의 확정 범위와 현재 구현 범위에 포함하지 않는다. 추가 항목은 담당자 간 API/탐지 기준 합의 후 별도 확장한다.
+서버 행위 규칙은 네트워크에서 보이는 침해 후 행위를 탐지한다. `sudo`, SUID,
+커널 취약점 악용처럼 네트워크 패킷이 발생하지 않는 로컬 권한 상승 자체는
+범위에 포함하지 않는다.
 
 탐지 기준은 SIEM 상관분석 방식처럼 짧은 시간창 안에서 같은 필드 조합이 일정 횟수 이상 반복되는지를 본다. Wazuh의 `frequency`, `timeframe`, `same_field`, `ignore` 방식과 유사하게, 이 문서는 집계 시간창, 반복 기준, 동일 대상 기준, 중복 억제 시간을 명시한다.
 
@@ -118,7 +124,10 @@
 | `L2` | 대응 권장 | 이벤트 저장, 알림, 대응 후보 생성 가능 | 승인 또는 정책에 따라 rate limit 후보 |
 | `L3` | 강한 대응 권장 | 이벤트 저장, 높은 우선순위 알림, 대응 요청 생성 | 승인 또는 정책에 따라 차단/강한 제한 후보 |
 
-현재 확정 범위에서 `PORT_SCAN`은 기본 `L1`, `ICMP_FLOOD`는 조건에 따라 `L1` 또는 `L2`를 사용한다. `L3`는 자동 대응/차단 정책이 확정되기 전까지 analyzer가 생성하지 않는다.
+`PORT_SCAN`은 기본 `L1`, `ICMP_FLOOD`는 조건에 따라 `L1` 또는 `L2`를
+사용한다. 서버 역할 위반, 비정상 송신량과 C2 Beacon은 `L2`,
+목적지 확산은 `L3`로 생성한다. Backend의 자동 대응이 활성화된 상태에서
+`critical` 이벤트를 받으면 Backend 정책이 DROP 후보를 추가한다.
 
 ## 5. PORT_SCAN 탐지 명세
 
@@ -318,7 +327,57 @@
 }
 ```
 
-## 7. Mitigation 후보 명세
+## 7. 보호 서버 행위 탐지 명세
+
+### 7.1 공통 연결 시작 판정
+
+보호 서버 행위 탐지는 `PROTECTED_SERVER_IPS`에 등록된 서버가 시작한 TCP
+연결을 기준으로 한다. TCP `SYN`이 있고 `ACK`가 없는 패킷만 연결 시작으로
+취급하므로 정상 웹 응답의 `SYN+ACK`는 제외한다.
+
+`SERVER_EGRESS_ALLOWLIST`에 포함된 목적지는 모든 서버 행위 규칙에서 제외한다.
+동일 5-tuple의 SYN 재전송은 3초 동안 하나의 연결 시작으로 합친다.
+
+### 7.2 규칙과 대응 레벨
+
+| attack_type | detection_rule | 조건 | severity | confidence | level |
+|---|---|---|---|---|---|
+| `SERVER_EGRESS` | `protected_server_tcp_egress` | 보호 서버의 비허용 TCP 연결 시작 1건 이상 | `high` | `high` | `L2` |
+| `LATERAL_MOVEMENT` | `protected_server_destination_fanout` | 30초 안에 목적지 IP 2개 이상, 연결 3건 이상 | `critical` | `high` | `L3` |
+| `DATA_EXFILTRATION` | `server_initiated_outbound_bps` | 서버 시작 Flow가 절대/기준선 bps를 3개 윈도우 연속 초과 | `high` | `medium` | `L2` |
+| `C2_BEACON` | `periodic_server_egress` | 5분 안에 같은 목적지·포트 연결 6건, 중앙 주기 20~90초, jitter 20% 이하 | `high` | `medium` | `L2` |
+
+`SERVER_EGRESS`, `DATA_EXFILTRATION`, `C2_BEACON`은 Analyzer가 mitigation을
+제안하지 않고 운영자 확인 대상으로 전송한다. `LATERAL_MOVEMENT`는
+`critical` 이벤트이므로 Backend의 기존 critical 정책과 자동 대응 설정에
+따라 TCP DROP Flow 후보로 변환될 수 있다.
+
+### 7.3 기준값
+
+| 환경변수 | 기본값 |
+|---|---:|
+| `PROTECTED_SERVER_IPS` | `10.0.0.100` |
+| `SERVER_EGRESS_ALLOWLIST` | 빈 값 |
+| `SERVER_BEHAVIOR_ALERT_COOLDOWN_SEC` | `60` |
+| `LATERAL_FANOUT_WINDOW_SEC` | `30` |
+| `LATERAL_FANOUT_UNIQUE_DST_THRESHOLD` | `2` |
+| `LATERAL_FANOUT_CONNECTION_THRESHOLD` | `3` |
+| `EXFIL_VOLUME_WINDOW_SEC` | `10` |
+| `EXFIL_OUTBOUND_BPS_THRESHOLD` | `1000000` |
+| `EXFIL_BASELINE_MULTIPLIER` | `3.0` |
+| `EXFIL_SUSTAINED_WINDOWS` | `3` |
+| `C2_BEACON_WINDOW_SEC` | `300` |
+| `C2_BEACON_MIN_CONNECTIONS` | `6` |
+| `C2_BEACON_MIN_INTERVAL_SEC` | `20` |
+| `C2_BEACON_MAX_INTERVAL_SEC` | `90` |
+| `C2_BEACON_MAX_JITTER_RATIO` | `0.2` |
+
+송신량 규칙은 서버가 먼저 시작한 Flow만 집계한다. 기준선 표본이 충분하지
+않으면 절대 bps 기준을 사용하고, 충분하면 `max(절대 기준,
+baseline_bps * multiplier)`를 사용한다. 탐지 상태는 메모리에 유지되므로
+Analyzer 재시작 후에는 연결 이력과 기준선을 다시 수집한다.
+
+## 8. Mitigation 후보 명세
 
 `mitigation`은 analyzer가 제안하는 대응 payload다. analyzer는 직접 Controller를
 호출하지 않는다. Backend가 `security_responses`와 `flow_rules`를 생성하고
@@ -329,8 +388,12 @@ Controller에 자동 적용한 뒤 `APPLIED` 또는 `FAILED` 결과를 저장한
 | `PORT_SCAN` | 모든 경우 | `null` |
 | `ICMP_FLOOD` | `L1` | `null` |
 | `ICMP_FLOOD` | `L2` | `RATE_LIMIT` 후보 |
+| `SERVER_EGRESS` | 모든 경우 | `null` |
+| `LATERAL_MOVEMENT` | Analyzer 생성 시 | `null`; Backend critical 정책에서 `DROP` 후보 |
+| `DATA_EXFILTRATION` | 모든 경우 | `null` |
+| `C2_BEACON` | 모든 경우 | `null` |
 
-### 7.1 RATE_LIMIT 기본값
+### 8.1 RATE_LIMIT 기본값
 
 | 항목 | 기본값 |
 |---|---:|
@@ -360,7 +423,7 @@ Controller에 자동 적용한 뒤 `APPLIED` 또는 `FAILED` 결과를 저장한
 }
 ```
 
-## 8. 구현 반영 TODO
+## 9. 구현 반영 TODO
 
 | 항목 | 설명 |
 |---|---|

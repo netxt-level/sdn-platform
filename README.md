@@ -51,7 +51,8 @@ SDN Platform은 이 간극을 다음과 같이 연결한다.
 ### 핵심 기능
 
 - 패킷 캡처와 트래픽 요약
-- ICMP Flood 및 TCP SYN 기반 Port Scan 탐지
+- ICMP Flood, Port Scan, 서버 역할 위반, 내부 확산, 비정상 송신량,
+  주기적 C2 연결 탐지
 - 탐지 이벤트의 심각도·대응 레벨·중복 억제 정책
 - 자동 또는 운영자 승인 기반 보안 대응
 - `DROP`, `OUTPUT`, `RATE_LIMIT` Flow Rule 적용
@@ -116,6 +117,10 @@ Analyzer는 VM의 기본 네트워크 인터페이스가 아니라 OVS Mirror에
 |---|---|---|
 | `PORT_SCAN` | TCP SYN, 동일 출발지·목적지, 고유 목적지 포트 수 | 관찰 또는 운영자 판단 |
 | `ICMP_FLOOD` | 동일 출발지·목적지의 ICMP PPS 임계값 | 정책에 따른 Rate Limit 후보 |
+| `SERVER_EGRESS` | 보호 서버가 시작한 허용 목록 밖 TCP 연결 | 운영자 확인 |
+| `LATERAL_MOVEMENT` | 보호 서버의 단시간 다중 목적지 연결 | Critical/Drop 정책 |
+| `DATA_EXFILTRATION` | 서버 시작 Flow의 지속적인 송신량 이상 | 운영자 확인 |
+| `C2_BEACON` | 서버 시작 연결의 반복 주기와 낮은 jitter | 운영자 확인 |
 
 Backend는 이벤트 심각도와 mitigation을 검토해 대응 여부를 결정한다. 자동
 대응 설정을 끌 수 있으며, 운영자는 Security Events 화면에서 이벤트를 직접
@@ -384,10 +389,14 @@ python3 -m pytest backend/tests
 
 Analyzer 탐지부터 Backend 대응, Controller 적용까지의 시나리오는
 `data-plane/mininet/scenarios/analyzer_detection_response.py`에 있다.
+웹 접근 이후 서버 권한 상승을 증명 전용 helper로 안전하게 모의하는 수동
+검증 절차는
+`data-plane/docs/server-privilege-escalation-scenario.md`에 있다.
 
 ## 알려진 제한사항
 
-- 현재 기본 탐지 범위는 Port Scan과 ICMP Flood다.
+- 현재 기본 탐지 범위는 Port Scan, ICMP Flood와 보호 서버의 역할 위반,
+  내부 확산, 비정상 송신량, 주기적 C2 연결이다.
 - Mininet/OVS 없는 애플리케이션 영역 실행만으로는 실제 대응 효과를 검증할 수 없다.
 - Analyzer가 Mininet 트래픽을 보려면 `sdn-sensor0`과 OVS Mirror가 모두 필요하다.
 - 자동 대응 품질은 탐지 임계값과 운영 정책에 의존하며 실제 운영망 적용 전 별도 검증이 필요하다.
@@ -405,6 +414,7 @@ Analyzer 탐지부터 Backend 대응, Controller 적용까지의 시나리오는
 - [`data-plane/docs/mininet-topology.md`](data-plane/docs/mininet-topology.md): Lab 토폴로지와 주소·포트 맵
 - [`data-plane/docs/vm-setup.md`](data-plane/docs/vm-setup.md): Multipass 설치, 실행, 복구
 - [`data-plane/docs/mutillidae-lab.md`](data-plane/docs/mutillidae-lab.md): 격리 웹 보안 실험 환경
+- [`data-plane/docs/server-privilege-escalation-scenario.md`](data-plane/docs/server-privilege-escalation-scenario.md): 서버 권한 상승 수동 검증
 
 ## 개발 원칙
 

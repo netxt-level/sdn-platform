@@ -421,7 +421,7 @@ def test_manual_ignore_updates_event_without_creating_flow(load_service_module):
     assert flow_repository.calls == []
 
 
-def test_disabled_automatic_response_keeps_flow_pending(load_service_module):
+def test_disabled_automatic_response_does_not_create_flow(load_service_module):
     module = load_service_module(
         "security_service",
         stubs={
@@ -436,10 +436,12 @@ def test_disabled_automatic_response_keeps_flow_pending(load_service_module):
         },
     )
     flow_service = StubFlowService()
+    flow_repository = StubFlowRepository()
+    response_repository = StubSecurityResponseRepository()
     service = module.SecurityService(
         security_event_repository=StubSecurityEventRepository(),
-        security_response_repository=StubSecurityResponseRepository(),
-        flow_repository=StubFlowRepository(),
+        security_response_repository=response_repository,
+        flow_repository=flow_repository,
         flow_service=flow_service,
         platform_settings_repository=StubPlatformSettingsRepository(False),
     )
@@ -452,3 +454,7 @@ def test_disabled_automatic_response_keeps_flow_pending(load_service_module):
     }))
 
     assert flow_service.applied == []
+    assert flow_repository.calls == []
+    assert [event["event_id"] for event in response_repository.events] == [
+        "evt-pending",
+    ]
