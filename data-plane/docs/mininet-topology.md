@@ -1,7 +1,7 @@
 # Mininet 토폴로지
 
-- 상태: 구현 및 자동 검증 완료
-- 최종 수정일: 2026-07-21
+- 상태: 고정 토폴로지·장애 우회·Flow/Meter·Mirror 자동 검증 구현
+- 최종 수정일: 2026-08-11
 
 ## 구성
 
@@ -275,7 +275,7 @@ RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범�
 ./data-plane/scripts/cleanup.sh
 ```
 
-자동 검증의 실제 시나리오는 다음 네 파일로 분리되어 있다.
+`verify.sh`가 실행하는 실제 시나리오는 다음 파일로 분리되어 있다.
 
 - `data-plane/mininet/scenarios/failover.py`: Primary/Backup 전환, 복구,
   Controller 재시작 검증
@@ -283,23 +283,38 @@ RTT로 지연 적용을 확인하고 `iperf3` 수신 대역폭이 설정값 범�
   Flow 우회 차단 검증
 - `data-plane/mininet/scenarios/link_performance.py`: TCLink 지연과 대역폭
   제한 검증
+- `data-plane/mininet/scenarios/external_flow.py`: 외부 DROP/OUTPUT Rule 설치,
+  Barrier 확인, 제거와 통신 복구 검증
+- `data-plane/mininet/scenarios/rate_limit.py`: OVS Meter 기반 RATE_LIMIT 효과와
+  timeout cleanup 검증
 - `data-plane/mininet/scenarios/mirror_capture.py`: s1 OVS Mirror 구성과
   Primary/Backup 양방향 ICMP Sensor 캡처 검증
+
+`automatic_response.py`, `analyzer_detection_response.py`,
+`server_behavior_response.py`, `path_distribution_load.py`는 Backend·Analyzer까지
+실행된 환경에서 별도로 수행하는 종단 간 시나리오이며 기본 `verify.sh`에는
+포함되지 않는다.
+
+현재 `external_flow.py`, `rate_limit.py`와 일부 종단 간 시나리오는 보호 REST
+API에 `X-API-Key`를 모두 전달하지 않는다. 따라서 secure-default `.env`에서
+전체 자동 통과 상태는 아니며, 시나리오 인증 전달을 보완한 뒤 재검증해야 한다.
 
 ## 현재 제한사항
 
 - Host MAC/IP와 access 포트는 위 표의 네 호스트로 고정된다. 동적 Host 이동,
   DHCP 주소 변경, 신규 Host 자동 등록은 지원하지 않는다.
 - Dijkstra 링크 비용과 Mininet의 `bw`, `delay`, `loss` 값은 독립된 설정이다.
-  현재 경로 선택 비용은 Controller 토폴로지의 고정 Primary/Backup 정책을
-  사용한다.
+  정상 경로 비용은 Primary/Backup 정책을 사용하고, 임계 PPS 이상에서는 TCP
+  연결을 5-tuple 해시로 두 경로에 분산한다. 지연·손실을 자동 비용으로
+  환산하지는 않는다.
 - 링크 품질 옵션은 네 개의 스위치 간 transit 링크에만 적용한다. 호스트
   access 링크는 Mininet 기본값을 사용한다.
 - Packet loss는 확률적이므로 자동 성능 시나리오는 지연과 TCP 대역폭 제한을
   검증하고 loss 수치 자체는 판정하지 않는다.
 - Analyzer Mirror는 기본 토폴로지와 분리된 선택 기능이며, 활성화할 때만
-  `s1` port 6을 추가한다. `s1` 연결 기준의 `tcpdump` 캡처와 Analyzer Packet
-  Summary/Security Event 종단 간 저장은 통합 단계에서 다시 검증한다.
+  `s1` port 6을 추가한다. `mirror_capture.py`는 tcpdump 캡처를,
+  `analyzer_detection_response.py`는 Analyzer 탐지부터 Backend 저장과 Controller
+  Meter 설치까지를 검증한다.
 - Mininet 호스트와 OVS 스위치는 영구 VM이 아니라 시나리오 실행 중 생성되는
   Linux 네임스페이스와 가상 인터페이스다. 종료 후 `cleanup.sh`로 잔여 상태를
   제거한다.

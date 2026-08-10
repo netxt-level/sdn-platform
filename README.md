@@ -2,6 +2,10 @@
 
 > 탐지부터 대응 검증까지 연결하는 네트워크 보안 자동화 플랫폼
 
+- 문서 기준일: 2026-08-11
+- 현재 기준 브랜치: `sdn-platform-v1`
+- 현재 성격: SDN 기반 폐루프 NDR MVP 및 격리 검증 플랫폼
+
 SDN Platform은 네트워크 트래픽에서 위협을 탐지하고, 탐지 결과를 실행 가능한
 대응 정책으로 변환하며, SDN Controller를 통해 정책을 적용한 뒤 실제 적용
 상태까지 추적한다.
@@ -154,15 +158,19 @@ Flow Rule은 Controller가 OpenFlow Barrier Reply를 확인한 뒤에만 `APPLIE
 | 영역 | 상태 |
 |---|---|
 | 패킷 캡처·요약 | 구현 |
-| Port Scan·ICMP Flood 탐지 | 구현 |
+| Port Scan·ICMP Flood·보호 서버 행위 탐지 | 구현 |
+| Analyzer 영속 Outbox·재시도·Dead Letter | 구현 |
 | 보안 이벤트 저장·실시간 전달 | 구현 |
 | 자동/수동 대응 정책 | 구현 |
 | Flow Rule 설치·삭제·상태 재조정 | 구현 |
 | OVS Meter 기반 `RATE_LIMIT` | 구현 |
 | L2 Forwarding·최단 경로·장애 우회 | 구현 |
+| PPS 임계값 기반 TCP Flow 경로 분산·복귀 | 구현 |
 | OVS Mirror 기반 Analyzer 관찰 경로 | 구현 |
 | 토폴로지·Flow·보안 이벤트 운영 화면 | 구현 |
+| API Key·WebSocket 단기 토큰 보호 | 구현 |
 | 격리된 데이터 플레인 자동 검증 | 구현 |
+| secure-default Multipass 종단 간 배치 | 보완 필요 |
 
 세부 구현 현황은
 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md)에서 확인할 수 있다.
@@ -259,7 +267,27 @@ Windows PowerShell:
 ```
 
 이 명령은 호스트에 Backend, Frontend, 저장소를 실행하고 VM에 Analyzer,
-Controller, Mininet/OVS 실행 환경과 Sensor 인터페이스를 구성한다.
+Controller와 Mininet/OVS 실행 환경을 구성한다. 현재 bootstrap의 `auto`
+인터페이스는 VM 기본 경로 NIC를 선택하므로, Mininet Mirror 관측까지 사용하려면
+아래와 같이 Sensor veth를 준비하고 Analyzer를 `sdn-sensor0`으로 재생성해야 한다.
+
+```bash
+./data-plane/scripts/setup-sensor.sh
+
+HOST_GATEWAY="$(multipass exec sdn-lab -- \
+  ip route show default | awk '{print $3; exit}')"
+multipass exec sdn-lab -- env \
+  COMPOSE_IGNORE_ORPHANS=true \
+  BACKEND_BASE_URL="http://${HOST_GATEWAY}:8000" \
+  ANALYZER_INTERFACE=sdn-sensor0 \
+  docker compose \
+  -f /home/ubuntu/sdn-platform/docker-compose.yml \
+  -f /home/ubuntu/sdn-platform/docker-compose.dataplane.yml \
+  up -d --build --force-recreate --no-deps analyzer
+```
+
+Mininet은 `--sensor-mirror` 옵션이나 Mirror 검증 시나리오로 실행해야 실제
+트래픽이 Sensor에 복제된다.
 
 모든 서비스를 VM 안에서 실행하려면 다음 프로필을 사용한다.
 
@@ -281,7 +309,8 @@ Controller는 VM 내부에서 실행된다.
 ```bash
 VM_IP="$(multipass list --format csv | awk -F, '$1 == "sdn-lab" {print $3}')"
 curl "http://${VM_IP}:8080/health"
-curl "http://${VM_IP}:8080/switches"
+curl -H "X-API-Key: <CONTROLLER_API_KEY>" \
+  "http://${VM_IP}:8080/switches"
 ```
 
 ### 6. 종료와 정리
@@ -397,11 +426,26 @@ Analyzer 탐지부터 Backend 대응, Controller 적용까지의 시나리오는
 
 - 현재 기본 탐지 범위는 Port Scan, ICMP Flood와 보호 서버의 역할 위반,
   내부 확산, 비정상 송신량, 주기적 C2 연결이다.
+- 분석은 Ethernet/IPv4/TCP·UDP·ICMP 메타데이터와 시간창 통계 중심이며,
+  DNS·HTTP·TLS 애플리케이션 분석, 원본 PCAP 검색, 위협 인텔리전스 연동은
+  제공하지 않는다.
 - Mininet/OVS 없는 애플리케이션 영역 실행만으로는 실제 대응 효과를 검증할 수 없다.
 - Analyzer가 Mininet 트래픽을 보려면 `sdn-sensor0`과 OVS Mirror가 모두 필요하다.
+- 현재 Multipass bootstrap은 Sensor veth를 자동 생성하지 않고 `auto`에서 VM
+  기본 경로 NIC를 선택한다. `setup-sensor.sh`와 Analyzer 인터페이스 재설정이
+  필요하다.
+- bootstrap의 하이브리드 경로는 `docker-compose.dataplane.yml`을 단독 사용해
+  `ANALYZER_API_KEY`와 Outbox volume을 포함하지 않는다. secure-default 환경의
+  Analyzer 전달과 재생성 내구성을 위해서는 두 Compose 파일을 병합해 Analyzer를
+  다시 올리거나 배치 스크립트를 보완해야 한다.
 - 자동 대응 품질은 탐지 임계값과 운영 정책에 의존하며 실제 운영망 적용 전 별도 검증이 필요하다.
 - Controller가 일시적으로 사용할 수 없어도 이벤트와 pending 대응은 보존하지만 실제 네트워크 적용은 지연된다.
-- 일부 과거 호환용 Frontend WebSocket 타입과 정적 UI가 남아 있다.
+- 현재 Sensor와 고정 호스트 바인딩은 단일 Mininet 토폴로지에 맞춰져 있다.
+  다중 Sensor, 동적 자산 등록, 고가용성, 운영망 규모 성능 검증은 후속 범위다.
+- 일부 과거 호환용 Frontend WebSocket 타입과 사용하지 않는 mock 데이터가 남아 있다.
+- `verify.sh`의 Controller REST 시나리오는 아직 `X-API-Key`를 전달하지 않는다.
+  인증을 켠 환경에서는 시나리오에 Key 전달을 추가하기 전까지 해당 검증이
+  실패하며, 인증을 끄는 방식은 격리된 일회성 Lab에서만 사용해야 한다.
 
 ## 주요 문서
 

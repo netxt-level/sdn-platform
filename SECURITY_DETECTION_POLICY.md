@@ -1,5 +1,8 @@
 # 보안 탐지 명세서
 
+- 상태: 현재 Analyzer·Backend·Controller 연동 기준
+- 기준일: 2026-08-11
+
 ## 1. 개요
 
 이 문서는 SDN Platform에서 분석 서버가 생성하는 보안 탐지 이벤트, 탐지 기준, 대응 레벨, 대응 후보 payload를 정의한다.
@@ -35,7 +38,12 @@
 | 분류 | `severity`, `confidence`, `response_level`, `recommended_action` 산출 |
 | 제안 | 필요한 경우 `mitigation`에 대응 후보 payload 포함 |
 
-실제 대응 적용 여부는 백엔드/컨트롤러 정책에서 결정한다. 현재 백엔드는 보안 대응 내역과 flow rule 후보를 DB에 저장하지만, SDN 컨트롤러에 실제 rule을 설치하는 단계는 아직 연결되어 있지 않다.
+실제 대응 적용 여부는 Backend 정책과 런타임의
+`automatic_response_enabled` 설정이 결정한다. 자동 대응이 활성화된 경우
+Backend는 허용된 `mitigation`을 Flow Rule로 저장하고 Controller에 전달한다.
+Controller는 OpenFlow Barrier Reply를 확인한 뒤에만 적용 성공을 반환하며,
+Backend는 결과를 `APPLIED` 또는 `FAILED`로 기록한다. 운영자는 이벤트 화면에서
+`block`, `ignore`, `resolve`를 직접 선택할 수도 있다.
 
 ```text
 탐지 항목별 기본 레벨
@@ -97,7 +105,19 @@
 | `ignored` | 운영자 또는 정책에 의해 무시 |
 | `resolved` | 정상화 또는 종료 |
 
-보안 대응 내역과 flow rule 후보는 별도 lifecycle을 가진다. 현재 `security_responses`와 `flow_rules`는 생성 시 `PENDING` 상태로 저장되며, 향후 컨트롤러 연동 시 `APPLIED`, `FAILED`, `REMOVED` 같은 적용 상태를 확장할 수 있다.
+보안 대응 내역과 Flow Rule은 이벤트와 별도 lifecycle을 가진다.
+
+```text
+PENDING -> APPLYING -> APPLIED
+                    -> FAILED
+
+APPLIED -> REMOVING -> REMOVED
+                     -> REMOVE_FAILED
+        -> EXPIRED
+```
+
+Backend는 Controller 상태와 주기적으로 재조정하며 누락된 활성 규칙을 같은
+rule ID와 cookie로 재적용하고, Controller가 보고한 만료·제거 상태를 반영한다.
 
 ## 4. Score 및 대응 레벨
 
@@ -114,7 +134,6 @@
 | `ICMP_FLOOD` | 필수 조건 충족 | `60` |
 | `ICMP_FLOOD` | `min_packet_count_satisfied` | `+20` |
 | `ICMP_FLOOD` | `high_pps_exceeded` | `+15` |
-| `ICMP_FLOOD` | `baseline_spike_detected` | `+5` |
 
 ### 4.2 대응 레벨
 
@@ -248,9 +267,6 @@
 |---|---|
 | `min_packet_count_satisfied` | 탐지 윈도우 내 ICMP 패킷 수가 `1000` 이상 |
 | `high_pps_exceeded` | ICMP pps가 `3000` 이상 또는 `icmp_pps_threshold * 3.0` 이상 |
-| `baseline_spike_detected` | ICMP pps가 `max(baseline_avg_pps * 5.0, 100)` 이상 |
-
-`baseline_avg_pps`가 아직 계산되지 않았거나 신뢰할 수 있는 표본이 부족하면 `baseline_spike_detected`는 충족하지 않은 것으로 본다.
 
 ### 6.3 기준값
 
@@ -261,9 +277,11 @@
 | `min_packet_count` | `1000` |
 | `high_pps_threshold` | `3000` |
 | `high_pps_multiplier` | `3.0` |
-| `baseline_spike_multiplier` | `5.0` |
-| `baseline_min_pps` | `100` |
 | `alert_cooldown_sec` | `60` |
+
+`ICMP_BASELINE_SPIKE_MULTIPLIER`와 `ICMP_BASELINE_MIN_PPS`는 현재 설정 호환성을
+위해 파싱되지만 ICMP 점수 계산에는 반영되지 않는다. 현재 최대 점수는
+`60 + 20 + 15 = 95`다.
 
 ### 6.4 대응 레벨 규정
 
@@ -273,7 +291,10 @@
 | pps 기준 + 최소 샘플 조건 충족, `score >= 80` | `high` | `medium` | `L2` | `rate_limit` | `RATE_LIMIT` 후보 |
 | pps 기준 크게 초과 + 보조 조건 2개 이상, `score >= 95` | `critical` | `high` | `L2` | `drop` | `DROP` 후보 |
 
-현재 자동 적용은 하지 않는다. `mitigation`은 컨트롤러가 적용할 수 있는 후보 payload로만 제공한다.
+Analyzer는 자동 적용 여부를 결정하지 않고 `mitigation` 후보만 제공한다.
+Backend 자동 대응 설정이 활성화되어 있고 정책이 후보를 허용하면 Controller에
+전송한다. `high` ICMP Flood의 `RATE_LIMIT`과 `critical` 이벤트의 `DROP`이 이
+경로를 사용한다.
 
 ### 6.5 이벤트 예시
 
@@ -423,10 +444,14 @@ Controller에 자동 적용한 뒤 `APPLIED` 또는 `FAILED` 결과를 저장한
 }
 ```
 
-## 9. 구현 반영 TODO
+## 9. 구현 반영 상태와 남은 범위
 
-| 항목 | 설명 |
-|---|---|
-| rolling window 적용 | ICMP flood 탐지에도 rolling window 적용 |
-| controller 적용 연동 | `flow_rules`의 `PENDING` 후보를 SDN 컨트롤러에 설치/해제하고 상태를 갱신 |
-| 이벤트 상태 변경 API | `detected`, `blocked`, `ignored`, `resolved` 상태 전환과 처리 이력 저장 |
+| 항목 | 상태 | 설명 |
+|---|---|---|
+| Controller 적용 연동 | 구현 | Backend가 Flow Rule을 설치·제거하고 Barrier 결과와 오류를 저장 |
+| 이벤트 상태 변경 API | 구현 | `block`, `ignore`, `resolve` 운영자 작업 지원 |
+| 자동 대응 설정 | 구현 | 런타임 설정으로 Analyzer 후보의 자동 적용을 활성화·비활성화 |
+| Flow 상태 재조정 | 구현 | 누락 규칙 재적용과 `EXPIRED`·`REMOVED` 반영 |
+| ICMP rolling baseline | 미구현 | 현재 ICMP 판단은 분석 윈도우 PPS와 절대 임계값 중심 |
+| 애플리케이션 계층 탐지 | 미구현 | DNS·HTTP·TLS 내용과 암호화 트래픽 fingerprint는 분석하지 않음 |
+| 호스트 내부 행위 탐지 | 범위 밖 | `auditd`, eBPF, EDR telemetry는 별도 수집기가 필요 |

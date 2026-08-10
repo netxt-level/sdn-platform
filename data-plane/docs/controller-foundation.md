@@ -1,14 +1,15 @@
 # OpenFlow Controller 인프라
 
-- 상태: Controller·L2·경로 우회·외부 Flow Rule·OVS Meter 구현 및 검증 완료
-- 적용 범위: `feat/analyzer-sensor-integration`
-- 최종 수정일: 2026-07-20
+- 상태: Controller·L2·장애 우회·PPS 경로 분산·외부 Flow Rule·OVS Meter 구현
+- 적용 기준: `sdn-platform-v1`
+- 최종 수정일: 2026-08-11
 
 ## 목표와 현재 범위
 
 OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리하고,
 호스트 학습·기본 L2 전달·가중치 기반 경로 선택·링크 장애 우회를 수행한다.
-현재 브랜치는 독립 실행 가능한 데이터 플레인 인프라까지만 담당한다.
+현재 구현은 Backend 정책과 상태 재조정, Analyzer Mirror까지 연결되는 전체
+폐루프 보안 대응의 데이터 플레인 실행부다.
 
 현재 구현된 기능:
 
@@ -27,10 +28,8 @@ OS-Ken 기반 OpenFlow 1.3 Controller가 Mininet의 OVS 스위치 4개를 관리
 - Backend 요청 Flow Rule 삭제 및 Barrier 기반 제거 확인
 - OVS Meter PKTPS 기반 `RATE_LIMIT`과 timeout cleanup
 - 활성 Topology 조회와 L2 경로 재계산 API
-
-현재 브랜치에서 제외하는 기능:
-
-- Backend와 Controller의 만료 상태 재조정
+- 포트 통계 PPS 임계값 기반 TCP 5-tuple Primary/Backup 분산과 복귀
+- Controller API Key 인증과 Backend의 주기적 Flow 상태 재조정
 
 ## 기술 구성
 
@@ -63,12 +62,14 @@ Ubuntu VM
 │   └── FastAPI REST :8080
 ├── Mininet hosts
 ├── Open vSwitch s1~s4
-└── sdn-analyzer (캡처 경로 연동 전)
+├── sdn-sensor0 / sdn-mirror0
+└── sdn-analyzer (OVS Mirror 캡처)
 ```
 
 Packet-In 처리 경로에서는 Backend HTTP 요청을 수행하지 않는다. Controller는
-스위치·토폴로지·경로 상태를 관리하고, 외부 서비스 연동은 후속 브랜치에서
-별도 Queue/Retry 구조로 추가한다.
+스위치·토폴로지·경로 상태를 관리하고 REST API를 제공한다. Backend가 timeout과
+제한된 재시도를 적용해 Controller REST API를 호출하므로 Packet-In hot path와
+정책·저장소 I/O는 분리된다.
 
 ## 디렉터리와 모듈
 
@@ -82,8 +83,11 @@ data-plane/controller/
 │   ├── flow_manager.py
 │   ├── flow_operations.py
 │   ├── hosts.py
+│   ├── meters.py
 │   ├── packet_parser.py
+│   ├── path_distribution.py
 │   ├── routing.py
+│   ├── stats.py
 │   ├── table_miss.py
 │   └── topology.py
 ├── tests/
@@ -101,6 +105,9 @@ data-plane/controller/
 | `routing.py` | 순수 Dijkstra와 출력 포트 계산 |
 | `flow_manager.py` | Table-Miss, L2 Flow, Packet-Out, Flow 삭제 메시지 |
 | `flow_operations.py` | Backend 요청 Flow-Mod의 Barrier/Error lifecycle 추적 |
+| `meters.py` | switch/rate별 Meter ID 할당, 공유 참조, 해제 |
+| `path_distribution.py` | PPS 임계값과 TCP 5-tuple 기반 분산 정책 |
+| `stats.py` | 포트·Flow 통계와 경로 분산 snapshot 관리 |
 | `table_miss.py` | Barrier/Error/timeout 기반 Table-Miss 상태 추적 |
 | `api.py` | Health, switch 조회, 외부 Flow Rule 설치 REST API |
 | `config.py` | OpenFlow/REST 포트 환경변수 검증 |
@@ -364,19 +371,23 @@ CONTROLLER_OPENFLOW_PORT=6653
 CONTROLLER_REST_HOST=0.0.0.0
 CONTROLLER_REST_PORT=8080
 CONTROLLER_STATS_INTERVAL_SECONDS=1
-PATH_DISTRIBUTION_THRESHOLD_PPS=1000
-PATH_DISTRIBUTION_RECOVERY_PPS=800
+PATH_DISTRIBUTION_THRESHOLD_PPS=800
+PATH_DISTRIBUTION_RECOVERY_PPS=600
+CONTROLLER_API_KEY=replace-with-a-unique-controller-api-key
+ALLOW_INSECURE_DEV_AUTH=false
 ```
 
-OpenFlow bind host는 OS-Ken 실행기가 관리한다. Backend 주소나 인증 정보는
-현재 Controller에서 사용하지 않는다.
+OpenFlow bind host는 OS-Ken 실행기가 관리한다. `/health`를 제외한 REST API는
+`X-API-Key: <CONTROLLER_API_KEY>`를 요구한다. 인증 생략은 격리 개발 환경에서
+`ALLOW_INSECURE_DEV_AUTH=true`로 명시한 경우만 허용한다.
 
 ## 실행과 검증
 
 ```bash
 ./data-plane/scripts/start.sh
 curl "http://<VM_IP>:8080/health"
-curl "http://<VM_IP>:8080/switches"
+curl -H "X-API-Key: <CONTROLLER_API_KEY>" \
+  "http://<VM_IP>:8080/switches"
 ```
 
 일반 `start.sh`는 VM에 있는 기존 Controller 이미지를 사용한다. 현재 로컬
@@ -445,8 +456,13 @@ multipass exec sdn-lab -- docker logs --since 5m sdn-controller
 - OS-Ken 3.1.1의 eventlet deprecation 경고가 시작 로그에 출력된다.
 - 현재 Host 바인딩은 고정 Mininet 토폴로지의 네 호스트 전용이다. 동적 Host
   이동, DHCP 주소 변경, 신규 access 포트 등록은 지원하지 않는다.
-- Controller는 timeout 만료와 Meter 정리를 추적하지만 이를 Backend의
-  `EXPIRED` 상태로 재조정하는 기능은 아직 없다.
-- 링크 비용은 현재 고정 정책값이며 실시간 혼잡도를 반영하지 않는다.
+- Controller 프로세스의 외부 Rule·Meter registry는 메모리 상태다. Backend가
+  PostgreSQL을 기준으로 주기적으로 재조정하지만 Controller 재시작 직후에는
+  다음 재조정까지 짧은 공백이 있을 수 있다.
+- `verify.sh`의 외부 Flow·RATE_LIMIT 시나리오는 현재 Controller API Key header를
+  전달하지 않는다. secure-default 구성의 최신 전체 통과를 주장하려면 시나리오
+  인증 전달을 보완하고 다시 실행해야 한다.
+- 기본 링크 비용은 Primary/Backup 정책값이며 지연·손실을 비용으로 자동
+  변환하지 않는다. 혼잡 시에는 비용 자체 대신 TCP Flow를 두 경로에 분산한다.
 - Controller 재시작 후 기존 L2 Flow 정합성은 자동 검증에서 Flow를 제거하고
   Port Description 기반 Backup 경로와 호스트 재학습을 확인하는 방식이다.

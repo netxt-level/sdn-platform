@@ -2,6 +2,7 @@
 
 - 시나리오 ID: `SDN-PE-01`
 - 상태: 권한 상승 증명은 수동, 침해 후 네트워크 탐지·대응 비교는 자동화
+- 기준일: 2026-08-11
 - 대상: 격리된 `sdn-lab` Multipass VM과 Mininet 데이터 플레인
 - 공격 출발지: `h3` (`10.0.0.3`)
 - 웹 대상: `web` (`10.0.0.100:80`)
@@ -71,6 +72,11 @@ root proof file ──> sudo/auth 로그
 Controller, Backend, Analyzer가 준비된 상태에서 Sensor Mirror와 Mutillidae
 proxy가 포함된 Mininet CLI를 연다.
 
+bootstrap 기본 Analyzer가 VM 경로 NIC를 사용 중이면 먼저
+`./data-plane/scripts/setup-sensor.sh`를 실행하고
+`data-plane/docs/vm-setup.md`의 병합 Compose 절차로 Analyzer를
+`sdn-sensor0`에 재연결한다.
+
 ```bash
 multipass exec sdn-lab -- sudo python3 \
   /home/ubuntu/sdn-platform/data-plane/mininet/topology.py \
@@ -90,7 +96,7 @@ multipass exec sdn-lab -- docker ps --format \
 
 ### 탐지만/자동 대응 비교 자동화
 
-`LATERAL_MOVEMENT`는 다음 스크립트로 같은 트래픽을 두 모드에서 비교할 수
+`LATERAL_MOVEMENT`는 구현된 다음 스크립트로 같은 트래픽을 두 모드에서 비교할 수
 있다. 스크립트는 `web`에서 h1과 h2로 30초 안에 TCP 연결 3건을 만들며,
 실행마다 Mininet과 Mirror를 생성하고 종료 시 정리한다. 외부 주소는 사용하지
 않는다.
@@ -104,8 +110,9 @@ multipass exec sdn-lab -- env \
   BACKEND_BASE_URL=http://192.168.252.1:8000 \
   ANALYZER_INTERFACE=sdn-sensor0 \
   docker compose \
+  -f /home/ubuntu/sdn-platform/docker-compose.yml \
   -f /home/ubuntu/sdn-platform/docker-compose.dataplane.yml \
-  up -d --force-recreate analyzer
+  up -d --force-recreate --no-deps analyzer
 ```
 
 탐지만 실행:

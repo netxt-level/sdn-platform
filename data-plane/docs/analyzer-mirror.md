@@ -1,7 +1,7 @@
 # OVS Mirror와 Sensor veth
 
-- 상태: `s1` 연결 구현 및 tcpdump 검증 완료
-- 최종 수정일: 2026-07-21
+- 상태: `s1` Mirror·tcpdump 구현, secure-default Analyzer 배치 보완 필요
+- 최종 수정일: 2026-08-11
 
 ## 캡처 구조
 
@@ -31,9 +31,9 @@ port 5(`s3`)의 ingress를 선택한다. 따라서 Primary와 Backup 어느 경�
 
 ## 수명주기
 
-- Multipass VM bootstrap은 Analyzer를 시작하기 전에 Sensor veth를 멱등
-  생성한다. Analyzer가 안정적으로 인터페이스를 유지하도록 veth 수명주기는
-  Mininet 실행과 분리한다.
+- `setup-sensor.sh`는 Sensor veth를 멱등 생성한다. 현재 Multipass bootstrap은
+  이 스크립트를 자동 호출하지 않으므로 최초 구성 후 별도로 실행한다. Analyzer가
+  안정적으로 인터페이스를 유지하도록 veth 수명주기는 Mininet 실행과 분리한다.
 - Mininet이 `s1`을 시작한 뒤 OVS Mirror와 output port 6을 연결한다.
 - 정상 시나리오 종료 시 Mirror와 OVS port만 제거하고 veth는 유지한다.
 - 전체 `cleanup.sh`는 Analyzer가 실행 중이면 veth를 삭제하지 않고 중지
@@ -44,9 +44,8 @@ port 5(`s3`)의 ingress를 선택한다. 따라서 Primary와 Backup 어느 경�
 
 ## 준비와 대화형 실행
 
-일반 환경에서는 Multipass VM bootstrap이 Analyzer 시작 전에 Sensor veth를
-멱등 생성한다. 기존 VM 복구나 단독 진단 시에는 다음 명령으로 같은 작업을
-다시 실행할 수 있다.
+현재는 Multipass bootstrap 뒤에 다음 명령으로 Sensor veth를 준비한다. 기존 VM
+복구나 단독 진단에서도 같은 명령을 사용할 수 있다.
 
 ```bash
 ./data-plane/scripts/sync-vm.sh
@@ -96,7 +95,7 @@ multipass exec sdn-lab -- sudo python3 -u \
 
 시나리오는 다음을 확인한다.
 
-1. VM bootstrap 후 veth pair가 존재하고 두 인터페이스가 `UP`, promiscuous
+1. `setup-sensor.sh` 또는 시나리오 준비 후 veth pair가 존재하고 두 인터페이스가 `UP`, promiscuous
    상태인지 확인한다.
 2. `sdn-mirror0`이 s1 port 6인지, Mirror source가 1·2·3·4·5인지 OVSDB UUID로
    확인한다.
@@ -136,3 +135,10 @@ Analyzer 연결 단계에서는 VM Analyzer를 host network로 실행하고
 `ANALYZER_INTERFACE=sdn-sensor0`을 지정한다. `analyzer_detection_response.py`
 시나리오는 실제 OVS 복제, ICMP Flood 탐지, Security Event/Response와 Flow Rule
 저장, Controller의 s1 Meter 설치까지 종단 간 검증한다.
+
+루트 Compose와 dataplane overlay를 병합하면 host network와 Analyzer API Key,
+Outbox volume을 함께 적용할 수 있다. 현재 bootstrap은 overlay만 사용하므로
+이 병합 또는 스크립트 보완이 필요하다. 또한 종단 간 시나리오의 Backend 조회
+요청과 기본 `verify.sh`의 Controller REST 시나리오는 아직 secure-default API
+Key를 모두 전달하지 않는다. 인증을 활성화한 최신 환경에서는 Key 전달을
+보완한 뒤 실행해야 한다.
