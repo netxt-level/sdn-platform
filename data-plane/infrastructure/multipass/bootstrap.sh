@@ -12,6 +12,8 @@ VM_DISK="${VM_DISK:-40G}"
 VM_IMAGE="${VM_IMAGE:-24.04}"
 DEPLOYMENT_PROFILE="${DEPLOYMENT_PROFILE:-dataplane}"
 VM_ANALYZER_INTERFACE="${VM_ANALYZER_INTERFACE:-auto}"
+SENSOR_INTERFACE="${SENSOR_INTERFACE:-sdn-sensor0}"
+MIRROR_INTERFACE="${MIRROR_INTERFACE:-sdn-mirror0}"
 CONTROLLER_REST_PORT="${CONTROLLER_REST_PORT:-8080}"
 VM_PROJECT_DIR="/home/ubuntu/sdn-platform"
 
@@ -26,7 +28,7 @@ Options:
   --disk SIZE       Disk size (default: 40G)
   --image IMAGE     Ubuntu image (default: 24.04)
   --profile PROFILE Deployment profile: dataplane or full (default: dataplane)
-  --interface NAME  Analyzer capture interface in the VM (default: auto)
+  --interface NAME  Analyzer capture interface in the VM (default: auto -> sdn-sensor0)
   -h, --help        Show this help
 EOF
 }
@@ -163,17 +165,29 @@ multipass exec "${VM_NAME}" -- rm -f "${REMOTE_ARCHIVE}"
 
 VM_IP="$(multipass info "${VM_NAME}" | awk '/IPv4:/ {print $2; exit}')"
 
+RESOLVED_ANALYZER_INTERFACE="${VM_ANALYZER_INTERFACE}"
+if [[ "${RESOLVED_ANALYZER_INTERFACE}" == "auto" ]]; then
+  RESOLVED_ANALYZER_INTERFACE="${SENSOR_INTERFACE}"
+fi
+if [[ -z "${RESOLVED_ANALYZER_INTERFACE}" ]]; then
+  echo "Analyzer interface must not be empty." >&2
+  exit 1
+fi
+
+if [[ "${RESOLVED_ANALYZER_INTERFACE}" == "${SENSOR_INTERFACE}" ]]; then
+  echo "Preparing the Analyzer sensor veth in the VM..."
+  multipass exec "${VM_NAME}" -- sudo python3 \
+    "${VM_PROJECT_DIR}/data-plane/mininet/sensor.py" setup \
+    --sensor-interface "${SENSOR_INTERFACE}" \
+    --mirror-interface "${MIRROR_INTERFACE}"
+else
+  echo "Using the custom Analyzer interface: ${RESOLVED_ANALYZER_INTERFACE}"
+fi
+
 if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   HOST_GATEWAY="$(multipass exec "${VM_NAME}" -- ip route show default | awk '{print $3; exit}')"
-  RESOLVED_ANALYZER_INTERFACE="${VM_ANALYZER_INTERFACE}"
-  if [[ "${RESOLVED_ANALYZER_INTERFACE}" == "auto" ]]; then
-    RESOLVED_ANALYZER_INTERFACE="$(
-      multipass exec "${VM_NAME}" -- ip route show default |
-        awk '{for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); exit}}'
-    )"
-  fi
-  if [[ -z "${RESOLVED_ANALYZER_INTERFACE}" ]]; then
-    echo "Could not determine the Analyzer interface in the VM." >&2
+  if [[ -z "${HOST_GATEWAY}" ]]; then
+    echo "Could not determine the host gateway from the VM." >&2
     exit 1
   fi
   BACKEND_URL="http://${HOST_GATEWAY}:8000"
@@ -224,14 +238,17 @@ if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   multipass exec "${VM_NAME}" -- \
     env COMPOSE_IGNORE_ORPHANS=true \
     BACKEND_BASE_URL="${BACKEND_URL}" ANALYZER_INTERFACE="${RESOLVED_ANALYZER_INTERFACE}" \
-    docker compose -f "${VM_PROJECT_DIR}/docker-compose.dataplane.yml" \
-    up -d --build
+    docker compose \
+    -f "${VM_PROJECT_DIR}/docker-compose.yml" \
+    -f "${VM_PROJECT_DIR}/docker-compose.dataplane.yml" \
+    up -d --build --force-recreate --no-deps analyzer
 
   echo "Verifying the hybrid data-plane environment..."
   multipass exec "${VM_NAME}" -- \
     bash "${VM_PROJECT_DIR}/data-plane/infrastructure/multipass/verify-vm.sh" \
     "${VM_PROJECT_DIR}" dataplane "${BACKEND_URL}" "${FRONTEND_URL}" \
-    "http://127.0.0.1:${CONTROLLER_REST_PORT}/health"
+    "http://127.0.0.1:${CONTROLLER_REST_PORT}/health" \
+    "${RESOLVED_ANALYZER_INTERFACE}"
 
   curl --retry 10 --retry-delay 2 --retry-connrefused \
     --fail --silent --show-error http://127.0.0.1:8000/health >/dev/null
@@ -247,15 +264,23 @@ if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   echo "Controller: http://${VM_IP}:${CONTROLLER_REST_PORT}"
   echo "Frontend:  http://127.0.0.1:${FRONTEND_PORT:-3000}"
   echo "Backend:   http://127.0.0.1:8000"
-  echo "API docs:  http://127.0.0.1:8000/docs"
+  echo "Health:    http://127.0.0.1:8000/health"
 else
   echo "Building and starting the full platform in the VM..."
   multipass exec "${VM_NAME}" -- \
+    env BACKEND_BASE_URL="http://127.0.0.1:8000" \
+    ANALYZER_INTERFACE="${RESOLVED_ANALYZER_INTERFACE}" \
     docker compose --profile dataplane \
-    -f "${VM_PROJECT_DIR}/docker-compose.yml" config --quiet
+    -f "${VM_PROJECT_DIR}/docker-compose.yml" \
+    -f "${VM_PROJECT_DIR}/docker-compose.dataplane.yml" \
+    config --quiet
   multipass exec "${VM_NAME}" -- \
+    env BACKEND_BASE_URL="http://127.0.0.1:8000" \
+    ANALYZER_INTERFACE="${RESOLVED_ANALYZER_INTERFACE}" \
     docker compose --profile dataplane \
-    -f "${VM_PROJECT_DIR}/docker-compose.yml" up -d --build
+    -f "${VM_PROJECT_DIR}/docker-compose.yml" \
+    -f "${VM_PROJECT_DIR}/docker-compose.dataplane.yml" \
+    up -d --build
 
   echo "Applying database migrations in the VM..."
   multipass exec "${VM_NAME}" -- \
@@ -269,7 +294,8 @@ else
     bash "${VM_PROJECT_DIR}/data-plane/infrastructure/multipass/verify-vm.sh" \
     "${VM_PROJECT_DIR}" full \
     "http://127.0.0.1:8000" "http://127.0.0.1:3000" \
-    "http://127.0.0.1:${CONTROLLER_REST_PORT}/health"
+    "http://127.0.0.1:${CONTROLLER_REST_PORT}/health" \
+    "${RESOLVED_ANALYZER_INTERFACE}"
 
   echo
   echo "Full VM SDN lab is ready."
@@ -278,5 +304,5 @@ else
   echo "Frontend: http://${VM_IP}:3000"
   echo "Backend:  http://${VM_IP}:8000"
   echo "Controller: http://${VM_IP}:${CONTROLLER_REST_PORT}"
-  echo "API docs: http://${VM_IP}:8000/docs"
+  echo "Health:   http://${VM_IP}:8000/health"
 fi

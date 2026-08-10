@@ -170,7 +170,7 @@ Flow Rule은 Controller가 OpenFlow Barrier Reply를 확인한 뒤에만 `APPLIE
 | 토폴로지·Flow·보안 이벤트 운영 화면 | 구현 |
 | API Key·WebSocket 단기 토큰 보호 | 구현 |
 | 격리된 데이터 플레인 자동 검증 | 구현 |
-| secure-default Multipass 종단 간 배치 | 보완 필요 |
+| secure-default Multipass bootstrap 배치 | 구현 |
 
 세부 구현 현황은
 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md)에서 확인할 수 있다.
@@ -267,24 +267,10 @@ Windows PowerShell:
 ```
 
 이 명령은 호스트에 Backend, Frontend, 저장소를 실행하고 VM에 Analyzer,
-Controller와 Mininet/OVS 실행 환경을 구성한다. 현재 bootstrap의 `auto`
-인터페이스는 VM 기본 경로 NIC를 선택하므로, Mininet Mirror 관측까지 사용하려면
-아래와 같이 Sensor veth를 준비하고 Analyzer를 `sdn-sensor0`으로 재생성해야 한다.
-
-```bash
-./data-plane/scripts/setup-sensor.sh
-
-HOST_GATEWAY="$(multipass exec sdn-lab -- \
-  ip route show default | awk '{print $3; exit}')"
-multipass exec sdn-lab -- env \
-  COMPOSE_IGNORE_ORPHANS=true \
-  BACKEND_BASE_URL="http://${HOST_GATEWAY}:8000" \
-  ANALYZER_INTERFACE=sdn-sensor0 \
-  docker compose \
-  -f /home/ubuntu/sdn-platform/docker-compose.yml \
-  -f /home/ubuntu/sdn-platform/docker-compose.dataplane.yml \
-  up -d --build --force-recreate --no-deps analyzer
-```
+Controller와 Mininet/OVS 실행 환경을 구성한다. 기본 `auto` 인터페이스는
+`sdn-sensor0`으로 해석되며, bootstrap이 Sensor veth를 먼저 준비한다. Analyzer는
+루트 Compose와 dataplane overlay를 병합해 실행하므로 API Key, 영속 Outbox
+volume과 host network가 함께 적용된다.
 
 Mininet은 `--sensor-mirror` 옵션이나 Mirror 검증 시나리오로 실행해야 실제
 트래픽이 Sensor에 복제된다.
@@ -430,22 +416,15 @@ Analyzer 탐지부터 Backend 대응, Controller 적용까지의 시나리오는
   DNS·HTTP·TLS 애플리케이션 분석, 원본 PCAP 검색, 위협 인텔리전스 연동은
   제공하지 않는다.
 - Mininet/OVS 없는 애플리케이션 영역 실행만으로는 실제 대응 효과를 검증할 수 없다.
-- Analyzer가 Mininet 트래픽을 보려면 `sdn-sensor0`과 OVS Mirror가 모두 필요하다.
-- 현재 Multipass bootstrap은 Sensor veth를 자동 생성하지 않고 `auto`에서 VM
-  기본 경로 NIC를 선택한다. `setup-sensor.sh`와 Analyzer 인터페이스 재설정이
-  필요하다.
-- bootstrap의 하이브리드 경로는 `docker-compose.dataplane.yml`을 단독 사용해
-  `ANALYZER_API_KEY`와 Outbox volume을 포함하지 않는다. secure-default 환경의
-  Analyzer 전달과 재생성 내구성을 위해서는 두 Compose 파일을 병합해 Analyzer를
-  다시 올리거나 배치 스크립트를 보완해야 한다.
+- Analyzer가 Mininet 트래픽을 보려면 `sdn-sensor0`뿐 아니라 실행 중인 OVS
+  Mirror가 필요하다.
 - 자동 대응 품질은 탐지 임계값과 운영 정책에 의존하며 실제 운영망 적용 전 별도 검증이 필요하다.
 - Controller가 일시적으로 사용할 수 없어도 이벤트와 pending 대응은 보존하지만 실제 네트워크 적용은 지연된다.
 - 현재 Sensor와 고정 호스트 바인딩은 단일 Mininet 토폴로지에 맞춰져 있다.
   다중 Sensor, 동적 자산 등록, 고가용성, 운영망 규모 성능 검증은 후속 범위다.
 - 일부 과거 호환용 Frontend WebSocket 타입과 사용하지 않는 mock 데이터가 남아 있다.
-- `verify.sh`의 Controller REST 시나리오는 아직 `X-API-Key`를 전달하지 않는다.
-  인증을 켠 환경에서는 시나리오에 Key 전달을 추가하기 전까지 해당 검증이
-  실패하며, 인증을 끄는 방식은 격리된 일회성 Lab에서만 사용해야 한다.
+- `verify.sh`의 일부 Controller REST 시나리오는 아직 `X-API-Key`를 전달하지
+  않는다. 인증을 켠 환경에서는 시나리오에 Key 전달을 추가해야 한다.
 
 ## 주요 문서
 

@@ -72,10 +72,10 @@ root proof file ──> sudo/auth 로그
 Controller, Backend, Analyzer가 준비된 상태에서 Sensor Mirror와 Mutillidae
 proxy가 포함된 Mininet CLI를 연다.
 
-bootstrap 기본 Analyzer가 VM 경로 NIC를 사용 중이면 먼저
-`./data-plane/scripts/setup-sensor.sh`를 실행하고
-`data-plane/docs/vm-setup.md`의 병합 Compose 절차로 Analyzer를
-`sdn-sensor0`에 재연결한다.
+현재 bootstrap은 기본 Analyzer를 `sdn-sensor0`에 연결하고 병합 Compose로
+실행한다. 과거 bootstrap으로 만든 VM을 재사용해 캡처 NIC가 다르면
+`./data-plane/scripts/setup-sensor.sh`와 `data-plane/docs/vm-setup.md`의 수동
+재생성 절차로 복구한다.
 
 ```bash
 multipass exec sdn-lab -- sudo python3 \

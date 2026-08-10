@@ -126,10 +126,10 @@ Docker Compose 실행 시에는 루트 `.env` 또는 `.env.example`의 값을 �
 - 분석 루프와 상태 전송 루프는 예외가 발생해도 오류 상태를 기록하고 계속 실행된다.
 - 패킷·탐지 요약과 보안 이벤트는 Outbox에 먼저 저장한다. 연결 오류와 5xx는
   지수 Backoff로 재시도하고, 재시도할 수 없는 4xx는 Dead Letter로 보존한다.
-- 루트 `docker-compose.yml`은 `/var/lib/sdn-analyzer` volume을 연결한다. 현재
-  Multipass bootstrap이 단독 사용하는 `docker-compose.dataplane.yml`에는
-  volume과 `ANALYZER_API_KEY` 전달이 없으므로 두 Compose 파일 병합 또는 배치
-  수정 전에는 secure-default 전달과 재생성 내구성이 보장되지 않는다.
+- Multipass bootstrap은 루트 `docker-compose.yml`과
+  `docker-compose.dataplane.yml`을 병합한다. 따라서
+  `/var/lib/sdn-analyzer` volume, `ANALYZER_API_KEY`, host network와
+  `sdn-sensor0` 캡처 설정이 함께 적용된다.
 - 상태 보고는 Outbox 대상이 아니므로 실패하면 다음 주기에 다시 보고한다.
 - 패킷 캡처에는 OS/컨테이너 권한이 필요할 수 있다.
 

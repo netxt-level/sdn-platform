@@ -48,6 +48,8 @@ $EnvFile = Join-Path $RepoRoot ".env"
 $MainCompose = Join-Path $RepoRoot "docker-compose.yml"
 $ControlCompose = Join-Path $RepoRoot "docker-compose.control-plane.yml"
 $ControllerRestPort = if ($env:CONTROLLER_REST_PORT) { $env:CONTROLLER_REST_PORT } else { "8080" }
+$SensorInterface = if ($env:SENSOR_INTERFACE) { $env:SENSOR_INTERFACE } else { "sdn-sensor0" }
+$MirrorInterface = if ($env:MIRROR_INTERFACE) { $env:MIRROR_INTERFACE } else { "sdn-mirror0" }
 $VmProjectDir = "/home/ubuntu/sdn-platform"
 $RemoteArchive = "/home/ubuntu/sdn-platform-source.tar.gz"
 $Archive = Join-Path ([System.IO.Path]::GetTempPath()) "sdn-platform-$([guid]::NewGuid()).tar.gz"
@@ -144,6 +146,26 @@ try {
     $IpLine = $Info | Select-String -Pattern '^IPv4:' | Select-Object -First 1
     $VmIp = ($IpLine.ToString() -split '\s+')[1]
 
+    $ResolvedAnalyzerInterface = $AnalyzerInterface
+    if ($ResolvedAnalyzerInterface -eq "auto") {
+        $ResolvedAnalyzerInterface = $SensorInterface
+    }
+    if ([string]::IsNullOrWhiteSpace($ResolvedAnalyzerInterface)) {
+        throw "Analyzer interface must not be empty."
+    }
+
+    if ($ResolvedAnalyzerInterface -eq $SensorInterface) {
+        Write-Host "Preparing the Analyzer sensor veth in the VM..."
+        Invoke-Native "multipass" @(
+            "exec", $VmName, "--",
+            "sudo", "python3", "${VmProjectDir}/data-plane/mininet/sensor.py", "setup",
+            "--sensor-interface", $SensorInterface,
+            "--mirror-interface", $MirrorInterface
+        )
+    } else {
+        Write-Host "Using the custom Analyzer interface: $ResolvedAnalyzerInterface"
+    }
+
     if ($Profile -eq "dataplane") {
         $DefaultRoute = & multipass exec $VmName -- ip route show default
         if ($LASTEXITCODE -ne 0) {
@@ -151,14 +173,6 @@ try {
         }
         $RouteParts = (($DefaultRoute -join " ").Trim() -split '\s+')
         $HostGateway = $RouteParts[2]
-        $ResolvedAnalyzerInterface = $AnalyzerInterface
-        if ($ResolvedAnalyzerInterface -eq "auto") {
-            $DevIndex = [Array]::IndexOf($RouteParts, "dev")
-            if ($DevIndex -lt 0 -or $DevIndex + 1 -ge $RouteParts.Length) {
-                throw "Could not determine the Analyzer interface in the VM."
-            }
-            $ResolvedAnalyzerInterface = $RouteParts[$DevIndex + 1]
-        }
         $BackendUrl = "http://${HostGateway}:8000"
         $FrontendPort = if ($env:FRONTEND_PORT) { $env:FRONTEND_PORT } else { "3000" }
         $FrontendUrl = "http://${HostGateway}:${FrontendPort}"
@@ -213,8 +227,10 @@ try {
             "exec", $VmName, "--",
             "env", "COMPOSE_IGNORE_ORPHANS=true",
             "BACKEND_BASE_URL=${BackendUrl}", "ANALYZER_INTERFACE=${ResolvedAnalyzerInterface}",
-            "docker", "compose", "-f", "${VmProjectDir}/docker-compose.dataplane.yml",
-            "up", "-d", "--build"
+            "docker", "compose",
+            "-f", "${VmProjectDir}/docker-compose.yml",
+            "-f", "${VmProjectDir}/docker-compose.dataplane.yml",
+            "up", "-d", "--build", "--force-recreate", "--no-deps", "analyzer"
         )
 
         Write-Host "Verifying the hybrid data-plane environment..."
@@ -222,7 +238,8 @@ try {
             "exec", $VmName, "--",
             "bash", "${VmProjectDir}/data-plane/infrastructure/multipass/verify-vm.sh",
             $VmProjectDir, "dataplane", $BackendUrl, $FrontendUrl,
-            "http://127.0.0.1:${ControllerRestPort}/health"
+            "http://127.0.0.1:${ControllerRestPort}/health",
+            $ResolvedAnalyzerInterface
         )
 
         Wait-HttpEndpoint "http://127.0.0.1:8000/health"
@@ -236,19 +253,25 @@ try {
         Write-Host "Controller: http://${VmIp}:${ControllerRestPort}"
         Write-Host "Frontend:  http://127.0.0.1:${FrontendPort}"
         Write-Host "Backend:   http://127.0.0.1:8000"
-        Write-Host "API docs:  http://127.0.0.1:8000/docs"
+        Write-Host "Health:    http://127.0.0.1:8000/health"
     } else {
         Write-Host "Building and starting the full platform in the VM..."
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
+            "env", "BACKEND_BASE_URL=http://127.0.0.1:8000",
+            "ANALYZER_INTERFACE=${ResolvedAnalyzerInterface}",
             "docker", "compose", "--profile", "dataplane",
             "-f", "${VmProjectDir}/docker-compose.yml",
+            "-f", "${VmProjectDir}/docker-compose.dataplane.yml",
             "config", "--quiet"
         )
         Invoke-Native "multipass" @(
             "exec", $VmName, "--",
+            "env", "BACKEND_BASE_URL=http://127.0.0.1:8000",
+            "ANALYZER_INTERFACE=${ResolvedAnalyzerInterface}",
             "docker", "compose", "--profile", "dataplane",
             "-f", "${VmProjectDir}/docker-compose.yml",
+            "-f", "${VmProjectDir}/docker-compose.dataplane.yml",
             "up", "-d", "--build"
         )
 
@@ -268,7 +291,8 @@ try {
             "bash", "${VmProjectDir}/data-plane/infrastructure/multipass/verify-vm.sh",
             $VmProjectDir, "full",
             "http://127.0.0.1:8000", "http://127.0.0.1:3000",
-            "http://127.0.0.1:${ControllerRestPort}/health"
+            "http://127.0.0.1:${ControllerRestPort}/health",
+            $ResolvedAnalyzerInterface
         )
 
         Write-Host ""
@@ -278,7 +302,7 @@ try {
         Write-Host "Frontend: http://${VmIp}:3000"
         Write-Host "Backend:  http://${VmIp}:8000"
         Write-Host "Controller: http://${VmIp}:${ControllerRestPort}"
-        Write-Host "API docs: http://${VmIp}:8000/docs"
+        Write-Host "Health:   http://${VmIp}:8000/health"
     }
 } finally {
     if (Test-Path $Archive) {

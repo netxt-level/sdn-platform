@@ -38,7 +38,7 @@ Analyzer ── Security Event ──> Backend Policy
 | 상태 검증 | 구현 | Barrier, Flow 통계, 주기적 Backend 재조정 |
 | 운영 화면 | 구현 | Dashboard, Security, Flow, Topology, Settings |
 | 격리 통합 시나리오 | 구현 | Mininet/OVS 시나리오와 Multipass 실행 스크립트 |
-| secure-default 하이브리드 배치 | 보완 필요 | Sensor 자동 준비, Analyzer Key/volume, 시나리오 Key 전달 |
+| secure-default Multipass bootstrap | 구현 | Sensor 자동 준비, Compose 병합, Analyzer Key·Outbox volume·host network |
 | 운영망 제품화 | 미완료 | 다중 Sensor, HA, 대규모 성능, L7 분석은 후속 범위 |
 
 ## Analyzer
@@ -47,9 +47,9 @@ Analyzer ── Security Event ──> Backend Policy
 
 Analyzer는 지정 인터페이스에서 Scapy로 패킷을 캡처해 L2~L4 메타데이터를
 만들고, 시간창 단위로 요약·탐지 결과를 생성한다. Mininet 트래픽을 관측하는
-배치에서는 OVS Mirror에 연결된 `sdn-sensor0`을 명시해야 한다. 현재 Multipass
-bootstrap의 `auto` 기본값은 VM 기본 경로 NIC이므로 Sensor 준비와 Analyzer
-재생성이 별도 단계다.
+배치에서는 OVS Mirror에 연결된 `sdn-sensor0`을 사용한다. Multipass
+bootstrap은 `auto`를 이 인터페이스로 해석하고 Analyzer 시작 전에 Sensor
+veth를 멱등 준비한다.
 
 | 기능 | 상태 | 구현 위치 |
 |---|---|---|
@@ -78,10 +78,6 @@ Outbox에 넣지 않는다.
 - ICMP 탐지는 현재 분석 윈도우의 절대 PPS 기준 중심이다.
 - ICMP baseline 관련 두 환경변수는 현재 점수 계산에 반영되지 않는다.
 - 탐지기의 연결 이력과 행동 baseline은 메모리 상태라 재시작 후 다시 수집한다.
-- 기본 `docker-compose.yml`은 Outbox volume과 Analyzer API Key를 포함하지만,
-  bootstrap이 단독 사용하는 `docker-compose.dataplane.yml`에는 둘이 선언되지
-  않았다. 하이브리드 secure-default 배치는 두 Compose 파일 병합이나 스크립트
-  보완이 필요하다.
 
 ## Backend
 
@@ -192,8 +188,8 @@ WebSocket은 Admin API로 단기 토큰을 발급받은 뒤 허용 Origin과 sub
 
 | 배치 | Development host | Multipass VM |
 |---|---|---|
-| `dataplane` | Backend, Frontend, DB | Controller, Analyzer, Mininet/OVS; 현재 Analyzer overlay 보완 필요 |
-| `full` | 실행 스크립트 | 전체 서비스와 Mininet/OVS; Analyzer는 기본 bridge/`eth0`이므로 Mirror 미연결 |
+| `dataplane` | Backend, Frontend, DB | Controller, Analyzer, Mininet/OVS; Sensor 자동 준비와 병합 Compose 적용 |
+| `full` | 실행 스크립트 | 전체 서비스와 Mininet/OVS; Analyzer host network와 Sensor 자동 적용 |
 
 서비스와 저장소 포트는 기본적으로 `127.0.0.1`에 bind한다. Analyzer,
 Controller, Admin API Key는 서로 분리하고 WebSocket 토큰 서명 키도 별도로
@@ -228,17 +224,17 @@ Controller, Admin API Key는 서로 분리하고 WebSocket 토큰 서명 키도 
 `pytest`, FastAPI 또는 OS-Ken 부재로 실행되지 않으므로 Controller 이미지나
 개발 의존성 환경을 사용한다.
 
-통합 스크립트와 종단 간 시나리오가 저장소에 있다는 사실과 현재 secure-default
-환경에서의 최신 통과 결과는 구분해야 한다. Sensor bootstrap 및 시나리오 API
-Key 전달, 하이브리드 Analyzer API Key·Outbox volume 구성을 보완한 뒤 전체
-Multipass 검증을 다시 실행해야 한다.
+통합 스크립트와 종단 간 시나리오가 저장소에 있다는 사실과 현재 환경에서의
+최신 통과 결과는 구분해야 한다. bootstrap의 Sensor와 Analyzer secure-default
+구성은 반영됐지만, 일부 시나리오의 API Key 전달을 보완한 뒤 전체 Multipass
+검증을 다시 실행해야 한다.
 
 ## 남은 우선순위
 
 현재 주요 공백은 구현 유무보다 운영망 제품화와 NDR 조사 깊이에 있다.
 
 1. 다중 Mirror/Sensor 등록, health 집계와 설정 배포
-2. bootstrap의 Sensor 준비, Analyzer API Key·Outbox volume, 시나리오 Key 전달
+2. secure-default 환경의 나머지 통합 시나리오 API Key 전달
 3. 운영 규모 패킷 손실·Queue 성장·Controller 처리량 측정
 4. DNS·HTTP·TLS metadata와 암호화 트래픽 분석
 5. PCAP/session 검색, 사건 timeline과 hunting 기능

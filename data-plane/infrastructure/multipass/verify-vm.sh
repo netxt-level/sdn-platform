@@ -6,13 +6,11 @@ DEPLOYMENT_PROFILE="${2:-dataplane}"
 BACKEND_URL="${3:-http://127.0.0.1:8000}"
 FRONTEND_URL="${4:-http://127.0.0.1:3000}"
 CONTROLLER_HEALTH_URL="${5:-http://127.0.0.1:8080/health}"
-CONTROLLER_COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
+ANALYZER_INTERFACE="${6:-sdn-sensor0}"
+BASE_COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
+DATAPLANE_COMPOSE_FILE="${PROJECT_DIR}/docker-compose.dataplane.yml"
 
-if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
-  COMPOSE_FILE="${PROJECT_DIR}/docker-compose.dataplane.yml"
-elif [[ "${DEPLOYMENT_PROFILE}" == "full" ]]; then
-  COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
-else
+if [[ "${DEPLOYMENT_PROFILE}" != "dataplane" && "${DEPLOYMENT_PROFILE}" != "full" ]]; then
   echo "Unsupported deployment profile: ${DEPLOYMENT_PROFILE}" >&2
   exit 2
 fi
@@ -29,13 +27,13 @@ require_command ovs-vsctl
 require_command docker
 require_command curl
 
-if [[ ! -f "${COMPOSE_FILE}" ]]; then
-  echo "Compose file not found: ${COMPOSE_FILE}" >&2
+if [[ ! -f "${BASE_COMPOSE_FILE}" ]]; then
+  echo "Compose file not found: ${BASE_COMPOSE_FILE}" >&2
   exit 1
 fi
 
-if [[ ! -f "${CONTROLLER_COMPOSE_FILE}" ]]; then
-  echo "Controller Compose file not found: ${CONTROLLER_COMPOSE_FILE}" >&2
+if [[ ! -f "${DATAPLANE_COMPOSE_FILE}" ]]; then
+  echo "Compose file not found: ${DATAPLANE_COMPOSE_FILE}" >&2
   exit 1
 fi
 
@@ -43,15 +41,16 @@ systemctl is-active --quiet openvswitch-switch
 systemctl is-active --quiet docker
 docker info >/dev/null
 
-if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
-  BACKEND_BASE_URL="${BACKEND_URL}" docker compose \
-    -f "${COMPOSE_FILE}" config --quiet
-else
-  docker compose --profile dataplane -f "${COMPOSE_FILE}" config --quiet
-fi
+BACKEND_BASE_URL="${BACKEND_URL}" ANALYZER_INTERFACE="${ANALYZER_INTERFACE}" \
+  docker compose --profile dataplane \
+  -f "${BASE_COMPOSE_FILE}" \
+  -f "${DATAPLANE_COMPOSE_FILE}" \
+  config --quiet
 
-docker compose --profile dataplane \
-  -f "${CONTROLLER_COMPOSE_FILE}" config --quiet
+if ! ip link show dev "${ANALYZER_INTERFACE}" >/dev/null 2>&1; then
+  echo "Analyzer interface is missing: ${ANALYZER_INTERFACE}" >&2
+  exit 1
+fi
 
 cleanup_mininet() {
   sudo mn -c >/dev/null 2>&1 || true
@@ -121,6 +120,28 @@ for container in "${REQUIRED_CONTAINERS[@]}"; do
     exit 1
   fi
 done
+
+if [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' sdn-analyzer)" != "host" ]]; then
+  echo "Analyzer must run with host networking." >&2
+  exit 1
+fi
+
+if ! docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' sdn-analyzer |
+  grep -Fxq "ANALYZER_INTERFACE=${ANALYZER_INTERFACE}"; then
+  echo "Analyzer is not configured for ${ANALYZER_INTERFACE}." >&2
+  exit 1
+fi
+
+if ! docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' sdn-analyzer |
+  awk -F= '$1 == "ANALYZER_API_KEY" && length(substr($0, index($0, "=") + 1)) > 0 { found = 1 } END { exit !found }'; then
+  echo "Analyzer API key is missing; secure-default delivery cannot succeed." >&2
+  exit 1
+fi
+
+if [[ -z "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/sdn-analyzer"}}{{println .Name}}{{end}}{{end}}' sdn-analyzer)" ]]; then
+  echo "Analyzer Outbox volume is not mounted at /var/lib/sdn-analyzer." >&2
+  exit 1
+fi
 
 if [[ "${DEPLOYMENT_PROFILE}" == "dataplane" ]]; then
   sleep 3
