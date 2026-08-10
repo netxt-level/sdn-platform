@@ -218,6 +218,7 @@ Controller, Admin API Key는 서로 분리하고 WebSocket 토큰 서명 키도 
 - Multipass 기반 data-plane 통합 검증 스크립트
 - Analyzer ICMP Flood → Backend → Controller Meter 종단 간 시나리오
 - Lateral Movement 탐지만/자동 DROP 비교 시나리오
+- `h1/h2/h3`에 분산된 정상 100명 HTTP·DNS·telemetry·ICMP 혼합 트래픽
 
 단위 테스트는 Python 3.10 이상과 각 구성요소 의존성이 설치된 환경에서
 구성요소별로 실행해야 한다. 현재 macOS host에서 의존성 없이 직접 실행하면

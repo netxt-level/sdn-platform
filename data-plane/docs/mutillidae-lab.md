@@ -22,6 +22,8 @@ Mininet을 `--mutillidae-proxy` 옵션으로 실행하면 `web(10.0.0.100):80`�
 loopback 사이에 관리용 veth와 두 TCP relay를 만든다. 클라이언트 요청과 응답은
 기존 `h1/h2/h3 -> OVS -> web` 구간을 그대로 지나므로 OVS Mirror에서 캡처할 수
 있다. 관리용 veth는 OVS에 연결되지 않으며 Mininet 종료 시 제거된다.
+같은 옵션은 혼합 정상 트래픽을 위해 `web(10.0.0.100)` namespace에 유효한
+DNS A 응답용 UDP 53과 StatsD 형식 telemetry 수신용 UDP 8125도 시작한다.
 
 시작 스크립트는 VM Docker 아키텍처를 자동 감지한다. 일반적인 Intel/AMD 기반
 Windows·Linux VM의 `amd64`에서는 공식 사전 빌드 이미지를 사용한다. Apple

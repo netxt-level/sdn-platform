@@ -18,6 +18,8 @@ MANAGEMENT_PREFIX = 30
 ROOT_RELAY_PORT = 18080
 WEB_IP = "10.0.0.100"
 WEB_PORT = 80
+DNS_PORT = 53
+TELEMETRY_PORT = 8125
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class WebServiceProxy:
 
     def start(self, timeout=10.0):
         proxy_script = str(Path(__file__).with_name("tcp_proxy.py"))
+        udp_services_script = str(Path(__file__).with_name("udp_services.py"))
         self.root = Node("mut-root", inNamespace=False)
         self.link = Link(
             self.root,
@@ -84,6 +87,20 @@ class WebServiceProxy:
                 ROOT_IP,
                 "--target-port",
                 str(ROOT_RELAY_PORT),
+            )
+        )
+        self.processes.append(
+            self.web.popen(
+                "python3",
+                udp_services_script,
+                "--listen-host",
+                self.config.web_host,
+                "--dns-port",
+                str(DNS_PORT),
+                "--telemetry-port",
+                str(TELEMETRY_PORT),
+                "--dns-address",
+                self.config.web_host,
             )
         )
         self._wait_until_ready(timeout)
