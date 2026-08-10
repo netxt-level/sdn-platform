@@ -7,10 +7,10 @@ class TrafficStatsBuilder:
     def __init__(
         self,
         analyzer_id: str = "analyzer-1",
-        suspicious_pps_threshold: float = 1000,
-        suspicious_bps_threshold: float = 5_000_000,
+        suspicious_pps_threshold: float = 1500,
+        suspicious_bps_threshold: float = 10_000_000,
         critical_pps_threshold: float = 3000,
-        critical_bps_threshold: float = 10_000_000,
+        critical_bps_threshold: float = 20_000_000,
     ):
         self.analyzer_id = analyzer_id                              # 분석 서버 ID
         self.suspicious_pps_threshold = suspicious_pps_threshold    # 의심 호스트 판단 초당 패킷 수

@@ -96,3 +96,61 @@ def test_dashboard_summary_has_expected_metric_shape(load_service_module):
         "current_bps": 160.0,
         "network_status": "normal",
     }
+
+
+def test_dashboard_warning_starts_at_1500_pps(load_service_module):
+    module = load_service_module(
+        "dashboard_service",
+        stubs={
+            "app.repositories.traffic_repository": {
+                "TrafficRepository": StubTrafficRepository,
+            },
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+        },
+    )
+    service = module.DashboardService(
+        traffic_repository=StubTrafficRepository(),
+        security_event_repository=StubSecurityEventRepository(),
+    )
+
+    assert service._decide_network_status(
+        current_bps=0,
+        current_pps=1499,
+    ) == "normal"
+    assert service._decide_network_status(
+        current_bps=0,
+        current_pps=1500,
+    ) == "warning"
+
+
+def test_dashboard_bps_thresholds_start_at_10_and_20_mbps(load_service_module):
+    module = load_service_module(
+        "dashboard_service",
+        stubs={
+            "app.repositories.traffic_repository": {
+                "TrafficRepository": StubTrafficRepository,
+            },
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubSecurityEventRepository,
+            },
+        },
+    )
+    service = module.DashboardService(
+        traffic_repository=StubTrafficRepository(),
+        security_event_repository=StubSecurityEventRepository(),
+    )
+
+    assert service._decide_network_status(
+        current_bps=9_999_999,
+        current_pps=0,
+    ) == "normal"
+    assert service._decide_network_status(
+        current_bps=10_000_000,
+        current_pps=0,
+    ) == "warning"
+    assert service._decide_network_status(
+        current_bps=20_000_000,
+        current_pps=0,
+    ) == "critical"
