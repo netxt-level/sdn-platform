@@ -185,7 +185,7 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
             style={{ left: `${position.x}%`, top: `${position.y}%` }}
           >
             <div
-              className={`font-mono-ui flex h-[54px] w-[clamp(96px,18%,124px)] items-center gap-2 rounded-md border px-2.5 py-2 shadow-sm ${hostClass[node.id] ?? statusClass[node.status]}`}
+              className={`font-mono-ui flex h-[44px] w-[clamp(96px,18%,124px)] items-center gap-2 rounded-md border px-2.5 py-2 shadow-sm ${hostClass[node.id] ?? statusClass[node.status]}`}
             >
               {node.status === "warning" ? (
                 <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
@@ -194,7 +194,6 @@ export function TopologyMap({ topology }: { topology: TopologyState }) {
               )}
               <div className="min-w-0">
                 <strong className="block text-[12px] leading-tight">{node.label}</strong>
-                <span className="block whitespace-nowrap text-[10px] leading-tight">{node.role}</span>
               </div>
             </div>
           </div>

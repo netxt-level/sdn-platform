@@ -91,36 +91,38 @@ export default function TopologyPage() {
             {topology.links.map((link) => (
               <div
                 key={link.id}
-                className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3"
+                className="font-mono-ui flex items-center justify-between gap-2 rounded border border-line bg-sidebar px-3 py-3 tracking-[-0.04em]"
               >
-                <div>
+                <div className="min-w-0">
                   <strong className="block text-sm">{link.source} → {link.target}</strong>
-                  <span className="text-xs text-muted">
+                  <span className="block whitespace-nowrap text-xs text-muted">
                     {link.path} · {link.sampled ? formatBitsPerSecond(link.bps) : "sampling"} · 사용률 {link.utilization.toFixed(2)}%
                   </span>
                 </div>
-                <StatusBadge
-                  value={
-                    link.state === "down"
-                      ? "down"
-                      : link.state === "unknown"
-                        ? "unknown"
-                        : link.path === "access"
-                          ? "up"
-                          : link.selected
-                            ? "selected"
-                            : "standby"
-                  }
-                  tone={
-                    link.state === "down"
-                      ? "critical"
-                      : link.state === "unknown"
-                        ? "muted"
-                        : link.selected || link.path === "access"
-                          ? "normal"
-                          : "warning"
-                  }
-                />
+                <div className="shrink-0">
+                  <StatusBadge
+                    value={
+                      link.state === "down"
+                        ? "down"
+                        : link.state === "unknown"
+                          ? "unknown"
+                          : link.path === "access"
+                            ? "up"
+                            : link.selected
+                              ? "selected"
+                              : "standby"
+                    }
+                    tone={
+                      link.state === "down"
+                        ? "critical"
+                        : link.state === "unknown"
+                          ? "muted"
+                          : link.selected || link.path === "access"
+                            ? "normal"
+                            : "warning"
+                    }
+                  />
+                </div>
               </div>
             ))}
             {!topology.links.length && (

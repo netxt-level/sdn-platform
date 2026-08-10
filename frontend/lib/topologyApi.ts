@@ -36,15 +36,17 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
   const switchNodes = controllerTopology.switches.map((item) => ({
     id: item.switch_id,
     label: item.switch_id,
-    role: `DPID ${item.dpid.slice(-4)}`,
     type: "switch" as const,
     status: toSwitchStatus(item.state, utilizationBySwitch.get(item.switch_id))
   }));
 
-  const hostNodes = controllerTopology.hosts.map((item) => ({
-    id: item.name || item.ipv4 || item.mac,
-    label: item.name || item.ipv4 || item.mac,
-    role: item.ipv4,
+  const hostsWithDisplayIds = controllerTopology.hosts.map((item, index) => ({
+    item,
+    id: item.name || `host-${index + 1}`
+  }));
+  const hostNodes = hostsWithDisplayIds.map(({ item, id }) => ({
+    id,
+    label: id,
     type: "host" as const,
     status: connectedSwitches.has(item.switch_id)
       ? ("normal" as const)
@@ -68,8 +70,7 @@ export function toTopologyState(pathStatus: PathStatus): TopologyState {
     utilization: item.utilization,
     sampled: item.sampled
   }));
-  const accessLinks = controllerTopology.hosts.map((host) => {
-    const hostId = host.name || host.ipv4 || host.mac;
+  const accessLinks = hostsWithDisplayIds.map(({ item: host, id: hostId }) => {
     const switchUsage = utilizationBySwitch.get(host.switch_id);
     const portUsage = switchUsage?.ports.find(
       (port) => port.port_no === host.port

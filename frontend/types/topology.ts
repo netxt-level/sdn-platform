@@ -3,7 +3,6 @@ export type NodeStatus = "normal" | "warning" | "blocked" | "offline";
 export type TopologyNode = {
   id: string;
   label: string;
-  role: string;
   type: "host" | "switch";
   status: NodeStatus;
 };
