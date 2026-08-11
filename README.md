@@ -244,6 +244,22 @@ docker compose \
   up -d --build backend frontend
 ```
 
+코드 변경 후 Backend와 Frontend를 다시 빌드할 때는 다음 전용 명령을 사용한다.
+이 스크립트는 실행 중인 Backend 또는 `.env`에서 인증 키를 보존하고,
+Multipass의 현재 Controller IP와 host gateway를 자동으로 계산한다. 필수 키나
+Controller 연결을 확인할 수 없으면 기존 컨테이너를 재생성하기 전에 중단한다.
+
+```bash
+./data-plane/scripts/restart-control-plane.sh
+```
+
+한 서비스만 다시 빌드할 수도 있다.
+
+```bash
+./data-plane/scripts/restart-control-plane.sh frontend
+./data-plane/scripts/restart-control-plane.sh backend
+```
+
 | 서비스 | 기본 주소 |
 |---|---|
 | Frontend | `http://127.0.0.1:3000` |

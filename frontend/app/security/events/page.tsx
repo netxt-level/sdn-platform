@@ -54,10 +54,11 @@ export default function SecurityEventsPage() {
   const visibleEvents = useMemo(
     () =>
       state.securityEvents.filter((event) => {
+        const completed = isCompletedEvent(event);
         const matchesScope =
-          eventScopeFilter === ALL_EVENT_SCOPE ||
-          (eventScopeFilter === URGENT_EVENT_SCOPE && isUrgentEvent(event)) ||
-          (eventScopeFilter === COMPLETED_EVENT_SCOPE && isCompletedEvent(event));
+          (eventScopeFilter === ALL_EVENT_SCOPE && !completed) ||
+          (eventScopeFilter === URGENT_EVENT_SCOPE && !completed && isUrgentEvent(event)) ||
+          (eventScopeFilter === COMPLETED_EVENT_SCOPE && completed);
         const matchesAttackType =
           selectedAttackTypes.length === 0 ||
           selectedAttackTypes.includes(event.attack_type);
@@ -74,10 +75,11 @@ export default function SecurityEventsPage() {
   const selectedEvent =
     visibleEvents.find((event) => event.id === selectedEventId) ??
     visibleEvents[0];
-  const criticalCount = state.securityEvents.filter((event) => event.severity === "critical").length;
-  const highCount = state.securityEvents.filter((event) => event.severity === "high").length;
+  const activeEvents = state.securityEvents.filter((event) => !isCompletedEvent(event));
+  const criticalCount = activeEvents.filter((event) => event.severity === "critical").length;
+  const highCount = activeEvents.filter((event) => event.severity === "high").length;
   const resolvedCount = state.securityEvents.filter((event) => event.status === "resolved").length;
-  const urgentCount = state.securityEvents.filter(isUrgentEvent).length;
+  const urgentCount = activeEvents.filter(isUrgentEvent).length;
   const completedCount = state.securityEvents.filter(isCompletedEvent).length;
   const attackTypeOptions = useMemo(
     () =>
@@ -161,7 +163,7 @@ export default function SecurityEventsPage() {
       />
 
       <div className="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
-        <MetricCard label="전체 이벤트" value={formatNumber(state.securityEvents.length)} foot="최근 100개 API 조회" icon={ShieldAlert} tone="blue" />
+        <MetricCard label="미처리 이벤트" value={formatNumber(activeEvents.length)} foot="처리 완료 제외" icon={ShieldAlert} tone="blue" />
         <MetricCard label="Critical" value={formatNumber(criticalCount)} foot="즉시 대응 필요" icon={AlertTriangle} tone="red" />
         <MetricCard label="High" value={formatNumber(highCount)} foot="우선 대응 대상" icon={Radio} tone="amber" />
         <MetricCard label="해소됨" value={formatNumber(resolvedCount)} foot="정상 복귀" icon={CheckCircle2} tone="teal" />
@@ -174,7 +176,7 @@ export default function SecurityEventsPage() {
             <div className="flex flex-wrap items-center justify-end gap-2">
               <div className="font-mono-ui flex rounded border border-line2 bg-sidebar p-0.5 text-[10px]">
                 {[
-                  [ALL_EVENT_SCOPE, `전체 ${state.securityEvents.length}`],
+                  [ALL_EVENT_SCOPE, `전체 ${activeEvents.length}`],
                   [URGENT_EVENT_SCOPE, `긴급 처리 ${urgentCount}`],
                   [COMPLETED_EVENT_SCOPE, `처리 완료 ${completedCount}`]
                 ].map(([scope, label]) => (

@@ -23,7 +23,7 @@ class FlowService:
         flow_rules = [
             flow_rule
             for flow_rule in self.flow_repository.list_flows(src_ip)
-            if flow_rule.get("status") not in {"REMOVED", "EXPIRED"}
+            if flow_rule.get("status") == "APPLIED"
         ]
         try:
             topology = self.controller_client.get_topology()

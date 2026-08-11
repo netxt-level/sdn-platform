@@ -323,7 +323,7 @@ def test_get_flows_keeps_db_history_when_controller_is_unavailable(
     assert result["controller"]["error"] == "controller unavailable"
 
 
-def test_get_flows_excludes_terminal_rules(load_service_module):
+def test_get_flows_only_returns_applied_rules(load_service_module):
     class StubControllerClientError(RuntimeError):
         pass
 
@@ -342,6 +342,8 @@ def test_get_flows_excludes_terminal_rules(load_service_module):
     repository = StubFlowRepository()
     repository.flows = [
         {**repository.get_flow("applied-rule"), "status": "APPLIED"},
+        {**repository.get_flow("pending-rule"), "status": "PENDING"},
+        {**repository.get_flow("failed-rule"), "status": "FAILED"},
         {**repository.get_flow("removed-rule"), "status": "REMOVED"},
         {**repository.get_flow("expired-rule"), "status": "EXPIRED"},
     ]

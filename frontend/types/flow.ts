@@ -1,5 +1,6 @@
 export type FlowRule = {
   id: string;
+  source_event_id?: string | null;
   switch_id?: string | null;
   match: Record<string, unknown>;
   action: string;

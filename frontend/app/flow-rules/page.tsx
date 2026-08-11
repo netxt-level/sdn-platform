@@ -6,6 +6,7 @@ import { Ban, GitBranch, Plus, Repeat2, ShieldAlert, Trash2, Workflow } from "lu
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   createFlowRule,
   FlowApiError,
@@ -375,6 +376,8 @@ export default function FlowRulesPage() {
                   <th className="px-3 py-3 font-black">액션</th>
                   <th className="px-3 py-3 font-black">스위치</th>
                   <th className="px-3 py-3 font-black">우선도</th>
+                  <th className="px-3 py-3 font-black">출처</th>
+                  <th className="px-3 py-3 font-black">상태</th>
                   <th className="px-3 py-3 font-black">삭제</th>
                 </tr>
               </thead>
@@ -400,16 +403,30 @@ export default function FlowRulesPage() {
                     <td className="h-12 whitespace-nowrap px-3 py-0 align-middle font-black">{rule.switch_id ?? "-"}</td>
                     <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">{rule.priority}</td>
                     <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">
+                      {rule.source_event_id ? "보안 이벤트" : "수동"}
+                    </td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">
+                      <StatusBadge
+                        value={rule.status}
+                        tone={
+                          rule.status === "APPLIED"
+                            ? "normal"
+                            : rule.status === "FAILED" || rule.status === "REMOVE_FAILED"
+                              ? "critical"
+                              : rule.status === "EXPIRED"
+                                ? "muted"
+                                : "warning"
+                        }
+                      />
+                    </td>
+                    <td className="h-12 whitespace-nowrap px-3 py-0 align-middle">
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           void handleDelete(rule);
                         }}
-                        disabled={
-                          deletingRuleId === rule.id
-                          || ["APPLYING", "REMOVING"].includes(rule.status)
-                        }
+                        disabled={deletingRuleId === rule.id}
                         className="inline-flex items-center gap-1 rounded border border-red/40 px-2 py-1 text-[9px] font-black text-red disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Trash2 className="h-3 w-3" />
@@ -420,7 +437,7 @@ export default function FlowRulesPage() {
                 ))}
                 {!filteredRules.length && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-muted">
+                    <td colSpan={9} className="px-3 py-6 text-center text-muted">
                       {loading ? "Flow Rule 조회 중" : "Flow Rule이 없습니다."}
                     </td>
                   </tr>
@@ -436,6 +453,8 @@ export default function FlowRulesPage() {
               <div className="font-mono-ui grid gap-3 text-[11px]">
                 <div className="flex justify-between"><span className="text-faint">Switch</span><strong>{selectedRule.switch_id ?? "-"}</strong></div>
                 <div className="flex justify-between"><span className="text-faint">Priority</span><strong>{selectedRule.priority}</strong></div>
+                <div className="flex justify-between"><span className="text-faint">출처</span><strong>{selectedRule.source_event_id ? "보안 이벤트" : "수동"}</strong></div>
+                <div className="flex justify-between"><span className="text-faint">상태</span><strong>{selectedRule.status}</strong></div>
                 <div className="rounded border border-line bg-sidebar p-3 leading-6">
                   <span className="text-faint">match</span><br />
                   <span className="text-accent">{formatMatch(selectedRule.match)}</span>
