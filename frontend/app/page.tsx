@@ -320,7 +320,7 @@ export default function DashboardPage() {
             ) : null}
 
             {filteredSuspiciousHosts.map((host) => (
-              <div key={`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`} className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3 text-[11px]">
+              <div key={host.ip} className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3 text-[11px]">
                 <div className="min-w-0">
                   <span className={`mb-2 inline-flex min-h-5 items-center rounded border px-2 text-[9px] font-bold uppercase ${getSuspiciousHostTagClass(host)}`}>
                     {getSuspiciousHostTag(host)}

@@ -25,6 +25,39 @@ class StubSecurityEventRepository:
         return [{"ip": "10.0.0.2", "attack_type": "PORT_SCAN"}]
 
 
+class StubDuplicateSecurityEventRepository:
+    def list_suspicious_hosts(self):
+        return [
+            {
+                "ip": "10.0.0.3",
+                "attack_type": "PORT_SCAN",
+                "severity": "medium",
+                "protocol": "TCP",
+                "bps": 1200,
+                "pps": 20,
+                "reasons": ["tcp_syn_unique_ports"],
+            },
+            {
+                "ip": "10.0.0.3",
+                "attack_type": "ICMP_FLOOD",
+                "severity": "high",
+                "protocol": "ICMP",
+                "bps": 800,
+                "pps": 1015,
+                "reasons": ["icmp_pps_threshold"],
+            },
+            {
+                "ip": "10.0.0.2",
+                "attack_type": "PORT_SCAN",
+                "severity": "medium",
+                "protocol": "TCP",
+                "bps": 400,
+                "pps": 10,
+                "reasons": ["tcp_syn_unique_ports"],
+            },
+        ]
+
+
 def test_dashboard_service_delegates_history_queries(load_service_module):
     module = load_service_module(
         "dashboard_service",
@@ -68,6 +101,43 @@ def test_dashboard_service_delegates_history_queries(load_service_module):
     }
     assert traffic_repository.traffic_calls == [("5m", "5s")]
     assert traffic_repository.protocol_calls == ["1m"]
+
+
+def test_dashboard_service_deduplicates_suspicious_hosts_by_ip(
+    load_service_module,
+):
+    module = load_service_module(
+        "dashboard_service",
+        stubs={
+            "app.repositories.traffic_repository": {
+                "TrafficRepository": StubTrafficRepository,
+            },
+            "app.repositories.security_event_repository": {
+                "SecurityEventRepository": StubDuplicateSecurityEventRepository,
+            },
+        },
+    )
+    service = module.DashboardService(
+        traffic_repository=StubTrafficRepository(),
+        security_event_repository=StubDuplicateSecurityEventRepository(),
+    )
+
+    result = service.get_suspicious_hosts("1w")
+
+    assert result["count"] == 2
+    assert [item["ip"] for item in result["items"]] == [
+        "10.0.0.3",
+        "10.0.0.2",
+    ]
+    duplicate_host = result["items"][0]
+    assert duplicate_host["attack_type"] == "ICMP_FLOOD"
+    assert duplicate_host["severity"] == "high"
+    assert duplicate_host["bps"] == 1200.0
+    assert duplicate_host["pps"] == 1015.0
+    assert duplicate_host["reasons"] == [
+        "tcp_syn_unique_ports",
+        "icmp_pps_threshold",
+    ]
 
 
 def test_dashboard_summary_has_expected_metric_shape(load_service_module):

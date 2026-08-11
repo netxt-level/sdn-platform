@@ -299,18 +299,21 @@ function normalizeAttackType(attackType?: string | null): string {
 }
 
 function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
-  return items.map((host) => ({
-    host: host.host ?? null,
-    ip: host.ip,
-    protocol: host.protocol ?? "UNKNOWN",
-    bps: host.bps ?? 0,
-    pps: host.pps ?? 0,
-    attack_type: normalizeAttackType(host.attack_type),
-    reasons:
-      Array.isArray(host.reasons) && host.reasons.length > 0
-        ? host.reasons
-        : ["stored suspicious host"]
-  }));
+  return mergeSuspiciousHosts(
+    [],
+    items.map((host) => ({
+      host: host.host ?? null,
+      ip: host.ip,
+      protocol: host.protocol ?? "UNKNOWN",
+      bps: host.bps ?? 0,
+      pps: host.pps ?? 0,
+      attack_type: normalizeAttackType(host.attack_type),
+      reasons:
+        Array.isArray(host.reasons) && host.reasons.length > 0
+          ? host.reasons
+          : ["stored suspicious host"]
+    }))
+  );
 }
 
 function normalizeSecuritySeverity(value?: string): SecurityEvent["severity"] {
@@ -482,12 +485,25 @@ function mergeSuspiciousHosts(
 ): SuspiciousHost[] {
   const hosts = new Map<string, SuspiciousHost>();
 
-  historyHosts.forEach((host) => {
-    hosts.set(`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`, host);
-  });
+  [...historyHosts, ...liveHosts].forEach((host) => {
+    const existing = hosts.get(host.ip);
 
-  liveHosts.forEach((host) => {
-    hosts.set(`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`, host);
+    if (!existing) {
+      hosts.set(host.ip, host);
+      return;
+    }
+
+    const incomingIsBusier =
+      host.bps > existing.bps ||
+      (host.bps === existing.bps && host.pps > existing.pps);
+    const preferred = incomingIsBusier ? host : existing;
+    hosts.set(host.ip, {
+      ...preferred,
+      host: preferred.host ?? existing.host ?? host.host ?? null,
+      bps: Math.max(existing.bps, host.bps),
+      pps: Math.max(existing.pps, host.pps),
+      reasons: Array.from(new Set([...existing.reasons, ...host.reasons]))
+    });
   });
 
   return Array.from(hosts.values()).sort(
