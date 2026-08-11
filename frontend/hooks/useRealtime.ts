@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   AnalyzerStatus,
@@ -23,6 +23,10 @@ export type RealtimeState = {
   detectionSummary: DetectionSummary;
   trafficSeries: TrafficSeriesPoint[];
   securityEvents: SecurityEvent[];
+  updateSecurityEventStatus: (
+    eventId: string,
+    status: SecurityEvent["status"]
+  ) => void;
   topology: TopologyState;
 };
 
@@ -91,6 +95,10 @@ type DashboardSuspiciousHostsResponse = {
 
 type SecurityEventsResponse = {
   items?: RawSecurityEvent[];
+};
+
+type WebSocketTokenResponse = {
+  token: string;
 };
 
 const FIVE_SECONDS_MS = 5 * 1000;
@@ -291,18 +299,21 @@ function normalizeAttackType(attackType?: string | null): string {
 }
 
 function normalizeSuspiciousHosts(items: SuspiciousHost[]): SuspiciousHost[] {
-  return items.map((host) => ({
-    host: host.host ?? null,
-    ip: host.ip,
-    protocol: host.protocol ?? "UNKNOWN",
-    bps: host.bps ?? 0,
-    pps: host.pps ?? 0,
-    attack_type: normalizeAttackType(host.attack_type),
-    reasons:
-      Array.isArray(host.reasons) && host.reasons.length > 0
-        ? host.reasons
-        : ["stored suspicious host"]
-  }));
+  return mergeSuspiciousHosts(
+    [],
+    items.map((host) => ({
+      host: host.host ?? null,
+      ip: host.ip,
+      protocol: host.protocol ?? "UNKNOWN",
+      bps: host.bps ?? 0,
+      pps: host.pps ?? 0,
+      attack_type: normalizeAttackType(host.attack_type),
+      reasons:
+        Array.isArray(host.reasons) && host.reasons.length > 0
+          ? host.reasons
+          : ["stored suspicious host"]
+    }))
+  );
 }
 
 function normalizeSecuritySeverity(value?: string): SecurityEvent["severity"] {
@@ -338,6 +349,25 @@ function numberFromEvidence(
   const value = evidence?.[key];
 
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function rateFromEvidence(
+  evidence: Record<string, unknown> | undefined,
+  rateKey: string,
+  countKeys: string[]
+): number {
+  const explicitRate = numberFromEvidence(evidence, rateKey);
+
+  if (explicitRate > 0) {
+    return explicitRate;
+  }
+
+  const count = countKeys
+    .map((key) => numberFromEvidence(evidence, key))
+    .find((value) => value > 0);
+  const windowSeconds = numberFromEvidence(evidence, "window_seconds");
+
+  return count && windowSeconds > 0 ? count / windowSeconds : explicitRate;
 }
 
 function actionFromSecurityEvent(event: RawSecurityEvent): SecurityEvent["action"] {
@@ -424,11 +454,8 @@ function normalizeSecurityEvent(event: RawSecurityEvent): SecurityEvent {
     confidence: event.confidence,
     evidence,
     mitigation: event.mitigation ?? null,
-    pps:
-      numberFromEvidence(evidence, "pps") ||
-      numberFromEvidence(evidence, "syn_count") ||
-      numberFromEvidence(evidence, "packet_count"),
-    bps: numberFromEvidence(evidence, "bps"),
+    pps: rateFromEvidence(evidence, "pps", ["syn_count", "packet_count"]),
+    bps: rateFromEvidence(evidence, "bps", ["bit_count"]),
     action: actionFromSecurityEvent(event)
   };
 }
@@ -458,12 +485,25 @@ function mergeSuspiciousHosts(
 ): SuspiciousHost[] {
   const hosts = new Map<string, SuspiciousHost>();
 
-  historyHosts.forEach((host) => {
-    hosts.set(`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`, host);
-  });
+  [...historyHosts, ...liveHosts].forEach((host) => {
+    const existing = hosts.get(host.ip);
 
-  liveHosts.forEach((host) => {
-    hosts.set(`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`, host);
+    if (!existing) {
+      hosts.set(host.ip, host);
+      return;
+    }
+
+    const incomingIsBusier =
+      host.bps > existing.bps ||
+      (host.bps === existing.bps && host.pps > existing.pps);
+    const preferred = incomingIsBusier ? host : existing;
+    hosts.set(host.ip, {
+      ...preferred,
+      host: preferred.host ?? existing.host ?? host.host ?? null,
+      bps: Math.max(existing.bps, host.bps),
+      pps: Math.max(existing.pps, host.pps),
+      reasons: Array.from(new Set([...existing.reasons, ...host.reasons]))
+    });
   });
 
   return Array.from(hosts.values()).sort(
@@ -922,8 +962,25 @@ export function useRealtime(): RealtimeState {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let closedByEffect = false;
 
-    const connect = () => {
-      socket = new WebSocket(getWebsocketUrl());
+    const connect = async () => {
+      try {
+        const response = await fetch("/ws/token", {
+          method: "POST",
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          throw new Error(`WebSocket token request failed: ${response.status}`);
+        }
+        const { token } = (await response.json()) as WebSocketTokenResponse;
+        if (closedByEffect) return;
+        socket = new WebSocket(getWebsocketUrl(), ["sdn-realtime", token]);
+      } catch {
+        setConnected(false);
+        if (!closedByEffect) {
+          reconnectTimer = setTimeout(() => void connect(), 3000);
+        }
+        return;
+      }
 
       socket.onopen = () => {
         setConnected(true);
@@ -933,7 +990,7 @@ export function useRealtime(): RealtimeState {
         setConnected(false);
 
         if (!closedByEffect) {
-          reconnectTimer = setTimeout(connect, 3000);
+          reconnectTimer = setTimeout(() => void connect(), 3000);
         }
       };
 
@@ -1055,7 +1112,7 @@ export function useRealtime(): RealtimeState {
       };
     };
 
-    connect();
+    void connect();
 
     return () => {
       closedByEffect = true;
@@ -1088,6 +1145,18 @@ export function useRealtime(): RealtimeState {
     () => buildTrafficSeries(trafficSamples),
     [trafficSamples]
   );
+  const updateSecurityEventStatus = useCallback(
+    (eventId: string, status: SecurityEvent["status"]) => {
+      setSecurityEvents((events) =>
+        events.map((event) =>
+          event.id === eventId || event.event_id === eventId
+            ? { ...event, status }
+            : event
+        )
+      );
+    },
+    []
+  );
 
   return useMemo(
     () => ({
@@ -1099,6 +1168,7 @@ export function useRealtime(): RealtimeState {
       detectionSummary: visibleDetectionSummary,
       trafficSeries,
       securityEvents,
+      updateSecurityEventStatus,
       topology
     }),
     [
@@ -1110,6 +1180,7 @@ export function useRealtime(): RealtimeState {
       source,
       topology,
       trafficSeries,
+      updateSecurityEventStatus,
       visibleDetectionSummary
     ]
   );

@@ -49,13 +49,16 @@ export default function SecurityEventsPage() {
   const [attackTypeDropdownOpen, setAttackTypeDropdownOpen] = useState(false);
   const [ipSearch, setIpSearch] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const visibleEvents = useMemo(
     () =>
       state.securityEvents.filter((event) => {
+        const completed = isCompletedEvent(event);
         const matchesScope =
-          eventScopeFilter === ALL_EVENT_SCOPE ||
-          (eventScopeFilter === URGENT_EVENT_SCOPE && isUrgentEvent(event)) ||
-          (eventScopeFilter === COMPLETED_EVENT_SCOPE && isCompletedEvent(event));
+          (eventScopeFilter === ALL_EVENT_SCOPE && !completed) ||
+          (eventScopeFilter === URGENT_EVENT_SCOPE && !completed && isUrgentEvent(event)) ||
+          (eventScopeFilter === COMPLETED_EVENT_SCOPE && completed);
         const matchesAttackType =
           selectedAttackTypes.length === 0 ||
           selectedAttackTypes.includes(event.attack_type);
@@ -72,10 +75,11 @@ export default function SecurityEventsPage() {
   const selectedEvent =
     visibleEvents.find((event) => event.id === selectedEventId) ??
     visibleEvents[0];
-  const criticalCount = state.securityEvents.filter((event) => event.severity === "critical").length;
-  const highCount = state.securityEvents.filter((event) => event.severity === "high").length;
+  const activeEvents = state.securityEvents.filter((event) => !isCompletedEvent(event));
+  const criticalCount = activeEvents.filter((event) => event.severity === "critical").length;
+  const highCount = activeEvents.filter((event) => event.severity === "high").length;
   const resolvedCount = state.securityEvents.filter((event) => event.status === "resolved").length;
-  const urgentCount = state.securityEvents.filter(isUrgentEvent).length;
+  const urgentCount = activeEvents.filter(isUrgentEvent).length;
   const completedCount = state.securityEvents.filter(isCompletedEvent).length;
   const attackTypeOptions = useMemo(
     () =>
@@ -109,6 +113,46 @@ export default function SecurityEventsPage() {
     setSelectedEventId(visibleEvents[0]?.id ?? null);
   }, [selectedEventId, visibleEvents]);
 
+  const handleEventAction = async (
+    action: "block" | "ignore" | "resolve"
+  ) => {
+    if (!selectedEvent) return;
+
+    setPendingAction(action);
+    setActionError(null);
+    try {
+      const response = await fetch(
+        `/api/security/events/${encodeURIComponent(selectedEvent.event_id ?? selectedEvent.id)}/actions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action })
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "이벤트 대응 요청에 실패했습니다.");
+      }
+
+      const payload = await response.json();
+      const statusByAction = {
+        block: "blocked",
+        ignore: "ignored",
+        resolve: "resolved"
+      } as const;
+      state.updateSecurityEventStatus(
+        selectedEvent.id,
+        payload.event?.status ?? statusByAction[action]
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "이벤트 대응 요청에 실패했습니다."
+      );
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -119,7 +163,7 @@ export default function SecurityEventsPage() {
       />
 
       <div className="grid grid-cols-4 gap-4 max-xl:grid-cols-2 max-sm:grid-cols-1">
-        <MetricCard label="전체 이벤트" value={formatNumber(state.securityEvents.length)} foot="최근 100개 API 조회" icon={ShieldAlert} tone="blue" />
+        <MetricCard label="미처리 이벤트" value={formatNumber(activeEvents.length)} foot="처리 완료 제외" icon={ShieldAlert} tone="blue" />
         <MetricCard label="Critical" value={formatNumber(criticalCount)} foot="즉시 대응 필요" icon={AlertTriangle} tone="red" />
         <MetricCard label="High" value={formatNumber(highCount)} foot="우선 대응 대상" icon={Radio} tone="amber" />
         <MetricCard label="해소됨" value={formatNumber(resolvedCount)} foot="정상 복귀" icon={CheckCircle2} tone="teal" />
@@ -132,7 +176,7 @@ export default function SecurityEventsPage() {
             <div className="flex flex-wrap items-center justify-end gap-2">
               <div className="font-mono-ui flex rounded border border-line2 bg-sidebar p-0.5 text-[10px]">
                 {[
-                  [ALL_EVENT_SCOPE, `전체 ${state.securityEvents.length}`],
+                  [ALL_EVENT_SCOPE, `전체 ${activeEvents.length}`],
                   [URGENT_EVENT_SCOPE, `긴급 처리 ${urgentCount}`],
                   [COMPLETED_EVENT_SCOPE, `처리 완료 ${completedCount}`]
                 ].map(([scope, label]) => (
@@ -256,22 +300,19 @@ export default function SecurityEventsPage() {
                   <span className="text-faint">발생 시간</span>
                   <strong>{formatDateTime(selectedEvent.occurred_at)}</strong>
                 </div>
-                {selectedEvent.severity === "critical" ? (
-                  <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red">
-                    처리 확인
-                  </button>
-                ) : isCompletedEvent(selectedEvent) ? (
+                {isCompletedEvent(selectedEvent) ? (
                   <div className="flex items-center justify-between rounded border border-green bg-[var(--green-dim)] px-3 py-2 text-green">
                     <span>처리 완료</span>
                     <StatusBadge value={selectedEvent.status} tone="normal" />
                   </div>
                 ) : (
                   <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
-                    <button className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red">차단</button>
-                    <button className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-center text-yellow">무시</button>
-                    <button className="rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-center text-green">해결</button>
+                    <button disabled={pendingAction !== null} onClick={() => handleEventAction("block")} className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-center text-red disabled:opacity-50">{pendingAction === "block" ? "차단 중" : "차단"}</button>
+                    <button disabled={pendingAction !== null} onClick={() => handleEventAction("ignore")} className="rounded border border-line2 bg-[var(--yellow-dim)] px-3 py-2 text-center text-yellow disabled:opacity-50">{pendingAction === "ignore" ? "처리 중" : "무시"}</button>
+                    <button disabled={pendingAction !== null} onClick={() => handleEventAction("resolve")} className="rounded border border-line2 bg-[var(--green-dim)] px-3 py-2 text-center text-green disabled:opacity-50">{pendingAction === "resolve" ? "처리 중" : "해결"}</button>
                   </div>
                 )}
+                {actionError ? <div className="rounded border border-red bg-[var(--red-dim)] px-3 py-2 text-red">{actionError}</div> : null}
               </div>
             ) : (
               <div className="font-mono-ui rounded border border-line bg-sidebar p-4 text-[11px] text-muted">

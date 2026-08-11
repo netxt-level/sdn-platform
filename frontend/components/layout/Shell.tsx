@@ -8,22 +8,21 @@ import {
   GitBranch,
   LayoutDashboard,
   Network,
-  Route,
+  Settings,
 } from "lucide-react";
 
 const navItems = [
   { section: "Overview", href: "/", label: "대시보드", icon: LayoutDashboard },
   { section: "Overview", href: "/topology", label: "토폴로지", icon: Network },
   { section: "Monitoring", href: "/security/events", label: "보안 이벤트", icon: Bell },
-  { section: "Monitoring", href: "/path", label: "경로 제어", icon: Route },
-  { section: "Monitoring", href: "/flow-rules", label: "Flow Rule", icon: GitBranch }
+  { section: "Monitoring", href: "/flow-rules", label: "Flow Rule", icon: GitBranch },
+  { section: "System", href: "/settings", label: "설정", icon: Settings }
 ];
 
 const titles: Record<string, string> = {
   "/": "대시보드",
   "/topology": "토폴로지 시각화",
   "/security/events": "보안 이벤트 관리",
-  "/path": "경로 제어",
   "/flow-rules": "Flow Rule 관리",
   "/settings": "설정"
 };
@@ -33,6 +32,12 @@ type SecurityEventsResponse = {
     severity?: string;
     status?: string;
   }>;
+};
+
+type ControllerStatusResponse = {
+  connected?: boolean;
+  ready?: boolean;
+  connected_switches?: number;
 };
 
 function isUnhandledHighRiskEvent(event: NonNullable<SecurityEventsResponse["items"]>[number]) {
@@ -56,6 +61,9 @@ function hasUnhandledHighRiskEvent(events: SecurityEventsResponse["items"] = [])
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [hasSecurityAlert, setHasSecurityAlert] = useState(false);
+  const [controllerStatus, setControllerStatus] = useState<
+    "checking" | "ready" | "no-switch" | "offline"
+  >("checking");
   const currentTitle =
     titles[pathname] ??
     Object.entries(titles).find(([href]) => href !== "/" && pathname.startsWith(href))?.[1] ??
@@ -93,6 +101,52 @@ export function Shell({ children }: { children: ReactNode }) {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    let ignored = false;
+
+    async function loadControllerStatus() {
+      try {
+        const response = await fetch("/api/controller/status", {
+          cache: "no-store"
+        });
+        if (!response.ok) throw new Error("controller status request failed");
+
+        const data = (await response.json()) as ControllerStatusResponse;
+        if (!ignored) {
+          setControllerStatus(
+            !data.connected || !data.ready
+              ? "offline"
+              : (data.connected_switches ?? 0) > 0
+                ? "ready"
+                : "no-switch"
+          );
+        }
+      } catch {
+        if (!ignored) setControllerStatus("offline");
+      }
+    }
+
+    loadControllerStatus();
+    const intervalId = window.setInterval(loadControllerStatus, 10000);
+    return () => {
+      ignored = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  const controllerLabel = {
+    checking: "컨트롤러 확인 중",
+    ready: "컨트롤러 연결됨",
+    "no-switch": "스위치 연결 대기",
+    offline: "컨트롤러 연결 끊김"
+  }[controllerStatus];
+  const controllerTone =
+    controllerStatus === "ready"
+      ? "bg-green"
+      : controllerStatus === "no-switch" || controllerStatus === "checking"
+        ? "bg-yellow"
+        : "bg-red";
 
   return (
     <div className="min-h-screen bg-surface text-ink">
@@ -147,8 +201,8 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="mt-auto border-t border-line px-5 py-4 max-md:hidden">
-          <span className="mr-2 inline-block h-[7px] w-[7px] rounded-full bg-green" />
-          <span className="font-mono-ui text-[11px] text-muted">컨트롤러 연결됨</span>
+          <span className={`mr-2 inline-block h-[7px] w-[7px] rounded-full ${controllerTone}`} />
+          <span className="font-mono-ui text-[11px] text-muted">{controllerLabel}</span>
         </div>
       </aside>
 
@@ -157,8 +211,21 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="font-mono-ui text-sm text-muted">
             SDN-GUARD / <span className="text-ink">{currentTitle}</span>
           </div>
-          <div className="ml-auto font-mono-ui rounded border border-line2 bg-[var(--accent-dim)] px-2.5 py-1 text-xs text-accent">
-            LIVE READY
+          <div className={[
+            "ml-auto font-mono-ui rounded border px-2.5 py-1 text-xs",
+            controllerStatus === "ready"
+              ? "border-line2 bg-[var(--accent-dim)] text-accent"
+              : controllerStatus === "offline"
+                ? "border-red bg-[var(--red-dim)] text-red"
+                : "border-yellow bg-[var(--yellow-dim)] text-yellow"
+          ].join(" ")}>
+            {controllerStatus === "ready"
+              ? "CONTROLLER READY"
+              : controllerStatus === "offline"
+                ? "CONTROLLER OFFLINE"
+                : controllerStatus === "no-switch"
+                  ? "WAITING FOR SWITCH"
+                  : "CHECKING"}
           </div>
         </header>
 

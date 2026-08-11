@@ -6,7 +6,7 @@ type PageHeaderProps = {
   title: string;
   description: string;
   connected?: boolean;
-  source?: "waiting" | "history" | "websocket";
+  source?: "waiting" | "history" | "websocket" | "controller";
 };
 
 export function PageHeader({
@@ -21,6 +21,8 @@ export function PageHeader({
         <p className="font-mono-ui mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-faint">
           {source === "websocket"
             ? "WebSocket Live"
+            : source === "controller"
+              ? "Controller API Live"
             : source === "history"
               ? "DB History"
               : "Waiting for Data"}

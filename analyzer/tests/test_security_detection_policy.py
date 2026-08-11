@@ -12,6 +12,7 @@ def tcp_syn_packets(src_ip="10.0.0.2", dst_ip="10.0.0.4", ports=range(1, 21)):
             "src_ip": src_ip,
             "dst_ip": dst_ip,
             "dst_port": port,
+            "packet_size": 60,
         }
         for port in ports
     ]
@@ -45,6 +46,10 @@ class PortScanDetectionPolicyTest(unittest.TestCase):
         self.assertEqual(alert["recommended_action"], "alert")
         self.assertEqual(alert["score"], 70)
         self.assertEqual(alert["syn_count"], 20)
+        self.assertEqual(alert["packet_count"], 20)
+        self.assertEqual(alert["bit_count"], 9600)
+        self.assertEqual(alert["pps"], 4.0)
+        self.assertEqual(alert["bps"], 1920.0)
         self.assertEqual(len(alert["unique_dst_ports"]), 20)
         self.assertEqual(
             alert["matched_conditions"],
@@ -73,6 +78,10 @@ class PortScanDetectionPolicyTest(unittest.TestCase):
         self.assertIsNone(event["mitigation"])
         self.assertEqual(event["evidence"]["score"], 70)
         self.assertEqual(event["evidence"]["syn_count"], 20)
+        self.assertEqual(event["evidence"]["packet_count"], 20)
+        self.assertEqual(event["evidence"]["bit_count"], 9600)
+        self.assertEqual(event["evidence"]["pps"], 4.0)
+        self.assertEqual(event["evidence"]["bps"], 1920.0)
         self.assertEqual(len(event["evidence"]["unique_dst_ports"]), 20)
 
 
@@ -130,6 +139,9 @@ class IcmpFloodDetectionPolicyTest(unittest.TestCase):
 
         self.assertEqual(event["response_level"], "L2")
         self.assertEqual(event["confidence"], "high")
+        self.assertEqual(event["severity"], "critical")
+        self.assertEqual(event["recommended_action"], "drop")
+        self.assertEqual(event["mitigation"]["action"], "DROP")
         self.assertEqual(event["evidence"]["score"], 95)
         self.assertIn("high_pps_exceeded", event["evidence"]["matched_conditions"])
 

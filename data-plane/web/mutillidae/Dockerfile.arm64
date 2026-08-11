@@ -1,0 +1,37 @@
+FROM php:8.4-apache-bookworm
+
+ARG MUTILLIDAE_COMMIT
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        dnsutils \
+        git \
+        iputils-ping \
+        libcurl4-openssl-dev \
+        libldap2-dev \
+        libonig-dev \
+        libxml2-dev \
+    && docker-php-ext-install curl ldap mbstring mysqli xml \
+    && git clone https://github.com/webpwnized/mutillidae.git /tmp/mutillidae \
+    && cd /tmp/mutillidae \
+    && git checkout "${MUTILLIDAE_COMMIT}" \
+    && cp -a src/. /var/www/html/ \
+    && rm -rf /tmp/mutillidae /var/www/html/.htaccess \
+    && mkdir -p /var/www/html/data /var/www/html/passwords \
+    && chown -R www-data:www-data /var/www/html/data /var/www/html/passwords \
+    && chmod -R 775 /var/www/html/data /var/www/html/passwords \
+    && sed -i "s/define('DB_HOST', '127.0.0.1');/define('DB_HOST', 'database');/" \
+        /var/www/html/includes/database-config.inc \
+    && apt-get remove --purge -y git \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cp /usr/local/etc/php/php.ini-development /usr/local/etc/php/php.ini \
+    && sed -i 's/allow_url_include = Off/allow_url_include = On/' \
+        /usr/local/etc/php/php.ini \
+    && sed -i 's/expose_php = Off/expose_php = On/' \
+        /usr/local/etc/php/php.ini \
+    && a2enmod rewrite
+
+EXPOSE 80

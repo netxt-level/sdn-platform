@@ -1,17 +1,26 @@
 # 보안 탐지 명세서
 
+- 상태: 현재 Analyzer·Backend·Controller 연동 기준
+- 기준일: 2026-08-11
+
 ## 1. 개요
 
 이 문서는 SDN Platform에서 분석 서버가 생성하는 보안 탐지 이벤트, 탐지 기준, 대응 레벨, 대응 후보 payload를 정의한다.
 
-현재 확정된 탐지 범위는 다음 두 가지다.
+현재 확정된 탐지 범위는 다음과 같다.
 
 | attack_type | 설명 |
 |---|---|
 | `PORT_SCAN` | TCP SYN 기반 포트 스캔 탐지 |
 | `ICMP_FLOOD` | ICMP pps 기반 flood 탐지 |
+| `SERVER_EGRESS` | 보호 서버가 시작한 허용 목록 밖 TCP 연결 탐지 |
+| `LATERAL_MOVEMENT` | 보호 서버의 단시간 다중 목적지 연결 탐지 |
+| `DATA_EXFILTRATION` | 서버 시작 Flow의 지속적인 outbound bps 이상 탐지 |
+| `C2_BEACON` | 서버 시작 연결의 반복 주기와 jitter 기반 탐지 |
 
-그 외 탐지 항목은 이 문서의 확정 범위와 현재 구현 범위에 포함하지 않는다. 추가 항목은 담당자 간 API/탐지 기준 합의 후 별도 확장한다.
+서버 행위 규칙은 네트워크에서 보이는 침해 후 행위를 탐지한다. `sudo`, SUID,
+커널 취약점 악용처럼 네트워크 패킷이 발생하지 않는 로컬 권한 상승 자체는
+범위에 포함하지 않는다.
 
 탐지 기준은 SIEM 상관분석 방식처럼 짧은 시간창 안에서 같은 필드 조합이 일정 횟수 이상 반복되는지를 본다. Wazuh의 `frequency`, `timeframe`, `same_field`, `ignore` 방식과 유사하게, 이 문서는 집계 시간창, 반복 기준, 동일 대상 기준, 중복 억제 시간을 명시한다.
 
@@ -29,7 +38,12 @@
 | 분류 | `severity`, `confidence`, `response_level`, `recommended_action` 산출 |
 | 제안 | 필요한 경우 `mitigation`에 대응 후보 payload 포함 |
 
-실제 대응 적용 여부는 백엔드/컨트롤러 정책에서 결정한다. 현재 백엔드는 보안 대응 내역과 flow rule 후보를 DB에 저장하지만, SDN 컨트롤러에 실제 rule을 설치하는 단계는 아직 연결되어 있지 않다.
+실제 대응 적용 여부는 Backend 정책과 런타임의
+`automatic_response_enabled` 설정이 결정한다. 자동 대응이 활성화된 경우
+Backend는 허용된 `mitigation`을 Flow Rule로 저장하고 Controller에 전달한다.
+Controller는 OpenFlow Barrier Reply를 확인한 뒤에만 적용 성공을 반환하며,
+Backend는 결과를 `APPLIED` 또는 `FAILED`로 기록한다. 운영자는 이벤트 화면에서
+`block`, `ignore`, `resolve`를 직접 선택할 수도 있다.
 
 ```text
 탐지 항목별 기본 레벨
@@ -91,7 +105,19 @@
 | `ignored` | 운영자 또는 정책에 의해 무시 |
 | `resolved` | 정상화 또는 종료 |
 
-보안 대응 내역과 flow rule 후보는 별도 lifecycle을 가진다. 현재 `security_responses`와 `flow_rules`는 생성 시 `PENDING` 상태로 저장되며, 향후 컨트롤러 연동 시 `APPLIED`, `FAILED`, `REMOVED` 같은 적용 상태를 확장할 수 있다.
+보안 대응 내역과 Flow Rule은 이벤트와 별도 lifecycle을 가진다.
+
+```text
+PENDING -> APPLYING -> APPLIED
+                    -> FAILED
+
+APPLIED -> REMOVING -> REMOVED
+                     -> REMOVE_FAILED
+        -> EXPIRED
+```
+
+Backend는 Controller 상태와 주기적으로 재조정하며 누락된 활성 규칙을 같은
+rule ID와 cookie로 재적용하고, Controller가 보고한 만료·제거 상태를 반영한다.
 
 ## 4. Score 및 대응 레벨
 
@@ -108,7 +134,6 @@
 | `ICMP_FLOOD` | 필수 조건 충족 | `60` |
 | `ICMP_FLOOD` | `min_packet_count_satisfied` | `+20` |
 | `ICMP_FLOOD` | `high_pps_exceeded` | `+15` |
-| `ICMP_FLOOD` | `baseline_spike_detected` | `+5` |
 
 ### 4.2 대응 레벨
 
@@ -118,7 +143,10 @@
 | `L2` | 대응 권장 | 이벤트 저장, 알림, 대응 후보 생성 가능 | 승인 또는 정책에 따라 rate limit 후보 |
 | `L3` | 강한 대응 권장 | 이벤트 저장, 높은 우선순위 알림, 대응 요청 생성 | 승인 또는 정책에 따라 차단/강한 제한 후보 |
 
-현재 확정 범위에서 `PORT_SCAN`은 기본 `L1`, `ICMP_FLOOD`는 조건에 따라 `L1` 또는 `L2`를 사용한다. `L3`는 자동 대응/차단 정책이 확정되기 전까지 analyzer가 생성하지 않는다.
+`PORT_SCAN`은 기본 `L1`, `ICMP_FLOOD`는 조건에 따라 `L1` 또는 `L2`를
+사용한다. 서버 역할 위반, 비정상 송신량과 C2 Beacon은 `L2`,
+목적지 확산은 `L3`로 생성한다. Backend의 자동 대응이 활성화된 상태에서
+`critical` 이벤트를 받으면 Backend 정책이 DROP 후보를 추가한다.
 
 ## 5. PORT_SCAN 탐지 명세
 
@@ -239,9 +267,6 @@
 |---|---|
 | `min_packet_count_satisfied` | 탐지 윈도우 내 ICMP 패킷 수가 `1000` 이상 |
 | `high_pps_exceeded` | ICMP pps가 `3000` 이상 또는 `icmp_pps_threshold * 3.0` 이상 |
-| `baseline_spike_detected` | ICMP pps가 `max(baseline_avg_pps * 5.0, 100)` 이상 |
-
-`baseline_avg_pps`가 아직 계산되지 않았거나 신뢰할 수 있는 표본이 부족하면 `baseline_spike_detected`는 충족하지 않은 것으로 본다.
 
 ### 6.3 기준값
 
@@ -252,9 +277,11 @@
 | `min_packet_count` | `1000` |
 | `high_pps_threshold` | `3000` |
 | `high_pps_multiplier` | `3.0` |
-| `baseline_spike_multiplier` | `5.0` |
-| `baseline_min_pps` | `100` |
 | `alert_cooldown_sec` | `60` |
+
+`ICMP_BASELINE_SPIKE_MULTIPLIER`와 `ICMP_BASELINE_MIN_PPS`는 현재 설정 호환성을
+위해 파싱되지만 ICMP 점수 계산에는 반영되지 않는다. 현재 최대 점수는
+`60 + 20 + 15 = 95`다.
 
 ### 6.4 대응 레벨 규정
 
@@ -262,9 +289,12 @@
 |---|---|---|---|---|---|
 | pps 기준만 충족, `score=60` | `medium` | `medium` | `L1` | `monitor` | `null` |
 | pps 기준 + 최소 샘플 조건 충족, `score >= 80` | `high` | `medium` | `L2` | `rate_limit` | `RATE_LIMIT` 후보 |
-| pps 기준 크게 초과 + 보조 조건 2개 이상, `score >= 95` | `high` | `high` | `L2` | `rate_limit` | `RATE_LIMIT` 후보 |
+| pps 기준 크게 초과 + 보조 조건 2개 이상, `score >= 95` | `critical` | `high` | `L2` | `drop` | `DROP` 후보 |
 
-현재 자동 적용은 하지 않는다. `mitigation`은 컨트롤러가 적용할 수 있는 후보 payload로만 제공한다.
+Analyzer는 자동 적용 여부를 결정하지 않고 `mitigation` 후보만 제공한다.
+Backend 자동 대응 설정이 활성화되어 있고 정책이 후보를 허용하면 Controller에
+전송한다. `high` ICMP Flood의 `RATE_LIMIT`과 `critical` 이벤트의 `DROP`이 이
+경로를 사용한다.
 
 ### 6.5 이벤트 예시
 
@@ -318,17 +348,73 @@
 }
 ```
 
-## 7. Mitigation 후보 명세
+## 7. 보호 서버 행위 탐지 명세
 
-`mitigation`은 analyzer가 제안하는 대응 후보 payload다. analyzer는 이 payload를 생성할 수 있지만 직접 적용하지 않는다. 백엔드는 `mitigation`을 기반으로 `security_responses`와 `flow_rules`에 `PENDING` 후보를 저장한다. 컨트롤러가 실제 flow rule 적용 여부를 결정하는 단계는 아직 구현 범위 밖이다.
+### 7.1 공통 연결 시작 판정
+
+보호 서버 행위 탐지는 `PROTECTED_SERVER_IPS`에 등록된 서버가 시작한 TCP
+연결을 기준으로 한다. TCP `SYN`이 있고 `ACK`가 없는 패킷만 연결 시작으로
+취급하므로 정상 웹 응답의 `SYN+ACK`는 제외한다.
+
+`SERVER_EGRESS_ALLOWLIST`에 포함된 목적지는 모든 서버 행위 규칙에서 제외한다.
+동일 5-tuple의 SYN 재전송은 3초 동안 하나의 연결 시작으로 합친다.
+
+### 7.2 규칙과 대응 레벨
+
+| attack_type | detection_rule | 조건 | severity | confidence | level |
+|---|---|---|---|---|---|
+| `SERVER_EGRESS` | `protected_server_tcp_egress` | 보호 서버의 비허용 TCP 연결 시작 1건 이상 | `high` | `high` | `L2` |
+| `LATERAL_MOVEMENT` | `protected_server_destination_fanout` | 30초 안에 목적지 IP 2개 이상, 연결 3건 이상 | `critical` | `high` | `L3` |
+| `DATA_EXFILTRATION` | `server_initiated_outbound_bps` | 서버 시작 Flow가 절대/기준선 bps를 3개 윈도우 연속 초과 | `high` | `medium` | `L2` |
+| `C2_BEACON` | `periodic_server_egress` | 5분 안에 같은 목적지·포트 연결 6건, 중앙 주기 20~90초, jitter 20% 이하 | `high` | `medium` | `L2` |
+
+`SERVER_EGRESS`, `DATA_EXFILTRATION`, `C2_BEACON`은 Analyzer가 mitigation을
+제안하지 않고 운영자 확인 대상으로 전송한다. `LATERAL_MOVEMENT`는
+`critical` 이벤트이므로 Backend의 기존 critical 정책과 자동 대응 설정에
+따라 TCP DROP Flow 후보로 변환될 수 있다.
+
+### 7.3 기준값
+
+| 환경변수 | 기본값 |
+|---|---:|
+| `PROTECTED_SERVER_IPS` | `10.0.0.100` |
+| `SERVER_EGRESS_ALLOWLIST` | 빈 값 |
+| `SERVER_BEHAVIOR_ALERT_COOLDOWN_SEC` | `60` |
+| `LATERAL_FANOUT_WINDOW_SEC` | `30` |
+| `LATERAL_FANOUT_UNIQUE_DST_THRESHOLD` | `2` |
+| `LATERAL_FANOUT_CONNECTION_THRESHOLD` | `3` |
+| `EXFIL_VOLUME_WINDOW_SEC` | `10` |
+| `EXFIL_OUTBOUND_BPS_THRESHOLD` | `1000000` |
+| `EXFIL_BASELINE_MULTIPLIER` | `3.0` |
+| `EXFIL_SUSTAINED_WINDOWS` | `3` |
+| `C2_BEACON_WINDOW_SEC` | `300` |
+| `C2_BEACON_MIN_CONNECTIONS` | `6` |
+| `C2_BEACON_MIN_INTERVAL_SEC` | `20` |
+| `C2_BEACON_MAX_INTERVAL_SEC` | `90` |
+| `C2_BEACON_MAX_JITTER_RATIO` | `0.2` |
+
+송신량 규칙은 서버가 먼저 시작한 Flow만 집계한다. 기준선 표본이 충분하지
+않으면 절대 bps 기준을 사용하고, 충분하면 `max(절대 기준,
+baseline_bps * multiplier)`를 사용한다. 탐지 상태는 메모리에 유지되므로
+Analyzer 재시작 후에는 연결 이력과 기준선을 다시 수집한다.
+
+## 8. Mitigation 후보 명세
+
+`mitigation`은 analyzer가 제안하는 대응 payload다. analyzer는 직접 Controller를
+호출하지 않는다. Backend가 `security_responses`와 `flow_rules`를 생성하고
+Controller에 자동 적용한 뒤 `APPLIED` 또는 `FAILED` 결과를 저장한다.
 
 | 탐지 | 조건 | mitigation |
 |---|---|---|
 | `PORT_SCAN` | 모든 경우 | `null` |
 | `ICMP_FLOOD` | `L1` | `null` |
 | `ICMP_FLOOD` | `L2` | `RATE_LIMIT` 후보 |
+| `SERVER_EGRESS` | 모든 경우 | `null` |
+| `LATERAL_MOVEMENT` | Analyzer 생성 시 | `null`; Backend critical 정책에서 `DROP` 후보 |
+| `DATA_EXFILTRATION` | 모든 경우 | `null` |
+| `C2_BEACON` | 모든 경우 | `null` |
 
-### 7.1 RATE_LIMIT 기본값
+### 8.1 RATE_LIMIT 기본값
 
 | 항목 | 기본값 |
 |---|---:|
@@ -358,10 +444,14 @@
 }
 ```
 
-## 8. 구현 반영 TODO
+## 9. 구현 반영 상태와 남은 범위
 
-| 항목 | 설명 |
-|---|---|
-| rolling window 적용 | ICMP flood 탐지에도 rolling window 적용 |
-| controller 적용 연동 | `flow_rules`의 `PENDING` 후보를 SDN 컨트롤러에 설치/해제하고 상태를 갱신 |
-| 이벤트 상태 변경 API | `detected`, `blocked`, `ignored`, `resolved` 상태 전환과 처리 이력 저장 |
+| 항목 | 상태 | 설명 |
+|---|---|---|
+| Controller 적용 연동 | 구현 | Backend가 Flow Rule을 설치·제거하고 Barrier 결과와 오류를 저장 |
+| 이벤트 상태 변경 API | 구현 | `block`, `ignore`, `resolve` 운영자 작업 지원 |
+| 자동 대응 설정 | 구현 | 런타임 설정으로 Analyzer 후보의 자동 적용을 활성화·비활성화 |
+| Flow 상태 재조정 | 구현 | 누락 규칙 재적용과 `EXPIRED`·`REMOVED` 반영 |
+| ICMP rolling baseline | 미구현 | 현재 ICMP 판단은 분석 윈도우 PPS와 절대 임계값 중심 |
+| 애플리케이션 계층 탐지 | 미구현 | DNS·HTTP·TLS 내용과 암호화 트래픽 fingerprint는 분석하지 않음 |
+| 호스트 내부 행위 탐지 | 범위 밖 | `auditd`, eBPF, EDR telemetry는 별도 수집기가 필요 |

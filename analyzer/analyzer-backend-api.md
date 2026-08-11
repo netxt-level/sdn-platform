@@ -2,6 +2,9 @@
 
 이 문서는 현재 코드 기준으로 분석 서버가 백엔드 서버에 전송하는 API를 정리한다.
 
+- 상태: 구현 계약
+- 기준일: 2026-08-11
+
 - 분석 서버 호출 구현: `analyzer/app/backend_client.py`
 - 분석 서버 payload 생성: `analyzer/app/packet/summary.py`, `analyzer/app/detection/traffic_stats.py`, `analyzer/app/detection/security_events.py`, `analyzer/app/analyzer_status.py`
 - 백엔드 수신 스키마: `backend/app/schemas/analyzer.py`
@@ -16,6 +19,7 @@
 | Timestamp 형식 | ISO 8601 문자열, 예: `2026-05-24T10:00:00+00:00` |
 | 공통 성공 응답 | `{"ok": true}` |
 | 유효성 검증 실패 | FastAPI 기본 `422 Unprocessable Entity` |
+| 인증 | `X-API-Key: <ANALYZER_API_KEY>` |
 
 분석 서버는 `ANALYZER_WINDOW_SEC`마다 패킷 요약, 트래픽 상태 요약, 보안 이벤트를 전송하고, `ANALYZER_STATUS_INTERVAL_SEC`마다 상태를 전송한다.
 
@@ -25,7 +29,13 @@
 | `ANALYZER_INTERFACE` | `en0` | 패킷 캡처 인터페이스 |
 | `ANALYZER_WINDOW_SEC` | `1` | 패킷/탐지 요약 집계 주기 |
 | `ANALYZER_STATUS_INTERVAL_SEC` | `5` | 상태 보고 주기 |
+| `ANALYZER_OUTBOX_PATH` | `/var/lib/sdn-analyzer/outbox.db` | 영속 전송 Queue 경로 |
+| `ANALYZER_OUTBOX_DELIVERY_POLL_SEC` | `1` | Queue 확인 주기 |
+| `ANALYZER_OUTBOX_DELIVERY_BATCH_SIZE` | `100` | 전달 batch 크기 |
+| `ANALYZER_OUTBOX_RETRY_BASE_SEC` | `1` | 재시도 첫 지연 |
+| `ANALYZER_OUTBOX_RETRY_MAX_SEC` | `60` | 지수 Backoff 상한 |
 | `BACKEND_BASE_URL` | `http://127.0.0.1:8000` | 백엔드 API base URL |
+| `ANALYZER_API_KEY` | 빈 값 | Analyzer API 인증 키; 운영 시 필수 |
 | `PORT_SCAN_WINDOW_SEC` | `5` | Port Scan SYN 집계 윈도우 |
 | `PORT_SCAN_UNIQUE_DST_PORT_THRESHOLD` | `20` | Port Scan 고유 목적지 포트 임계값 |
 | `PORT_SCAN_SYN_COUNT_THRESHOLD` | `20` | Port Scan SYN 시도 수 보조 조건 기준 |
@@ -33,12 +43,27 @@
 | `PORT_SCAN_MULTI_TARGET_THRESHOLD` | `3` | Port Scan 다중 목적지 개수 기준 |
 | `PORT_SCAN_HIGH_UNIQUE_DST_PORT_THRESHOLD` | `50` | Port Scan 높은 고유 포트 수 기준 |
 | `PORT_SCAN_ALERT_COOLDOWN_SEC` | `60` | Port Scan 중복 알림 억제 시간 |
+| `PROTECTED_SERVER_IPS` | `10.0.0.100` | 서버 행위 탐지 대상 IP 목록 |
+| `SERVER_EGRESS_ALLOWLIST` | 빈 값 | 보호 서버가 연결을 시작해도 허용할 목적지 IP 목록 |
+| `SERVER_BEHAVIOR_ALERT_COOLDOWN_SEC` | `60` | 서버 행위 이벤트 중복 억제 시간 |
+| `LATERAL_FANOUT_WINDOW_SEC` | `30` | 내부 확산 목적지 집계 윈도우 |
+| `LATERAL_FANOUT_UNIQUE_DST_THRESHOLD` | `2` | 내부 확산 고유 목적지 IP 기준 |
+| `LATERAL_FANOUT_CONNECTION_THRESHOLD` | `3` | 내부 확산 연결 시도 기준 |
+| `EXFIL_VOLUME_WINDOW_SEC` | `10` | 비정상 송신량 집계 윈도우 |
+| `EXFIL_OUTBOUND_BPS_THRESHOLD` | `1000000` | 비정상 송신량 절대 bps 기준 |
+| `EXFIL_BASELINE_MULTIPLIER` | `3.0` | 정상 기준선 대비 송신량 배수 |
+| `EXFIL_SUSTAINED_WINDOWS` | `3` | 송신량 기준 연속 충족 윈도우 수 |
+| `C2_BEACON_WINDOW_SEC` | `300` | 주기적 연결 관찰 윈도우 |
+| `C2_BEACON_MIN_CONNECTIONS` | `6` | Beacon 판정 최소 연결 수 |
+| `C2_BEACON_MIN_INTERVAL_SEC` | `20` | Beacon 주기 하한 |
+| `C2_BEACON_MAX_INTERVAL_SEC` | `90` | Beacon 주기 상한 |
+| `C2_BEACON_MAX_JITTER_RATIO` | `0.2` | 연결 주기 최대 편차 비율 |
 | `ICMP_PPS_THRESHOLD` | `1000` | ICMP Flood pps 임계값 |
 | `ICMP_MIN_PACKET_COUNT` | `1000` | ICMP Flood 최소 패킷 수 기준 |
 | `ICMP_HIGH_PPS_THRESHOLD` | `3000` | ICMP Flood high pps 기준 |
 | `ICMP_HIGH_PPS_MULTIPLIER` | `3.0` | ICMP Flood high pps 배수 기준 |
-| `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | ICMP baseline 급증 배수 기준 |
-| `ICMP_BASELINE_MIN_PPS` | `100` | ICMP baseline 급증 최소 pps 기준 |
+| `ICMP_BASELINE_SPIKE_MULTIPLIER` | `5.0` | 호환용 예약 설정; 현재 점수에는 미반영 |
+| `ICMP_BASELINE_MIN_PPS` | `100` | 호환용 예약 설정; 현재 점수에는 미반영 |
 | `ICMP_ALERT_COOLDOWN_SEC` | `60` | ICMP Flood 중복 알림 억제 시간 |
 | `EVENT_DEDUP_WINDOW_SEC` | `60` | 보안 이벤트 공통 중복 억제 시간 |
 | `RATE_LIMIT_PRIORITY` | `500` | Rate limit 후보 flow rule 우선순위 |
@@ -215,7 +240,8 @@ POST /api/analyzer/detection-summary
 POST /api/security/events
 ```
 
-분석 서버가 포트 스캔, ICMP flood 보안 탐지 결과를 공통 이벤트 형식으로 전송한다. 현재 analyzer 구현 범위는 `PORT_SCAN`, `ICMP_FLOOD`다.
+분석 서버가 포트 스캔, ICMP flood와 보호 서버의 역할 위반, 목적지 확산,
+비정상 송신량, 주기적 C2 연결 탐지 결과를 공통 이벤트 형식으로 전송한다.
 
 ### Request Body
 
@@ -324,9 +350,9 @@ POST /api/security/events
 | `dedup_key` | `string` | O | 중복 억제 기준 키. 기본값은 `event_fingerprint` |
 | `timestamp` | `datetime` | O | 이벤트 발생/생성 시각 |
 | `analyzer_id` | `string` | O | 분석 서버 식별자 |
-| `attack_category` | `string` | O | 공격 분류. 현재 `RECON`, `DDOS` |
-| `attack_type` | `string` | O | 탐지 유형. 현재 `PORT_SCAN`, `ICMP_FLOOD` |
-| `severity` | `string` | O | 위험도. 현재 `medium`, `high` |
+| `attack_category` | `string` | O | 공격 분류. `RECON`, `DDOS`, `POST_COMPROMISE`, `EXFILTRATION`, `COMMAND_AND_CONTROL` |
+| `attack_type` | `string` | O | 탐지 유형. `PORT_SCAN`, `ICMP_FLOOD`, `SERVER_EGRESS`, `LATERAL_MOVEMENT`, `DATA_EXFILTRATION`, `C2_BEACON` |
+| `severity` | `string` | O | 위험도. `medium`, `high`, `critical` |
 | `confidence` | `string` | O | 탐지 신뢰도. 현재 `medium`, `high` |
 | `status` | `string` | O | 이벤트 상태. 최초 생성값은 `detected` |
 | `src_ip` | `string` | O | 공격/의심 트래픽 출발지 IP |
@@ -336,7 +362,7 @@ POST /api/security/events
 | `recommended_action` | `string` | O | 권장 대응. 현재 `monitor`, `alert`, `rate_limit` |
 | `response_level` | `string` | O | 대응 레벨. 현재 `L1`, `L2` |
 | `evidence` | `object` | O | 탐지 유형별 상세 근거 |
-| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 후보. `PORT_SCAN`과 `L1` 이벤트는 `null`, `ICMP_FLOOD` L2는 `RATE_LIMIT` 후보 |
+| `mitigation` | `object \| null` | O | 컨트롤러 적용용 대응 후보. 서버 행위 이벤트는 Analyzer에서 `null`; Backend critical 정책이 `LATERAL_MOVEMENT`에 DROP 후보를 추가할 수 있음 |
 
 ### 탐지별 evidence
 
@@ -344,6 +370,10 @@ POST /api/security/events
 |---|---|---|
 | `PORT_SCAN` | `tcp_syn_unique_ports` | `matched_conditions`, `window_seconds`, `unique_dst_port_count`, `unique_dst_ports`, `syn_count`, `score` |
 | `ICMP_FLOOD` | `icmp_pps_threshold` | `matched_conditions`, `window_seconds`, `packet_count`, `pps`, `pps_threshold`, `min_packet_count`, `high_pps_threshold`, `score` |
+| `SERVER_EGRESS` | `protected_server_tcp_egress` | `matched_conditions`, `connection_count`, `src_ports`, `dst_ports` |
+| `LATERAL_MOVEMENT` | `protected_server_destination_fanout` | `window_seconds`, `connection_count`, `unique_dst_ip_count`, `destination_ips` |
+| `DATA_EXFILTRATION` | `server_initiated_outbound_bps` | `window_seconds`, `bps`, `baseline_bps`, `effective_bps_threshold`, `sustained_windows` |
+| `C2_BEACON` | `periodic_server_egress` | `connection_count`, `intervals_seconds`, `median_interval_seconds`, `jitter_ratio` |
 
 ### 백엔드 처리
 
@@ -351,8 +381,10 @@ POST /api/security/events
 
 - `backend/app/schemas/security.py`의 `SecurityEventPayload` / `SecurityEvent` 스키마로 요청을 검증한다.
 - Elasticsearch `sdn-security-events` 인덱스에 이벤트 단위로 저장한다.
-- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 `PENDING` 상태로 저장한다.
-- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule 후보를 `PENDING` 상태로 저장한다.
+- PostgreSQL `sdn_controller.security_responses`에 이벤트별 대응 내역을 저장한다.
+- 이벤트에 `mitigation`이 없으면 대응 내역을 `PENDING`으로 유지한다.
+- 이벤트에 `mitigation`이 있으면 PostgreSQL `sdn_controller.flow_rules`에 flow rule을 생성하고 Controller에 자동 적용한다.
+- Controller 적용 결과에 따라 대응 내역과 flow rule을 `APPLIED` 또는 `FAILED`로 저장한다.
 - WebSocket `/ws/analyzer` 구독자에게 `{"type":"security_events","data":...}` 메시지를 broadcast한다.
 - 의심 호스트 조회는 저장된 보안 이벤트를 기반으로 제공한다.
 
@@ -430,17 +462,25 @@ POST /api/analyzer/status
 
 | 실패 유형 | 분석 서버 동작 |
 |---|---|
-| 연결 실패 | 콘솔에 전송 실패 로그 출력, `False` 반환 |
-| Timeout | 콘솔에 timeout 로그 출력, `False` 반환 |
-| HTTP 오류 응답 | 콘솔에 HTTP status 로그 출력, `False` 반환 |
-| 기타 요청 오류 | 콘솔에 일반 요청 오류 로그 출력, `False` 반환 |
+| 연결 실패·Timeout | Outbox 메시지를 지수 Backoff로 재예약 |
+| HTTP `5xx`, `408`, `429` | 일시 오류로 분류해 재시도 |
+| 그 밖의 HTTP `4xx` | 재시도하지 않고 Dead Letter로 전환 |
+| 전달 성공 | Outbox에서 해당 메시지 삭제 |
+| 상태 보고 실패 | 오류 상태를 기록하고 다음 상태 주기에서 재시도 |
 
-패킷 요약과 탐지 요약 둘 다 성공하면 `backend_connected=true` 및 `last_summary_sent_at`을 갱신한다. 둘 중 하나라도 실패하면 `backend_connected=false`, `error_message="failed to send analyzer metrics"`로 상태를 갱신한다.
+분석 루프는 한 윈도우의 packet summary, detection summary, security events를
+SQLite Outbox에 원자적으로 저장한 뒤 메모리 패킷 버퍼를 비운다. 전달 루프는
+별도 스레드에서 Queue를 비우므로 Backend 장애가 캡처·분석을 중단시키지 않는다.
+루트 `docker-compose.yml`을 사용할 때 Outbox 파일은 Docker volume에 보존된다.
+현재 Multipass bootstrap의 `docker-compose.dataplane.yml` 단독 실행에는 해당
+volume과 `ANALYZER_API_KEY` 전달이 없으므로 secure-default 하이브리드 배치는
+추가 구성이 필요하다.
 
-## 추가 예정
+## 현재 비지원 계약
 
 ### 분석 서버 설정 변경 응답
 
-백엔드가 분석 서버에 탐지 임계값, 캡처 상태, 정책 버전 같은 설정 변경을 요청하는 기능이 추가되면, 분석 서버가 적용 결과를 백엔드로 보고하는 별도 메시지를 도입할 수 있다.
+Backend가 Analyzer에 탐지 임계값, 캡처 상태, 정책 버전을 원격 적용하는 API는
+현재 제공하지 않는다. 설정은 환경변수와 재시작으로 반영한다.
 
 현재 analyzer 기반 보안 대응과 flow rule 후보 생성의 입력은 `POST /api/security/events`의 보안 이벤트다. 백엔드에는 운영자가 수동 flow rule을 추가하는 `POST /api/flows`도 있지만, analyzer는 이 API를 직접 호출하지 않는다. 별도의 분석 변경 메시지 API는 구현하지 않는다.

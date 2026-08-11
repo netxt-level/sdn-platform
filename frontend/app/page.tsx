@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -16,8 +16,10 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Panel } from "@/components/ui/Panel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatBitsPerSecond, formatNumber } from "@/lib/format";
+import { getPathStatus } from "@/lib/pathApi";
 import { useRealtime } from "@/hooks/useRealtime";
 import type { SuspiciousHost } from "@/types/analyzer";
+import type { PathInfo, PathStatus } from "@/types/path";
 
 const ALL_ATTACK_TYPES = "ALL";
 
@@ -55,12 +57,30 @@ function getSuspiciousHostTagClass(host: SuspiciousHost): string {
   return "border-accent bg-[var(--accent-dim)] text-accent";
 }
 
+function utilizationLabel(item: PathInfo): string {
+  if (item.pps_utilization > 0 && item.pps_utilization < 0.01) return "<0.01%";
+  return `${item.pps_utilization.toFixed(2)}%`;
+}
+
+function utilizationColor(item: PathInfo): string {
+  if (item.pps_utilization >= 90) return "text-red";
+  if (item.pps_utilization >= 70) return "text-yellow";
+  return item.active ? "text-green" : "text-faint";
+}
+
+function utilizationBar(item: PathInfo): string {
+  if (item.pps_utilization >= 90) return "bg-red";
+  if (item.pps_utilization >= 70) return "bg-yellow";
+  return item.active ? "bg-green" : "bg-faint";
+}
+
 export default function DashboardPage() {
   const state = useRealtime();
   const { analyzerStatus, dashboardSummary, packetSummary, detectionSummary } = state;
   const [trafficMetric, setTrafficMetric] = useState<"packets" | "bps">("packets");
   const [suspiciousHostTypeFilter, setSuspiciousHostTypeFilter] =
     useState(ALL_ATTACK_TYPES);
+  const [pathStatus, setPathStatus] = useState<PathStatus | null>(null);
   const suspiciousHostTypes = useMemo(
     () =>
       Array.from(
@@ -81,6 +101,26 @@ export default function DashboardPage() {
           ),
     [detectionSummary.suspicious_hosts, suspiciousHostTypeFilter]
   );
+
+  useEffect(() => {
+    let ignored = false;
+
+    async function loadSwitchUtilization() {
+      try {
+        const nextPathStatus = await getPathStatus();
+        if (!ignored) setPathStatus(nextPathStatus);
+      } catch {
+        // Dashboard packet monitoring remains available if Controller is down.
+      }
+    }
+
+    void loadSwitchUtilization();
+    const intervalId = window.setInterval(loadSwitchUtilization, 1000);
+    return () => {
+      ignored = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <>
@@ -180,25 +220,61 @@ export default function DashboardPage() {
           <ProtocolBars stats={packetSummary.protocol_stats} />
         </Panel>
 
-        <Panel title="경로 상태" className="col-span-6 max-xl:col-span-12">
+        <Panel
+          title="경로 PPS 사용률"
+          className="col-span-6 max-xl:col-span-12"
+          action={
+            pathStatus
+              ? (
+                  <StatusBadge
+                    value={
+                      pathStatus.path_distribution_mode === "balanced"
+                        ? "1·2경로 분산 중"
+                        : pathStatus.active_path === "backup"
+                          ? "2경로 사용 중"
+                          : "1경로 사용 중"
+                    }
+                    tone="normal"
+                  />
+                )
+              : <StatusBadge value="조회 중" tone="muted" />
+          }
+        >
           <div className="grid gap-4">
-            {[
-              ["기본 경로", "s1 → s2 → s4", 72, "text-yellow", "bg-yellow"],
-              ["우회 경로", "s1 → s3 → s4", 38, "text-green", "bg-green"]
-            ].map(([label, path, value, textClass, barClass]) => (
-              <div key={label as string} className="font-mono-ui">
-                <div className="mb-2 flex items-center justify-between text-[11px]">
+            {pathStatus &&
+              ([
+                ["primary", "1경로", pathStatus.paths.primary],
+                ["backup", "2경로", pathStatus.paths.backup]
+              ] as const).map(([key, label, item]) => (
+              <div key={key} className="font-mono-ui">
+                <div className="mb-2 flex items-center justify-between gap-3 text-[11px]">
                   <div>
                     <strong className="block text-ink">{label}</strong>
-                    <span className="text-muted">{path}</span>
+                    <span className="text-muted">
+                      {item.nodes.join(" → ")} · {formatNumber(Math.round(item.pps))} PPS /
+                      {" "}{formatNumber(pathStatus.path_capacity_pps)} PPS
+                    </span>
                   </div>
-                  <span className={textClass as string}>{value}%</span>
+                  <span className={utilizationColor(item)}>{utilizationLabel(item)}</span>
                 </div>
                 <div className="h-1.5 rounded bg-sidebar">
-                  <div className={`h-full rounded ${barClass}`} style={{ width: `${value}%` }} />
+                  <div
+                    className={`h-full rounded ${utilizationBar(item)}`}
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(item.pps > 0 ? 1 : 0, item.pps_utilization)
+                      )}%`
+                    }}
+                  />
                 </div>
               </div>
             ))}
+            {!pathStatus && (
+              <p className="font-mono-ui text-[11px] text-muted">
+                Controller 경로 PPS 통계를 기다리는 중입니다.
+              </p>
+            )}
           </div>
         </Panel>
 
@@ -244,7 +320,7 @@ export default function DashboardPage() {
             ) : null}
 
             {filteredSuspiciousHosts.map((host) => (
-              <div key={`${host.ip}-${host.protocol}-${host.attack_type ?? "UNKNOWN"}`} className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3 text-[11px]">
+              <div key={host.ip} className="font-mono-ui flex items-center justify-between gap-3 rounded border border-line bg-sidebar px-3 py-3 text-[11px]">
                 <div className="min-w-0">
                   <span className={`mb-2 inline-flex min-h-5 items-center rounded border px-2 text-[9px] font-bold uppercase ${getSuspiciousHostTagClass(host)}`}>
                     {getSuspiciousHostTag(host)}

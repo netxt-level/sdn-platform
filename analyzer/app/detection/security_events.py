@@ -43,6 +43,7 @@ class SecurityEventBuilder:
         packet_summary: dict[str, Any],
         packets: list[dict[str, Any]],
         port_scan_alerts: list[dict[str, Any]] | None = None,
+        server_behavior_alerts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         timestamp = now.isoformat()
@@ -63,6 +64,14 @@ class SecurityEventBuilder:
             )
         )
         events.extend(
+            self._build_server_behavior_events(
+                timestamp=timestamp,
+                now=now,
+                window_start_epoch=window_start_epoch,
+                alerts=server_behavior_alerts or [],
+            )
+        )
+        events.extend(
             self._build_flood_events(
                 timestamp=timestamp,
                 now=now,
@@ -77,6 +86,54 @@ class SecurityEventBuilder:
             "analyzer_id": self.analyzer_id,
             "events": events,
         }
+
+    def _build_server_behavior_events(
+        self,
+        *,
+        timestamp: str,
+        now: datetime,
+        window_start_epoch: int,
+        alerts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        events = []
+
+        for alert in alerts:
+            required = (
+                "attack_category",
+                "attack_type",
+                "severity",
+                "confidence",
+                "src_ip",
+                "dst_ip",
+                "protocol",
+                "detection_rule",
+                "recommended_action",
+                "response_level",
+            )
+            if any(not alert.get(field) for field in required):
+                continue
+
+            event = self._event(
+                timestamp=timestamp,
+                attack_category=str(alert["attack_category"]),
+                attack_type=str(alert["attack_type"]),
+                severity=str(alert["severity"]),
+                confidence=str(alert["confidence"]),
+                src_ip=str(alert["src_ip"]),
+                dst_ip=str(alert["dst_ip"]),
+                protocol=str(alert["protocol"]),
+                detection_rule=str(alert["detection_rule"]),
+                recommended_action=str(alert["recommended_action"]),
+                response_level=str(alert["response_level"]),
+                evidence=dict(alert.get("evidence") or {}),
+                mitigation=None,
+                now=now,
+                window_start_epoch=window_start_epoch,
+            )
+            if event is not None:
+                events.append(event)
+
+        return events
 
     def _build_port_scan_events(
         self,
@@ -105,6 +162,24 @@ class SecurityEventBuilder:
             score = int(alert.get("score") or 60)
             recommended_action = alert.get("recommended_action") or "monitor"
             response_level = alert.get("response_level") or "L1"
+            evidence_window = float(
+                alert.get("window_seconds") or window_sec or 1
+            )
+            if evidence_window <= 0:
+                evidence_window = 1
+            syn_count = int(alert.get("syn_count") or 0)
+            packet_count = int(alert.get("packet_count") or syn_count)
+            bit_count = int(alert.get("bit_count") or 0)
+            pps = float(
+                alert.get("pps")
+                if alert.get("pps") is not None
+                else packet_count / evidence_window
+            )
+            bps = float(
+                alert.get("bps")
+                if alert.get("bps") is not None
+                else bit_count / evidence_window
+            )
             event = self._event(
                 timestamp=timestamp,
                 attack_category="RECON",
@@ -119,10 +194,14 @@ class SecurityEventBuilder:
                 response_level=response_level,
                 evidence={
                     "matched_conditions": matched_conditions,
-                    "window_seconds": alert.get("window_seconds") or window_sec,
+                    "window_seconds": evidence_window,
+                    "packet_count": packet_count,
+                    "bit_count": bit_count,
+                    "pps": pps,
+                    "bps": bps,
                     "unique_dst_port_count": unique_port_count,
                     "unique_dst_ports": unique_dst_ports,
-                    "syn_count": int(alert.get("syn_count") or 0),
+                    "syn_count": syn_count,
                     "score": score,
                 },
                 now=now,
@@ -186,12 +265,26 @@ class SecurityEventBuilder:
 
                 score = min(score, 100)
                 is_l2 = score >= 80
-                severity = "high" if is_l2 else "medium"
+                is_critical = score >= 95
+                severity = (
+                    "critical"
+                    if is_critical
+                    else "high" if is_l2 else "medium"
+                )
                 confidence = "high" if score >= 95 else "medium"
-                recommended_action = "rate_limit" if is_l2 else "monitor"
+                recommended_action = (
+                    "drop"
+                    if is_critical
+                    else "rate_limit" if is_l2 else "monitor"
+                )
                 response_level = "L2" if is_l2 else "L1"
                 mitigation = (
-                    self._rate_limit_mitigation(
+                    self._drop_mitigation(
+                        src_ip=src_ip,
+                        dst_ip=dst_ip,
+                    )
+                    if is_critical
+                    else self._rate_limit_mitigation(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
                     )
@@ -244,6 +337,21 @@ class SecurityEventBuilder:
             "idle_timeout": self.rate_limit_idle_timeout,
             "hard_timeout": self.rate_limit_hard_timeout,
             "rate_limit_pps": self.rate_limit_pps,
+        }
+
+    def _drop_mitigation(self, *, src_ip: str, dst_ip: str) -> dict[str, Any]:
+        return {
+            "action": "DROP",
+            "target": "flow",
+            "match": {
+                "eth_type": 2048,
+                "ipv4_src": src_ip,
+                "ipv4_dst": dst_ip,
+                "ip_proto": 1,
+            },
+            "priority": self.rate_limit_priority + 100,
+            "idle_timeout": self.rate_limit_idle_timeout,
+            "hard_timeout": self.rate_limit_hard_timeout,
         }
 
     def _event(

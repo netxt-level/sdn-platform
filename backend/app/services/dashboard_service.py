@@ -7,10 +7,74 @@ from app.repositories.traffic_repository import TrafficRepository
 
 SUMMARY_RANGE = "5m"
 SUMMARY_BUCKET = "5s"
-WARNING_BPS_THRESHOLD = 5_000_000
-WARNING_PPS_THRESHOLD = 1000
-CRITICAL_BPS_THRESHOLD = 10_000_000
+WARNING_BPS_THRESHOLD = 10_000_000
+WARNING_PPS_THRESHOLD = 1500
+CRITICAL_BPS_THRESHOLD = 20_000_000
 CRITICAL_PPS_THRESHOLD = 3000
+SEVERITY_RANK = {
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+
+
+def _host_rank(item: dict[str, Any]) -> tuple[int, float, float]:
+    return (
+        SEVERITY_RANK.get(str(item.get("severity") or "").lower(), 0),
+        float(item.get("bps") or 0),
+        float(item.get("pps") or 0),
+    )
+
+
+def deduplicate_suspicious_hosts(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one representative suspicious-host entry for each source IP."""
+    hosts_by_ip: dict[str, dict[str, Any]] = {}
+
+    for item in items:
+        ip = str(item.get("ip") or "").strip()
+        if not ip:
+            continue
+
+        candidate = dict(item)
+        candidate["ip"] = ip
+        existing = hosts_by_ip.get(ip)
+        if existing is None:
+            candidate["reasons"] = list(
+                dict.fromkeys(candidate.get("reasons") or [])
+            )
+            hosts_by_ip[ip] = candidate
+            continue
+
+        preferred = (
+            candidate
+            if _host_rank(candidate) > _host_rank(existing)
+            else existing
+        )
+        merged = dict(preferred)
+        merged["bps"] = max(
+            float(existing.get("bps") or 0),
+            float(candidate.get("bps") or 0),
+        )
+        merged["pps"] = max(
+            float(existing.get("pps") or 0),
+            float(candidate.get("pps") or 0),
+        )
+        merged["reasons"] = list(
+            dict.fromkeys([
+                *(existing.get("reasons") or []),
+                *(candidate.get("reasons") or []),
+            ])
+        )
+        hosts_by_ip[ip] = merged
+
+    return sorted(
+        hosts_by_ip.values(),
+        key=lambda item: (*_host_rank(item), item["ip"]),
+        reverse=True,
+    )
 
 
 class DashboardService:
@@ -63,7 +127,9 @@ class DashboardService:
         }
 
     def get_suspicious_hosts(self, range_value: str) -> dict[str, Any]:
-        items = self.security_event_repository.list_suspicious_hosts()
+        items = deduplicate_suspicious_hosts(
+            self.security_event_repository.list_suspicious_hosts()
+        )
 
         return {
             "range": range_value,
